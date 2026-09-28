@@ -117,6 +117,8 @@ class FakeTransport:
 
     def close(self):
         self.closed = True
+        for channel in self.channels:
+            channel.close()
 
 
 class Network:
@@ -268,13 +270,18 @@ def test_home_is_fixed_command_and_absolute_not_evaluated(tmp_path):
     connection.close()
 
 
-def test_command_timeout_and_output_limits_close_channel(tmp_path):
+def test_command_timeout_closes_connection_and_channel(tmp_path):
     network, connection = trusted_connection(tmp_path)
     network.hang = True
     result = connection(("uname", "-s"), timeout=0.01)
     assert result.error == "timeout"
     assert network.transports[0].channels[-1].closed
-    network.hang = False
+    assert network.transports[0].closed and network.sockets[0].closed
+    assert connection.status()["state"] == "disconnected"
+
+
+def test_command_output_limits_close_channel(tmp_path):
+    network, connection = trusted_connection(tmp_path)
     network.outputs["LC_ALL=C uname -s"] = b"x" * (1024 * 1024 + 1)
     result = connection(("uname", "-s"), timeout=1)
     assert result.error == "output-limit"
@@ -327,7 +334,7 @@ def test_real_sftp_protocol_handshake_on_authenticated_channel(tmp_path):
     assert isinstance(client, paramiko.SFTPClient)
     assert network.subsystems == ["sftp"]
     assert network.sftp_packets == [b"\x00\x00\x00\x05\x01\x00\x00\x00\x03"]
-    assert client.get_channel().timeout == 10
+    assert 0 < client.get_channel().timeout <= 10
     connection.close()
     assert client.get_channel().closed
 
@@ -349,3 +356,214 @@ def test_changed_key_algorithm_also_blocks(tmp_path):
     with pytest.raises(ControllerError, match="host_key_changed"):
         connection.connect("example.org", 22, "test")
     assert len(network.auth_calls) == 1
+
+
+class MemorySocket:
+    """A byte-stream peer, not an OS socket; real Paramiko runs at both ends."""
+
+    def __init__(self):
+        self.peer = None
+        self.incoming = bytearray()
+        self.condition = threading.Condition()
+        self._closed = False
+        self.timeout = 0.1
+        self.stall_after = None
+        self.writes = 0
+        self.write_timeouts = 0
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def send(self, data):
+        if self._closed:
+            raise OSError("closed fake socket")
+        if self.stall_after is not None and self.writes >= self.stall_after:
+            time.sleep(0.005)
+            self.write_timeouts += 1
+            raise socket.timeout("fake peer is not accepting writes")
+        self.writes += 1
+        with self.peer.condition:
+            self.peer.incoming.extend(data)
+            self.peer.condition.notify_all()
+        return len(data)
+
+    def recv(self, size):
+        with self.condition:
+            if not self.condition.wait_for(lambda: self.incoming or self._closed, self.timeout):
+                raise socket.timeout()
+            data = bytes(self.incoming[:size])
+            del self.incoming[:size]
+            return data
+
+    def shutdown(self, how):
+        self.close()
+
+    def close(self):
+        for endpoint in (self, self.peer):
+            with endpoint.condition:
+                endpoint._closed = True
+                endpoint.condition.notify_all()
+
+
+class MemorySSHServer(paramiko.ServerInterface):
+    """Test-only protocol peer; never executes the received command."""
+
+    def check_auth_password(self, username, password):
+        return paramiko.AUTH_SUCCESSFUL
+
+    def get_allowed_auths(self, username):
+        return "password"
+
+    def check_channel_request(self, kind, chanid):
+        return paramiko.OPEN_SUCCEEDED
+
+    def check_channel_exec_request(self, channel, command):
+        channel.send_exit_status(0)
+        return True
+
+
+@pytest.fixture
+def memory_ssh(tmp_path):
+    from h3server.controller.ssh import SSHConnection
+    client_socket, server_socket = MemorySocket(), MemorySocket()
+    client_socket.peer, server_socket.peer = server_socket, client_socket
+    server = paramiko.Transport(server_socket)
+    server.add_server_key(paramiko.RSAKey.generate(1024))
+    server.set_subsystem_handler("sftp", paramiko.SFTPServer)
+    server.start_server(event=threading.Event(), server=MemorySSHServer())
+    transports = []
+
+    def transport_factory(sock):
+        transport = paramiko.Transport(sock)
+        transports.append(transport)
+        return transport
+
+    connection = SSHConnection(tmp_path / "memory", socket_factory=lambda *args, **kwargs: client_socket,
+                               transport_factory=transport_factory)
+    try:
+        challenge = connection.connect("memory.example", 22, "test")
+        connection.approve(challenge["fingerprint"])
+        yield connection, client_socket, server_socket, server, transports[0]
+    finally:
+        # Out-of-band teardown also bounds the deliberately failing red tests.
+        client_socket.close()
+        for transport in [*transports, server]:
+            transport.close()
+            transport.join(timeout=1)
+            assert not transport.is_alive()
+        connection.close()
+
+
+def run_bounded_operation(action, sock, transport, *, limit):
+    """Observe deadline failure without hanging pytest or leaving worker threads."""
+    results = []
+    errors = []
+    done = threading.Event()
+
+    def run():
+        try:
+            results.append(action())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        assert done.wait(limit), "SSH operation exceeded deadline while transport IO was stalled"
+        return results, errors
+    finally:
+        if not done.is_set():
+            sock.close()
+            transport.close()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("successful_writes", [0, 1, 3], ids=["channel-open", "exec", "channel-close"])
+def test_real_paramiko_write_retries_obey_probe_deadline(memory_ssh, successful_writes):
+    connection, sock, _, _, transport = memory_ssh
+    connection.authenticate("test-secret")
+    sock.writes = 0
+    sock.stall_after = successful_writes
+    results, errors = run_bounded_operation(lambda: connection(("uname", "-s"), timeout=0.05),
+                                            sock, transport, limit=0.8)
+    assert not errors
+    assert results[0].error == "timeout"  # even if only cleanup stalled
+    assert sock.write_timeouts > 1
+    assert sock._closed and not transport.is_active()
+    assert connection.status()["state"] == "disconnected"
+    assert connection.close()["state"] == "disconnected"
+
+
+def test_real_paramiko_stalled_rekey_obeys_probe_deadline(memory_ssh):
+    connection, sock, server_socket, server, transport = memory_ssh
+    connection.authenticate("test-secret")
+    server_socket.writes = 0
+    server_socket.stall_after = 1  # send KEXINIT, then withhold the key-exchange response
+    rekey_errors = []
+
+    def rekey():
+        try:
+            server.renegotiate_keys()
+        except Exception as exc:
+            rekey_errors.append(exc)
+
+    rekey_worker = threading.Thread(target=rekey, daemon=True)
+    rekey_worker.start()
+    try:
+        until = time.monotonic() + 1
+        while transport.clear_to_send.is_set() and time.monotonic() < until:
+            time.sleep(0.005)
+        assert not transport.clear_to_send.is_set(), "real Paramiko did not enter rekey wait"
+        results, errors = run_bounded_operation(lambda: connection(("uname", "-s"), timeout=0.05),
+                                                sock, transport, limit=0.8)
+        assert not errors
+        assert results[0].error == "timeout"
+        assert connection.status()["state"] == "disconnected"
+    finally:
+        server_socket.close()
+        server.close()
+        rekey_worker.join(timeout=1)
+        assert not rekey_worker.is_alive()
+
+
+@pytest.mark.parametrize("operation", ["authenticate", "sftp"])
+def test_real_paramiko_write_retries_obey_auth_and_sftp_deadlines(memory_ssh, operation):
+    from h3server.controller.ssh import ControllerError
+    connection, sock, _, _, transport = memory_ssh
+    if operation == "sftp":
+        connection.authenticate("test-secret")
+    sock.writes = 0
+    sock.stall_after = 0
+    action = connection.open_sftp if operation == "sftp" else lambda: connection.authenticate("test-secret")
+    results, errors = run_bounded_operation(action, sock, transport, limit=11)
+    assert not results
+    assert len(errors) == 1 and isinstance(errors[0], ControllerError)
+    assert errors[0].code == ("sftp_unavailable" if operation == "sftp" else "authentication_failed")
+    assert sock.write_timeouts > 1
+    assert connection.status()["state"] == "disconnected"
+
+
+def test_real_paramiko_disconnect_aborts_io_before_sftp_close(memory_ssh):
+    connection, sock, _, _, transport = memory_ssh
+    connection.authenticate("test-secret")
+    client = connection.open_sftp()
+    sock.writes = 0
+    sock.stall_after = 0
+    results, errors = run_bounded_operation(connection.close, sock, transport, limit=0.8)
+    assert not errors
+    assert results[0]["state"] == "disconnected"
+    assert client.get_channel().closed
+    assert sock.write_timeouts == 0
+
+
+def test_real_paramiko_success_cancels_deadline_without_disconnect(memory_ssh):
+    connection, sock, _, _, transport = memory_ssh
+    connection.authenticate("test-secret")
+    result = connection(("uname", "-s"), timeout=0.1)
+    assert result.succeeded
+    time.sleep(0.15)
+    assert connection.status()["state"] == "authenticated"
+    assert transport.is_active() and not sock._closed

@@ -73,13 +73,48 @@ def _close_quietly(resource) -> None:
         pass
 
 
-def _channel_timer(channel, timeout: float) -> threading.Timer:
-    # Paramiko's exec/subsystem acknowledgement waits do NOT honor settimeout.
-    # Closing the channel signals those waits as well as blocked reads/writes.
-    timer = threading.Timer(timeout, _close_quietly, args=(channel,))
-    timer.daemon = True
-    timer.start()
-    return timer
+def _abort_transport(sock, transport) -> None:
+    # Interrupt socket IO before closing Paramiko. Channel.close() itself sends
+    # packets and cannot interrupt packetizer write retries or rekey waits.
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        _close_quietly(sock)
+    if transport is not None:
+        _close_quietly(transport)
+
+
+class _TransportDeadline:
+    """An IO watchdog independent of the connection lock, armed through cleanup."""
+
+    def __init__(self, sock, transport, timeout: float):
+        self._socket = sock
+        self._transport = transport
+        self.expires_at = time.monotonic() + timeout
+        self.expired = threading.Event()
+        self._timer = threading.Timer(timeout, self._expire)
+        self._timer.daemon = True
+
+    def _expire(self):
+        self.expired.set()
+        _abort_transport(self._socket, self._transport)
+
+    def __enter__(self):
+        self._timer.start()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self._timer.cancel()
+        # No old callback may survive release of the connection lock. Only
+        # captured IO objects are touched by the watchdog, never controller state.
+        self._timer.join()
+        if time.monotonic() >= self.expires_at and not self.expired.is_set():
+            self._expire()
+
+    def remaining(self) -> float:
+        return max(0.001, self.expires_at - time.monotonic())
 
 
 class KnownHosts:
@@ -227,16 +262,20 @@ class SSHConnection:
             raise ControllerError("authentication_not_pending")
         if not isinstance(password, str) or not 0 < len(password) <= 4096 or "\x00" in password:
             raise ControllerError("invalid_credentials", 422)
-        try:
-            # Never fall back to keyboard-interactive prompts or agent/key search.
-            self._transport.auth_password(self._username, password, fallback=False)
-            if not self._transport.is_authenticated():
-                raise paramiko.AuthenticationException()
-            self._state = "authenticated"
-            return self.status()
-        except Exception:
+        failed = False
+        with _TransportDeadline(self._socket, self._transport, 10) as deadline:
+            try:
+                # The auth request writes before Paramiko's auth_timeout starts.
+                # Never fall back to interactive prompts or agent/key search.
+                self._transport.auth_password(self._username, password, fallback=False)
+                failed = not self._transport.is_authenticated()
+            except Exception:
+                failed = True
+        if failed or deadline.expired.is_set():
             self.close()
             raise ControllerError("authentication_failed", 401) from None
+        self._state = "authenticated"
+        return self.status()
 
     @_locked
     def status(self) -> dict:
@@ -253,13 +292,14 @@ class SSHConnection:
     def close(self) -> dict:
         # Close every owned resource even when another close fails; do not leak
         # transport exception text during error cleanup.
-        resources = [*self._sftp_clients, self._transport, self._socket]
+        clients, transport, sock = self._sftp_clients, self._transport, self._socket
         self._sftp_clients = []
         self._transport = self._socket = self._key = self._host_id = self._username = None
         self._state = "disconnected"
-        for resource in resources:
-            if resource is not None:
-                _close_quietly(resource)
+        # SFTP/channel close can write: terminate the underlying IO first.
+        _abort_transport(sock, transport)
+        for client in clients:
+            _close_quietly(client)
         return {"state": "disconnected", "fingerprint": None, "key_type": None}
 
     @_locked
@@ -269,60 +309,68 @@ class SSHConnection:
         The caller must close its client; disconnect also closes owned clients.
         """
         self._require_authentication()
-        try:
-            channel = self._transport.open_session(timeout=10)
-            timer = _channel_timer(channel, 10)
+        channel = client = None
+        failed = False
+        with _TransportDeadline(self._socket, self._transport, 10) as deadline:
             try:
-                channel.settimeout(10)
+                channel = self._transport.open_session(timeout=deadline.remaining())
+                channel.settimeout(deadline.remaining())
                 channel.invoke_subsystem("sftp")
                 client = paramiko.SFTPClient(channel)
             except Exception:
-                _close_quietly(channel)
-                raise
+                failed = True
             finally:
-                timer.cancel()
-            self._sftp_clients.append(client)
-            return client
-        except Exception:
+                if failed and channel is not None:
+                    _close_quietly(channel)
+        if deadline.expired.is_set():
+            self.close()
+            if client is not None:
+                _close_quietly(client)
+        if failed or deadline.expired.is_set():
             raise ControllerError("sftp_unavailable", 502) from None
+        self._sftp_clients.append(client)
+        return client
 
     def _execute(self, command: str, timeout: float) -> CommandResult:
         self._require_authentication()
         channel = None
-        timer = None
-        deadline = time.monotonic() + timeout
         output = bytearray()
         errors = bytearray()
-        try:
-            channel = self._transport.open_session(timeout=timeout)
-            remaining = max(0.001, deadline - time.monotonic())
-            timer = _channel_timer(channel, remaining)
-            channel.settimeout(remaining)
-            channel.exec_command(command)
-            channel.shutdown_write()
-            while True:
-                if time.monotonic() >= deadline:
-                    return CommandResult(returncode=None, error="timeout")
-                for ready, receive, buffer in ((channel.recv_ready, channel.recv, output),
-                                               (channel.recv_stderr_ready, channel.recv_stderr, errors)):
-                    if ready():
-                        buffer.extend(receive(32768))
-                if len(output) + len(errors) > 1024 * 1024:
-                    return CommandResult(returncode=None, error="output-limit")
-                if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
-                    # Raw stderr is never retained or returned to HTTP clients.
-                    return CommandResult(output.decode("utf-8", errors="strict"), returncode=channel.recv_exit_status())
-                time.sleep(min(0.005, max(0, deadline - time.monotonic())))
-        except (TimeoutError, socket.timeout):
+        with _TransportDeadline(self._socket, self._transport, timeout) as deadline:
+            try:
+                channel = self._transport.open_session(timeout=deadline.remaining())
+                channel.settimeout(deadline.remaining())
+                channel.exec_command(command)
+                channel.shutdown_write()
+                while True:
+                    if time.monotonic() >= deadline.expires_at:
+                        result = CommandResult(returncode=None, error="timeout")
+                        break
+                    for ready, receive, buffer in ((channel.recv_ready, channel.recv, output),
+                                                   (channel.recv_stderr_ready, channel.recv_stderr, errors)):
+                        if ready():
+                            buffer.extend(receive(32768))
+                    if len(output) + len(errors) > 1024 * 1024:
+                        result = CommandResult(returncode=None, error="output-limit")
+                        break
+                    if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                        # Raw stderr is never retained or returned to HTTP clients.
+                        result = CommandResult(output.decode("utf-8", errors="strict"), returncode=channel.recv_exit_status())
+                        break
+                    time.sleep(min(0.005, deadline.remaining()))
+            except (TimeoutError, socket.timeout):
+                result = CommandResult(returncode=None, error="timeout")
+            except Exception:
+                result = CommandResult(returncode=None, error="transport-error")
+            finally:
+                if channel is not None:
+                    _close_quietly(channel)
+        # Cleanup can be the blocked write. Never report success if the deadline
+        # had to abort it; the expired transport is not reusable for another scan.
+        if deadline.expired.is_set() or result.error == "timeout":
+            self.close()
             return CommandResult(returncode=None, error="timeout")
-        except Exception:
-            error = "timeout" if time.monotonic() >= deadline else "transport-error"
-            return CommandResult(returncode=None, error=error)
-        finally:
-            if timer is not None:
-                timer.cancel()
-            if channel is not None:
-                _close_quietly(channel)
+        return result
 
     @_locked
     def remote_home(self) -> str:
