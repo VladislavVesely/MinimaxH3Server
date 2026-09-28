@@ -1,7 +1,10 @@
 """Resumable Linux target installer and fixed POSIX bootstrap contract.
 
-Integration: inspect_prerequisites -> build_plan -> present full changes/license
--> stage_bootstrap after Approval -> launch_detached (or registered user unit).
+Integration: inspect_prerequisites -> build_plan -> present full changes/license.
+For prerequisite-only rounds use SSHConnection.install_prerequisites (stdin sudo)
+or stage_bootstrap + launch_detached with preauthorized scoped sudo -n. For an
+environment plan, stage the approved inputs/wheel, approve recovery.service_plan,
+then Recovery.prepare finishes privilege before user-systemd continuation.
 On WAITING_FOR_REPLAN the controller must automatically inspect again, replace
 this inactive plan with Store.update_setup_plan, and request fresh approval in
 its existing wizard. It must not reuse the old digest. On WAITING_FOR_REBOOT,
@@ -36,10 +39,11 @@ class InstallerBusy(RuntimeError):
 
 
 class Installer:
-    def __init__(self, paths: AppPaths, store: Store, *, io=None, inherited_lock_fd=None):
+    def __init__(self, paths: AppPaths, store: Store, *, io=None, inherited_lock_fd=None, boot_id=None):
         self.paths, self.store = paths, store
         self.io = io if io is not None else ProcessIO()
         self.inherited_lock_fd = inherited_lock_fd
+        self.boot_id = boot_id
 
     @contextmanager
     def lock(self):
@@ -69,7 +73,7 @@ class Installer:
         checkpoint = self.store.create_setup(plan)
         return self.store.transition_setup(checkpoint.setup_id, SetupState.AWAITING_APPROVAL)
 
-    def run(self, setup_id, approval: Approval):
+    def run(self, setup_id, approval: Approval, *, stop_after_packages=False, unprivileged=False):
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             raise PermissionError("application/model Python must run as the unprivileged SSH user")
         with self.lock():
@@ -77,6 +81,8 @@ class Installer:
             plan = checkpoint.plan
             validate_approval(plan, approval)
             artifact_path(self.paths, plan)
+            if unprivileged and checkpoint.stages[0].status != StageStatus.COMPLETED:
+                raise PermissionError("privileged prerequisites must finish before detached continuation")
             if checkpoint.state in {SetupState.READY, SetupState.WAITING_FOR_REPLAN}:
                 return checkpoint
             if checkpoint.state == SetupState.PLANNED:
@@ -84,6 +90,9 @@ class Installer:
             if checkpoint.state == SetupState.AWAITING_APPROVAL:
                 self.store.approve_setup(setup_id, approval.plan_digest)
             if checkpoint.state == SetupState.WAITING_FOR_REBOOT:
+                from h3server.installer.recovery import boot_changed
+                if not boot_changed(self.paths, approval.plan_digest, self.boot_id):
+                    return checkpoint
                 self.store.transition_setup(setup_id, SetupState.RECONNECTING)
             self.store.transition_setup(setup_id, SetupState.RUNNING)
             with (self.paths.logs / f"installer-{setup_id}.log").open("a", encoding="utf-8") as log:
@@ -93,6 +102,8 @@ class Installer:
                     for stage in self.store.get_setup(setup_id).stages:
                         current = stage.name
                         if stage.status == StageStatus.COMPLETED:
+                            if stage.name == "system-packages" and stop_after_packages:
+                                return self.store.get_setup(setup_id)
                             continue
                         self.store.transition_stage(setup_id, stage.name, StageStatus.RUNNING)
                         if stage.name == "replan":
@@ -102,9 +113,13 @@ class Installer:
                             try:
                                 steps.run("nvidia-smi")
                             except CommandFailure:
+                                from h3server.installer.recovery import record_waiting_boot
+                                record_waiting_boot(self.paths, approval.plan_digest, self.boot_id)
                                 return self.store.transition_setup(setup_id, SetupState.WAITING_FOR_REBOOT)
                         getattr(steps, stage.name.replace("-", "_"))()
                         self.store.transition_stage(setup_id, stage.name, StageStatus.COMPLETED)
+                        if stage.name == "system-packages" and stop_after_packages:
+                            return self.store.get_setup(setup_id)
                     return self.store.transition_setup(setup_id, SetupState.READY)
                 except BaseException:
                     if current is not None:
@@ -207,9 +222,10 @@ exec python3 -m h3server.installer.runner --root {q(str(paths.root))} --plan "$s
 def launch_detached(script: Path, *, popen=subprocess.Popen):
     """Target-side launcher; returns PID handle, NOT successful installation.
 
-    systemd user registration/lingering and SSH transport are the next component's
-    responsibility. Setsid + redirected descriptors survive SSH disconnects;
-    execute the same persisted script after reboot to resume idempotently.
+    Legacy prerequisite path with preauthorized scoped sudo -n. Environment
+    installation uses Recovery.prepare instead: registered unprivileged user
+    units resume at boot with no saved credentials. This setsid launcher alone
+    survives disconnect but does not promise startup after reboot.
     """
     return popen(("/bin/sh", str(script)), stdin=subprocess.DEVNULL,
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

@@ -54,6 +54,7 @@ class Inspection:
     package_changes: tuple[str, ...]
     issues: tuple[str, ...]
     refresh_metadata: bool = False
+    sudo_password_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,10 @@ def installed_version(text):
     return match[1] if match else None
 
 
-def inspect_prerequisites(run=inspect_local) -> Inspection:
+def inspect_prerequisites(run=inspect_local, *, sudo_password_available=False) -> Inspection:
+    """The session flag is NOT successful sudo authentication; never prompt here."""
+    if type(sudo_password_available) is not bool:
+        raise ValueError("sudo credential availability must be boolean")
     def cmd(*args):
         return run(tuple(args), timeout=30)
 
@@ -167,7 +171,8 @@ def inspect_prerequisites(run=inspect_local) -> Inspection:
     if refresh:
         pins = []  # only update indexes, then show newly resolved changes for approval
     return Inspection(distro, version, arch, python_ready, working, nvidia, secure_boot,
-                      sudo, selector_available, driver, tuple(pins), changes, tuple(issues), refresh)
+                      sudo, selector_available, driver, tuple(pins), changes, tuple(issues), refresh,
+                      sudo_password_available)
 
 
 def requirements():
@@ -191,8 +196,8 @@ def build_plan(inspection: Inspection, *, profile: str, artifact: ReleaseArtifac
         if inspection.secure_boot != "disabled":
             blockers.append("Secure Boot enabled or unknown: manual signed-driver/MOK enrollment review required; automatic installation is blocked, never disable Secure Boot.")
     privileged = bool(inspection.packages or inspection.refresh_metadata)
-    if privileged and not inspection.sudo_available:
-        blockers.append("Approved noninteractive sudo is unavailable; arrange scoped sudo authorization and rescan. Passwords are never stored or piped to sudo.")
+    if privileged and not inspection.sudo_available and not inspection.sudo_password_available:
+        blockers.append("Sudo authorization unavailable; reauthenticate with an in-memory sudo credential or arrange scoped authorization and rescan. No password is persisted.")
     # Do not install a newly discovered driver during a prerequisite-only round.
     if discovery and inspection.driver_package and any(p.startswith(inspection.driver_package + "=") for p in inspection.packages):
         blockers.append("Python/selector prerequisites and driver changes must be resolved in separate approval rounds; rescan after prerequisite repair.")
@@ -207,11 +212,13 @@ def build_plan(inspection: Inspection, *, profile: str, artifact: ReleaseArtifac
         "driver_action": "preserve" if inspection.driver_working else "discover" if discovery else "install",
         "driver_package": inspection.driver_package,
         "privileged_required": privileged,
+        "sudo_authentication_required": privileged and not inspection.sudo_available,
         "reboot_required": not inspection.driver_working and not discovery,
         "blockers": blockers,
         "stages": ["system-packages", "replan"] if discovery else ["system-packages", "environment", "dependencies", "verify"],
         "installation_ready": False, "model_ready": False, "generation_tested": False,
-        "changes": ["Install only the listed APT versions and simulated dependency changes; no repository edits or full CUDA toolkit.",
+        "changes": ["When sudo authentication is required, approval alone is not authorization: fixed-command authentication must succeed; credentials travel only on stdin and are never saved.",
+                    "Install only the listed APT versions and simulated dependency changes; no repository edits or full CUDA toolkit.",
                     "On interruption, configure only pending dpkg packages named in the approved simulation; unrelated broken packages block recovery.",
                     "Prerequisite-only completion requires automatic reinspection and a NEW plan approval; it is not installation readiness.",
                     "Write versioned application environment, cache, temporary files and logs beneath AppPaths; preserve HOME.",
@@ -229,6 +236,8 @@ def validate_plan(plan):
         ReleaseArtifact(**plan["artifact"])
     except (KeyError, TypeError) as e:
         raise ValueError("invalid release artifact") from e
+    if type(plan.get("sudo_authentication_required", False)) is not bool:
+        raise ValueError("sudo authentication requirement must be boolean")
     for name in ("refresh_metadata", "privileged_required", "reboot_required", "installation_ready", "model_ready", "generation_tested"):
         if type(plan.get(name)) is not bool:
             raise ValueError("plan flags must be boolean")

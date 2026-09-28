@@ -182,7 +182,8 @@ def test_handshake_never_authenticates_until_trust_and_explicit_auth(tmp_path):
     connection.authenticate("test-secret")
     assert network.auth_calls == [("test", "test-secret", False)]
     assert connection.status()["state"] == "authenticated"
-    assert network.socket_timeout == network.handshake_timeouts[0] == 10
+    assert network.socket_timeout == 10
+    assert 0 < network.handshake_timeouts[0] <= 10
     connection.close()
     assert network.sockets[0].closed and network.transports[0].closed
 

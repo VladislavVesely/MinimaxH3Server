@@ -86,6 +86,38 @@ def _abort_transport(sock, transport) -> None:
         _close_quietly(transport)
 
 
+def _connect_socket(factory, address, timeout):
+    """Bound DNS as well as socket connect; late sockets are closed, never reused.
+
+    Python cannot interrupt an OS resolver call. The daemon worker may finish
+    later, but it owns no controller state and cannot authenticate or launch work.
+    """
+    done, guard = threading.Event(), threading.Lock()
+    result, abandoned = [None], [False]
+    def connect():
+        sock = None
+        try:
+            sock = factory(address, timeout=timeout)
+        except Exception:
+            pass
+        with guard:
+            if abandoned[0]:
+                if sock is not None:
+                    _close_quietly(sock)
+            else:
+                result[0] = sock
+            done.set()
+    threading.Thread(target=connect, name="h3-ssh-connect", daemon=True).start()
+    done.wait(timeout)
+    with guard:
+        if not done.is_set():
+            abandoned[0] = True
+            raise TimeoutError("connection deadline expired")
+        if result[0] is None:
+            raise OSError("connection failed")
+        return result[0]
+
+
 class _TransportDeadline:
     """An IO watchdog independent of the connection lock, armed through cleanup."""
 
@@ -204,13 +236,16 @@ class SSHConnection:
         self._challenge_expires = 0.0
 
     @_locked
-    def connect(self, host: str, port: int, username: str) -> dict:
+    def connect(self, host: str, port: int, username: str, *, timeout: float = 10) -> dict:
+        if not math.isfinite(timeout) or not 0 < timeout <= 10:
+            raise ValueError("connection timeout must be in (0, 10]")
+        expires = time.monotonic() + timeout
         host = _target(host, port, username)
         if self._state != "disconnected":
             raise ControllerError("already_connected")
         keys = self._store.load()
         try:
-            self._socket = self._socket_factory((host, port), timeout=10)
+            self._socket = _connect_socket(self._socket_factory, (host, port), timeout)
             self._transport = self._transport_factory(self._socket)
             # Remote banners/errors and authentication diagnostics are untrusted
             # and may contain secrets. Do not forward Paramiko wire logs.
@@ -219,11 +254,15 @@ class SSHConnection:
             logger.setLevel(logging.CRITICAL + 1)
             logger.propagate = False
             self._transport.set_log_channel(logger_name)
-            self._transport.banner_timeout = 10
-            self._transport.auth_timeout = 10
-            self._transport.channel_timeout = 10
-            self._transport.start_client(timeout=10)
-            self._key = self._transport.get_remote_server_key()
+            remaining = max(0.001, expires - time.monotonic())
+            self._transport.banner_timeout = remaining
+            self._transport.auth_timeout = remaining
+            self._transport.channel_timeout = remaining
+            with _TransportDeadline(self._socket, self._transport, remaining) as deadline:
+                self._transport.start_client(timeout=remaining)
+                self._key = self._transport.get_remote_server_key()
+            if deadline.expired.is_set() or time.monotonic() >= expires:
+                raise ControllerError("connection_failed", 502)
             self._host_id = f"[{host}]:{port}"
             self._username = username
             if keys.lookup(self._host_id) is not None:
@@ -255,7 +294,9 @@ class SSHConnection:
         return self.status()
 
     @_locked
-    def authenticate(self, password: str) -> dict:
+    def authenticate(self, password: str, *, timeout: float = 10) -> dict:
+        if not math.isfinite(timeout) or not 0 < timeout <= 10:
+            raise ValueError("authentication timeout must be in (0, 10]")
         if self._state == "awaiting_approval":
             raise ControllerError("trust_required")
         if self._state != "awaiting_authentication":
@@ -263,7 +304,7 @@ class SSHConnection:
         if not isinstance(password, str) or not 0 < len(password) <= 4096 or "\x00" in password:
             raise ControllerError("invalid_credentials", 422)
         failed = False
-        with _TransportDeadline(self._socket, self._transport, 10) as deadline:
+        with _TransportDeadline(self._socket, self._transport, timeout) as deadline:
             try:
                 # The auth request writes before Paramiko's auth_timeout starts.
                 # Never fall back to interactive prompts or agent/key search.
@@ -331,7 +372,7 @@ class SSHConnection:
         self._sftp_clients.append(client)
         return client
 
-    def _execute(self, command: str, timeout: float) -> CommandResult:
+    def _execute(self, command: str, timeout: float, *, stdin: bytes = b"", suppress_output=False) -> CommandResult:
         self._require_authentication()
         channel = None
         output = bytearray()
@@ -341,6 +382,12 @@ class SSHConnection:
                 channel = self._transport.open_session(timeout=deadline.remaining())
                 channel.settimeout(deadline.remaining())
                 channel.exec_command(command)
+                remaining_input = memoryview(stdin)
+                while remaining_input:
+                    sent = channel.send(remaining_input)
+                    if sent <= 0:
+                        raise OSError("channel closed during input")
+                    remaining_input = remaining_input[sent:]
                 channel.shutdown_write()
                 while True:
                     if time.monotonic() >= deadline.expires_at:
@@ -355,7 +402,7 @@ class SSHConnection:
                         break
                     if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
                         # Raw stderr is never retained or returned to HTTP clients.
-                        result = CommandResult(output.decode("utf-8", errors="strict"), returncode=channel.recv_exit_status())
+                        result = CommandResult("" if suppress_output else output.decode("utf-8", errors="strict"), returncode=channel.recv_exit_status())
                         break
                     time.sleep(min(0.005, deadline.remaining()))
             except (TimeoutError, socket.timeout):
@@ -371,6 +418,132 @@ class SSHConnection:
             self.close()
             return CommandResult(returncode=None, error="timeout")
         return result
+
+    @_locked
+    def install_prerequisites(self, *, root: str, plan: dict, approval,
+                              sudo_password: str | None = None) -> str:
+        """Python-absent first-run path, composed locally over authenticated SSH.
+
+        Task11 calls this only for approved prerequisite plans. Every command is
+        generated by the existing fixed Steps.system_packages algorithm; no
+        remote Python or arbitrary shell/script RPC. Sudo receives its credential
+        directly on channel stdin, never via echo, shell variables, argv or files.
+        Each command uses the same remote installer flock. A setsid flock owner
+        survives a dropped channel while its OS command finishes, preventing a
+        resumed installer from duplicating a still-running package operation.
+        A dropped channel is NOT success: reauthenticate and rerun checks. Final
+        waiting_for_replan marker mandates fresh read-only inspection/approval.
+        """
+        import json
+        from dataclasses import asdict
+        from h3server.installer.planner import validate_approval
+        from h3server.installer.steps import CommandFailure, Steps
+        from h3server.store import canonical_plan_digest
+        self._require_authentication()
+        validate_approval(plan, approval)
+        if plan['purpose'] != 'prerequisites':
+            raise ValueError('only prerequisite discovery plans use this launcher')
+        if not _absolute_path(root) or root.endswith('/') or '..' in root.split('/'):
+            raise ValueError('invalid application root')
+        if sudo_password is not None and (not isinstance(sudo_password, str) or not 0 < len(sudo_password) <= 4096 or any(c in sudo_password for c in '\r\n\x00')):
+            raise ValueError('invalid sudo credential')
+        digest = canonical_plan_digest(plan)
+        stage, lock = root + '/bootstrap/' + digest, root + '/state/installer.lock'
+        q = shlex.quote
+        directories = self._execute('umask 077; mkdir -p -- ' + shlex.join((root + '/state', stage)), 30)
+        if not directories.succeeded:
+            raise CommandFailure('cannot create approved prerequisite checkpoint')
+        sftp = self.open_sftp()
+        try:
+            for name, document in (('plan.json', plan), ('approval.json', asdict(approval))):
+                temporary = stage + '/' + name + '.new'
+                with sftp.open(temporary, 'w') as stream:
+                    sftp.chmod(temporary, 0o600)
+                    stream.write(json.dumps(document, sort_keys=True))
+                    stream.flush()
+                sftp.posix_rename(temporary, stage + '/' + name)
+        except Exception:
+            raise CommandFailure('cannot persist prerequisite approval') from None
+        finally:
+            sftp.close()
+
+        def status(value):
+            # Fixed status text only; no secret or remote output is interpolated.
+            command = "umask 077; printf '%s\\n' " + q(value) + ' > ' + q(stage + '/status')
+            result = self._execute(command, 10, suppress_output=True)
+            if not result.succeeded:
+                raise CommandFailure('prerequisite checkpoint write failed')
+
+        connection = self
+        class TargetSteps(Steps):
+            def __init__(self):
+                self.plan = plan
+            def run(self, *argv, capture=False):
+                privileged = argv[0] == 'sudo'
+                data = b''
+                if privileged:
+                    if argv[:2] != ('sudo', '-n'):
+                        raise PermissionError('unexpected privileged command')
+                    argv = (('sudo', '-n', '--') if sudo_password is None else ('sudo', '-S', '-k', '-p', '', '--')) + argv[2:]
+                    data = b'' if sudo_password is None else (sudo_password + '\n').encode()
+                # flock is a separate owner waiting for the child, not an fd
+                # which sudo closefrom could discard. No PTY or shell password.
+                command = 'LC_ALL=C setsid --wait flock -n ' + q(lock) + ' ' + shlex.join(argv)
+                if privileged:
+                    command += ' >/dev/null 2>&1'
+                result = connection._execute(command, 3600 if privileged else 30,
+                                             stdin=data, suppress_output=privileged)
+                if not result.succeeded:
+                    raise CommandFailure('prerequisite command failed; reauthenticate, rescan or review sudo policy (output suppressed)')
+                return result.stdout if capture else ''
+        status('running')
+        try:
+            TargetSteps().system_packages()
+        except Exception:
+            try:
+                status('failed')
+            except Exception:
+                pass  # lost transport leaves an honest unresolved running marker
+            raise
+        status('waiting_for_replan')
+        return 'waiting_for_replan'
+
+    @_locked
+    def recovery(self, *, root: str, artifact, digest: str, action: str,
+                 service_digest: str | None = None, sudo_password: str | None = None,
+                 after: int = 0) -> CommandResult:
+        """Fixed authenticated target API, not a shell-command escape hatch.
+
+        Controller stages the plan/approval and verified wheel via SFTP. Fetch
+        action=service-plan to present the target-root/uid-bound registration
+        document BEFORE requesting its separate digest-bound approval.
+        prepare/reboot return only detached launch acceptance, never completion;
+        poll snapshot for durable state/events. No password in argv/files/output.
+        """
+        import json
+        from h3server.installer.planner import ReleaseArtifact
+        if not isinstance(artifact, ReleaseArtifact) or not _absolute_path(root) or root.endswith('/') or '..' in root.split('/'):
+            raise ValueError("invalid recovery target/artifact")
+        if not re.fullmatch(r"[a-f0-9]{64}", digest) or action not in {"service-plan", "prepare", "reboot", "resume", "snapshot"}:
+            raise ValueError("invalid recovery operation")
+        if type(after) is not int or after < 0:
+            raise ValueError("invalid replay cursor")
+        if action == "prepare" and (not isinstance(service_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", service_digest)):
+            raise ValueError("service approval digest required")
+        if sudo_password is not None and (action not in {"prepare", "reboot"} or not isinstance(sudo_password, str) or not 0 < len(sudo_password) <= 4096 or any(c in sudo_password for c in '\r\n\x00')):
+            raise ValueError("invalid sudo credential scope")
+        wheel = root + '/releases/' + artifact.release_id + '/' + artifact.filename
+        argv = ['env', '-u', 'PYTHONHOME', '-u', 'PYTHONSTARTUP', 'PYTHONNOUSERSITE=1',
+                'PYTHONPATH=' + wheel, 'python3', '-m', 'h3server.installer.recovery',
+                '--root', root, '--digest', digest]
+        if action not in {'snapshot', 'service-plan'}:
+            argv.append('--detach')
+        if action == 'prepare':
+            argv.extend(('--service-digest', service_digest))
+        argv.extend((action, '--after', str(after)))
+        command = "printf '%s  %s\\n' " + shlex.join((artifact.sha256, wheel)) + " | sha256sum -c - >/dev/null && " + shlex.join(argv)
+        data = json.dumps({'sudo_password': sudo_password}).encode() if action in {'prepare', 'reboot'} else b''
+        return self._execute(command, 30, stdin=data, suppress_output=action not in {'snapshot', 'service-plan'})
 
     @_locked
     def remote_home(self) -> str:

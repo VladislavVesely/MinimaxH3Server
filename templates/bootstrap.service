@@ -1,21 +1,16 @@
-# Initial SYSTEMD USER unit template, not an installed/running service.
-# Registration task substitutes @BOOTSTRAP_SCRIPT@ with systemd-escaped absolute
-# path to bootstrap/<approved-plan-digest>/bootstrap.sh. No shell/user input.
-# Install authoritative copy under AppPaths; user-manager lingering requires
-# separate privileged consent. Re-running the script resumes checkpoints.
 [Unit]
-Description=H3 approved installation bootstrap
+Description=H3 approved unprivileged bootstrap continuation
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh "@BOOTSTRAP_SCRIPT@"
+Environment=@ENVIRONMENT@
+ExecStart=/usr/bin/python3 -m h3server.installer.recovery --root @ROOT@ --digest @DIGEST@ resume
 TimeoutStartSec=infinity
 KillMode=control-group
 UMask=0077
-# Do not restart failed or blocked plans automatically. Reinspection/approval
-# may be required; the controller explicitly resumes this unit after review.
+NoNewPrivileges=yes
 Restart=no
 
 [Install]

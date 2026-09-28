@@ -212,7 +212,8 @@ def test_driver_reboot_checkpoint_never_reboots_or_reinstalls(tmp_path):
     paths, p, store = prepared(tmp_path, driver_working=False, driver_package="nvidia-driver-580",
                                packages=("nvidia-driver-580=1",), package_changes=("Inst nvidia-driver-580 (1 Ubuntu [amd64])",))
     io = AptIO(simulation="Inst nvidia-driver-580 (1 Ubuntu [amd64])")
-    runner = Installer(paths, store, io=io)
+    boot = ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa']
+    runner = Installer(paths, store, io=io, boot_id=lambda: boot[0])
     setup = runner.create(p)
     waiting = runner.run(setup.setup_id, approval(p, privileged=True))
     assert waiting.state == SetupState.WAITING_FOR_REBOOT
@@ -221,6 +222,7 @@ def test_driver_reboot_checkpoint_never_reboots_or_reinstalls(tmp_path):
     assert again.state == SetupState.WAITING_FOR_REBOOT
     assert sum("-y" in argv for argv, _ in io.calls) == 1
     io.driver = True
+    boot[0] = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
     assert runner.run(setup.setup_id, approval(p, privileged=True)).state == SetupState.READY
 
 
@@ -342,7 +344,7 @@ def test_missing_driver_executable_proceeds_to_approved_install(tmp_path):
             return super().run(argv, **kw)
 
     io = MissingDriverIO(simulation="Inst nvidia-driver-580 (1 Ubuntu [amd64])")
-    runner = Installer(paths, store, io=io)
+    runner = Installer(paths, store, io=io, boot_id=lambda: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
     result = runner.run(runner.create(p).setup_id, approval(p, privileged=True))
     assert any("-y" in argv and "nvidia-driver-580=1" in argv for argv, _ in io.calls)
     assert result.state == SetupState.WAITING_FOR_REBOOT
