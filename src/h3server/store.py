@@ -47,6 +47,7 @@ class SetupState(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
     RUNNING = "running"
     WAITING_FOR_REBOOT = "waiting_for_reboot"
+    WAITING_FOR_REPLAN = "waiting_for_replan"
     RECONNECTING = "reconnecting"
     FAILED = "failed"
     READY = "ready"
@@ -96,7 +97,8 @@ _JOB_TRANSITIONS = {
 _SETUP_TRANSITIONS = {
     SetupState.PLANNED: {SetupState.AWAITING_APPROVAL},
     SetupState.AWAITING_APPROVAL: {SetupState.RUNNING},
-    SetupState.RUNNING: {SetupState.WAITING_FOR_REBOOT, SetupState.FAILED, SetupState.READY},
+    SetupState.RUNNING: {SetupState.WAITING_FOR_REBOOT, SetupState.WAITING_FOR_REPLAN, SetupState.FAILED, SetupState.READY},
+    SetupState.WAITING_FOR_REPLAN: set(),
     SetupState.WAITING_FOR_REBOOT: {SetupState.RECONNECTING, SetupState.FAILED},
     SetupState.RECONNECTING: {SetupState.RUNNING, SetupState.FAILED},
     SetupState.FAILED: {SetupState.RUNNING},
@@ -108,7 +110,7 @@ _STAGE_TRANSITIONS = {
     StageStatus.FAILED: {StageStatus.RUNNING},
     StageStatus.COMPLETED: set(),
 }
-_APPROVED_STATES = {SetupState.RUNNING, SetupState.WAITING_FOR_REBOOT, SetupState.RECONNECTING, SetupState.FAILED, SetupState.READY}
+_APPROVED_STATES = {SetupState.RUNNING, SetupState.WAITING_FOR_REBOOT, SetupState.WAITING_FOR_REPLAN, SetupState.RECONNECTING, SetupState.FAILED, SetupState.READY}
 
 _SCHEMA = {
     "jobs": "CREATE TABLE jobs (job_id TEXT PRIMARY KEY NOT NULL, request TEXT NOT NULL, status TEXT NOT NULL, output TEXT)",
@@ -200,8 +202,8 @@ def _decode_setup(row: sqlite3.Row) -> SetupCheckpoint:
         raise ValueError("checkpoint stages differ from plan")
     if state in {SetupState.PLANNED, SetupState.AWAITING_APPROVAL} and any(stage.status is not StageStatus.PENDING for stage in stages):
         raise ValueError("stages started before approval")
-    if state is SetupState.READY and unfinished:
-        raise ValueError("ready setup has incomplete stages")
+    if state in {SetupState.READY, SetupState.WAITING_FOR_REPLAN} and unfinished:
+        raise ValueError("finished setup round has incomplete stages")
     return SetupCheckpoint(_identifier(row["setup_id"]), data["plan"], data["plan_digest"], data["approved_digest"], state, tuple(stages))
 
 
@@ -453,8 +455,8 @@ class Store:
                 raise InvalidTransition(f"setup cannot move from {setup.state} to {target}")
             if target in _APPROVED_STATES and setup.approved_digest != setup.plan_digest:
                 raise ApprovalRequired("execution requires approval of the current plan")
-            if target is SetupState.READY and any(stage.status is not StageStatus.COMPLETED for stage in setup.stages):
-                raise InvalidTransition("all stages must complete before readiness")
+            if target in {SetupState.READY, SetupState.WAITING_FOR_REPLAN} and any(stage.status is not StageStatus.COMPLETED for stage in setup.stages):
+                raise InvalidTransition("all stages must complete before readiness or replanning")
             updated = SetupCheckpoint(setup_id, setup.plan, setup.plan_digest, setup.approved_digest, target, setup.stages)
             status = StageStatus.COMPLETED if target is SetupState.READY else StageStatus.FAILED if target is SetupState.FAILED else StageStatus.RUNNING if target is SetupState.RUNNING else StageStatus.PENDING
             return self._save_setup(db, updated, Event(target.value, status))
