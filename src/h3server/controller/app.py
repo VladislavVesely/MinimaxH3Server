@@ -2,15 +2,14 @@
 
 Supply the exact listener origin (including its port). Launch the browser at
 ``origin + '/#token=' + app.state.session.bootstrap_token``; the fragment never
-enters HTTP access logs, and the placeholder removes it before consumption.
+enters HTTP access logs, and the bundled UI removes it before consumption.
 No installer, generation service, or credential persistence is exposed here.
 """
 
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-import hashlib
-from base64 import b64encode
+from importlib.resources import files
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 import re
@@ -19,7 +18,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Body, FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import paramiko
 from starlette.concurrency import run_in_threadpool
@@ -35,25 +34,14 @@ API = "/api/v1/controller"
 BODY_LIMIT = 16384
 CAPABILITIES = {"scan": True, "installer": False, "generation": False}
 
-BOOTSTRAP_SCRIPT = """(async () => {
-  const token = new URLSearchParams(location.hash.slice(1)).get('token');
-  history.replaceState(null, '', '/');
-  if (!token) return;
-  const response = await fetch('/api/v1/controller/bootstrap', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    credentials: 'same-origin', body: JSON.stringify({token})
-  });
-  document.getElementById('session').textContent = response.ok
-    ? 'Local session established. Browser setup UI is not yet bundled.'
-    : 'Session token is invalid or expired. Restart the local controller.';
-})().catch(() => { document.getElementById('session').textContent = 'Local session unavailable.'; });"""
-SCRIPT_HASH = b64encode(hashlib.sha256(BOOTSTRAP_SCRIPT.encode()).digest()).decode()
+WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
+              "/assets/styles.css": ("styles.css", "text/css")}
 SECURITY_HEADERS = {
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
-    "content-security-policy": f"default-src 'none'; script-src 'sha256-{SCRIPT_HASH}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 }
 
 
@@ -106,7 +94,7 @@ class LocalSecurity:
             await reject("invalid_request", 422)
             return
         bootstrap = scope["path"] == API + "/bootstrap"
-        public = scope["path"] == "/" and scope["method"] in {"GET", "HEAD"}
+        public = (scope["path"] == "/" or scope["path"] in WEB_ASSETS) and scope["method"] in {"GET", "HEAD"}
         if not public and not bootstrap:
             cookie_headers = headers.get("cookie", [])
             cookies = SimpleCookie()
@@ -236,11 +224,15 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def root():
-        return HTMLResponse("<!doctype html><html lang='en'><meta charset='utf-8'><title>H3 local controller</title>"
-                            "<h1>H3 local controller</h1><p id='session'>Open the launch URL to establish a local session.</p>"
-                            "<p>Only SSH host verification and read-only hardware scanning are available. "
-                            "Installer and generation are unavailable. Hardware compatibility is unverified.</p>"
-                            f"<script>{BOOTSTRAP_SCRIPT}</script></html>")
+        return HTMLResponse(files("h3server").joinpath("web", "index.html").read_text(encoding="utf-8"))
+
+    @app.get("/assets/{name}", include_in_schema=False)
+    async def asset(name: str):
+        selected = WEB_ASSETS.get("/assets/" + name)
+        if selected is None:
+            raise HTTPException(status_code=404)
+        filename, media_type = selected
+        return Response(files("h3server").joinpath("web", filename).read_bytes(), media_type=media_type)
 
     @app.post(API + "/bootstrap")
     async def bootstrap(body: BootstrapRequest):

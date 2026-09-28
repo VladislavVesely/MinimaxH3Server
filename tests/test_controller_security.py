@@ -40,9 +40,10 @@ def test_bootstrap_one_time_http_only_session_and_url_cleanup(controller):
     token = app.state.session.bootstrap_token
     root = client.get("/")
     assert root.status_code == 200 and token not in root.text
-    assert "history.replaceState" in root.text
-    assert root.text.index("history.replaceState") < root.text.index("fetch(")
-    assert "location.hash" in root.text
+    script = client.get("/assets/app.js").text
+    assert "history.replaceState" in script
+    assert script.index("history.replaceState") < script.index("fetch(")
+    assert "location.hash" in script
     assert root.headers["referrer-policy"] == "no-referrer"
     assert root.headers["cache-control"] == "no-store"
     assert client.get(API + "/status").status_code == 401

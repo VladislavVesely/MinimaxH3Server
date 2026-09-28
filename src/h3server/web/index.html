@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server setup · H3 Server</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to setup</a>
+  <aside class="sidebar" aria-label="Setup navigation">
+    <a class="brand" href="#main" aria-label="H3 Server home"><span class="brand-mark">H3</span><span>H3 Server<small>SELF-HOSTED STUDIO</small></span></a>
+    <p class="nav-label">WORKSPACE</p>
+    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">Soon</span></a></nav>
+    <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
+      <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
+      <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
+      <li id="step-review"><span class="step-number">3</span><span>Review profiles<small>Experimental, not certified</small></span></li>
+      <li class="muted-step"><span class="step-number">4</span><span>Install &amp; validate<small>Not available in this build</small></span></li>
+    </ol></div>
+    <div class="sidebar-note"><span class="tiny-dot" aria-hidden="true"></span> Local controller<p>Your infrastructure. No hosted generation fallback.</p></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>Workspace <span aria-hidden="true">/</span> <strong>Server setup</strong></span><span class="session-badge" id="session" role="status">Establishing local session…</span></header>
+    <main id="main" tabindex="-1">
+      <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Your server. Your studio.</h1><p>Start with a secure connection. Understand your hardware before making a single change.</p></div><span class="pill">READ-ONLY PREVIEW</span></section>
+      <div class="assurances"><span><b aria-hidden="true">↗</b> SSH transport</span><span><b aria-hidden="true">◇</b> Explicit fingerprint trust</span><span><b aria-hidden="true">○</b> No remote changes</span></div>
+      <noscript><p class="notice">JavaScript is required for the local setup UI. No connection or installation has been started.</p></noscript>
+      <div id="error" class="error-box" role="alert" tabindex="-1" hidden></div>
+      <div class="work-grid"><div class="setup-panels">
+        <section class="panel" id="connection" aria-labelledby="connection-heading">
+          <div class="panel-heading"><div><p class="eyebrow">01 / SECURE CONNECTION</p><h2 id="connection-heading">Meet your server</h2></div><span class="state-badge" id="ssh-state" role="status">SSH disconnected</span></div>
+          <p class="section-copy">Use an SSH account on your Ubuntu or Debian server. We’ll ask you to verify its identity before sending a password.</p>
+          <form id="connect-form">
+            <fieldset id="target-fields" disabled><legend class="sr-only">SSH connection details</legend>
+              <div class="form-row"><div class="field"><label for="host">SSH host</label><input id="host" name="host" placeholder="gpu-server.example.com" required maxlength="253" autocomplete="off" spellcheck="false" autocapitalize="none"></div><div class="field port-field"><label for="port">SSH port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" value="22" required inputmode="numeric"></div></div>
+              <div class="field"><label for="username">SSH username</label><input id="username" name="username" placeholder="your-username" required maxlength="65" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+              <p class="field-hint">Password authentication is supported. SSH keys and agent authentication are not available in this controller yet.</p>
+              <button class="primary" id="connect" type="submit">Connect to server <span aria-hidden="true">→</span></button>
+            </fieldset>
+          </form>
+          <section id="fingerprint-panel" class="challenge" aria-labelledby="fingerprint-heading" hidden>
+            <p class="eyebrow">IDENTITY CHECK · NOT YET AUTHENTICATED</p><h3 id="fingerprint-heading" tabindex="-1">Verify server identity</h3>
+            <p>Compare this SHA-256 host-key fingerprint with your administrator or a trusted server console. Do not trust it just because it is shown here.</p>
+            <dl class="key-details"><dt>Key type</dt><dd id="key-type"></dd><dt>Fingerprint</dt><dd><code id="fingerprint"></code></dd></dl>
+            <p class="field-hint">Approval saves this host key in the controller’s dedicated trust store. The challenge expires after two minutes; reconnect if it expires.</p>
+            <label class="check-label"><input id="trust-check" type="checkbox"> <span>I compared this fingerprint with a trusted source</span></label>
+            <button id="approve" class="primary" type="button" disabled>Trust this fingerprint</button>
+          </section>
+          <form id="auth-form" class="auth-panel" hidden>
+            <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication, never saved by this app, and cleared from this form on submission.</p>
+            <div class="field"><label for="password">SSH password</label><input id="password" name="password" type="password" required maxlength="4096" autocomplete="off" aria-describedby="password-note"></div>
+            <p class="field-hint" id="password-note">Reconnecting requires you to enter your password again.</p>
+            <button class="primary" id="authenticate" type="submit">Authenticate</button>
+          </form>
+          <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>
+        </section>
+        <section class="panel" id="scan-panel" aria-labelledby="scan-heading">
+          <div class="panel-heading"><div><p class="eyebrow">02 / DISCOVER</p><h2 id="scan-heading">A closer look at your hardware</h2></div><span class="outline-pill">Read-only</span></div>
+          <p class="section-copy">Inspect the OS, CPU, memory, GPUs, drivers and free disk. Missing tools mean unknown observations, not missing hardware.</p>
+          <button id="scan" class="primary" type="button" disabled>Scan hardware</button><p id="scan-hint" class="field-hint">Authenticate to enable the read-only scan.</p>
+          <div id="scan-results" hidden><h3 id="hardware-heading" tabindex="-1">Hardware observations</h3><div id="hardware" class="hardware-grid"></div><details class="observations"><summary>Observation notes &amp; evidence</summary><ul id="observation-notes"></ul></details></div>
+        </section>
+        <section class="panel" id="review-panel" aria-labelledby="review-heading" hidden>
+          <p class="eyebrow">03 / COMPARE</p><h2 id="review-heading">Experimental profile comparison</h2><p id="compatibility" class="notice"></p><p class="field-hint">Statuses compare observed hardware with research criteria. They do not certify compatibility, a memory fit, or a working generation backend.</p><div id="profiles" class="profile-grid"></div>
+        </section>
+        <section class="panel unavailable" id="installation" aria-labelledby="installation-heading">
+          <div class="panel-heading"><div><p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Review before you install</h2></div><span class="outline-pill">Unavailable</span></div>
+          <p>No installer endpoint is implemented in this controller. No installation plan can be approved or executed here, and nothing has been installed.</p><p class="field-hint">A future plan must describe proposed changes, disk estimates and model/license prerequisites, with explicit installation and sudo approval. Reboot permission must be separate.</p>
+          <button type="button" disabled aria-describedby="install-note">Approve installation</button><p class="field-hint" id="install-note">Disabled until a real installer and approval API are available.</p>
+        </section>
+        <section class="generation-note" id="generation" aria-labelledby="generation-heading"><h2 id="generation-heading">Generation comes after validation.</h2><p>This build has no generation backend. Environment readiness and a real video smoke test must be verified separately. No generation actions are available.</p></section>
+      </div>
+      <aside class="activity panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Session activity</h2><span class="tiny-dot" aria-hidden="true"></span></div><p class="field-hint">Local operation summaries, not a remote log stream. No credentials are recorded.</p><div class="operation-status"><p id="operation" role="status">Waiting for a local session.</p><progress id="progress" aria-label="Current operation; completion is not measurable" hidden></progress><p id="progress-note" class="field-hint" hidden>Working… duration and percentage are not reported by the controller.</p></div><ol id="activity-log" role="log" aria-label="Session activity log" aria-live="polite" aria-relevant="additions"></ol><div class="activity-footer">SAFE BY DESIGN<p>Scanning does not install packages, download models, or modify the server.</p></div></aside>
+      </div>
+      <footer class="page-footer">H3 Server <span>Local control. Unverified compatibility. No shortcuts.</span></footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "h3-controller-browser-tests",
+  "private": true,
+  "scripts": {"test": "playwright test"},
+  "devDependencies": {"@playwright/test": "1.61.0"}
+}
