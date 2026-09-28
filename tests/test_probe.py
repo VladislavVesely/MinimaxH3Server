@@ -215,3 +215,34 @@ def test_local_runner_rejects_commands_outside_read_only_probe(monkeypatch, argv
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("must not execute"))
     with pytest.raises(ValueError):
         api().run_local(argv, timeout=1)
+
+
+@pytest.mark.parametrize("pci", [
+    {"returncode": None, "error": "not-found"},
+    {"stdout": "malformed PCI output\n"},
+], ids=["missing-pci", "malformed-pci"])
+def test_probe_nvidia_observations_do_not_imply_complete_gpu_inventory(pci):
+    hw = scan(overrides={"pci": pci}).hardware
+    assert hw.gpu_inventory_complete is False
+    assert [(gpu.name, gpu.vram_bytes) for gpu in hw.gpus] == [("NVIDIA GeForce RTX 4090", 24 * GIB)]
+    assert any("GPU inventory" in observation and "not known complete" in observation for observation in hw.evidence)
+
+
+@pytest.mark.parametrize("fixture", ["rtx4090", "multi_gpu", "no_gpu", "missing_nvidia_smi", "missing_driver"])
+def test_probe_successful_pci_enumeration_establishes_gpu_inventory_completeness(fixture):
+    hw = scan(fixture).hardware
+    assert hw.gpu_inventory_complete is True
+    assert any("GPU inventory" in observation and "complete" in observation for observation in hw.evidence)
+
+
+def test_probe_conflicting_pci_and_nvidia_inventory_is_not_known_complete():
+    pci = "0000:00:00.0 Host bridge [0600]: Fixture bridge [8086:1234]\n"
+    hw = scan(overrides={"pci": {"stdout": pci}}).hardware
+    assert len(hw.gpus) == 1
+    assert hw.gpu_inventory_complete is False
+
+
+def test_probe_unknown_gpu_inventory_is_not_complete():
+    hw = scan("missing_nvidia_smi", {"pci": {"returncode": None, "error": "not-found"}}).hardware
+    assert hw.gpus is None
+    assert hw.gpu_inventory_complete is False

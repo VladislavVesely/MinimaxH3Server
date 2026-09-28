@@ -152,16 +152,23 @@ def evaluate_profile(hardware: HardwareInfo, profile: Profile) -> Recommendation
     if profile.min_gpu_count is None:
         unknowns.append("GPU count: requirement missing")
     elif profile.min_gpu_count > 0:
-        minimum("GPU count", len(hardware.gpus) if hardware.gpus is not None else None, profile.min_gpu_count)
+        gpu_count = len(hardware.gpus) if hardware.gpus is not None else None
+        if gpu_count is not None and gpu_count < profile.min_gpu_count and not hardware.gpu_inventory_complete:
+            unknowns.append(f"GPU count: only {gpu_count} observed; inventory not known complete")
+        else:
+            minimum("GPU count", gpu_count, profile.min_gpu_count)
         if profile.min_gpu_vram_bytes is None:
             unknowns.append("VRAM per GPU: requirement missing")
         elif hardware.gpus is not None:
             enough = sum(gpu.vram_bytes is not None and gpu.vram_bytes >= profile.min_gpu_vram_bytes for gpu in hardware.gpus)
             unmeasured = sum(gpu.vram_bytes is None for gpu in hardware.gpus)
-            if enough + unmeasured < profile.min_gpu_count:
+            if enough + unmeasured < profile.min_gpu_count and hardware.gpu_inventory_complete:
                 failures.append(f"VRAM per GPU: fewer than {profile.min_gpu_count} devices meet {profile.min_gpu_vram_bytes} bytes; separate GPU memory is never pooled")
             elif enough < profile.min_gpu_count:
-                unknowns.append("VRAM per GPU: insufficient measurements")
+                unknowns.append("VRAM per GPU: " + (
+                    "insufficient measurements" if hardware.gpu_inventory_complete
+                    else "inventory not known complete; additional qualifying devices may be unobserved"
+                ))
             else:
                 matches.append("VRAM per GPU: enough individual devices meet supplied minimum")
         if not profile.gpu_names or hardware.gpus is None:

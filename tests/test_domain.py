@@ -22,7 +22,7 @@ def test_hardware_preserves_unknown_and_measured_absence():
     )
     assert hardware.gpus[0].vram_bytes == 24 * 1024**3
     assert hardware.cuda_available is False
-    assert HardwareInfo(gpus=()).gpus == ()
+    assert HardwareInfo(gpus=(), gpu_inventory_complete=True).gpus == ()
 
 
 @pytest.mark.parametrize("field", ["cpu_count", "ram_bytes", "disk_free_bytes"])
@@ -169,3 +169,26 @@ def test_progress_requires_numeric_measurements_not_flags_or_strings(completed):
 
     with pytest.raises(ValueError):
         Progress(completed=completed, total=10, unit="steps")
+
+
+def test_hardware_gpu_inventory_completeness_requires_explicit_evidence():
+    from h3server.domain import GPUInfo, HardwareInfo
+
+    for gpus in (None, (), (GPUInfo("Generic GPU", 24 * 1024**3),)):
+        assert HardwareInfo(gpus=gpus).gpu_inventory_complete is False
+    assert HardwareInfo(gpus=(), gpu_inventory_complete=True).gpu_inventory_complete is True
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true"])
+def test_hardware_gpu_inventory_completeness_rejects_non_boolean(value):
+    from h3server.domain import HardwareInfo
+
+    with pytest.raises(ValueError):
+        HardwareInfo(gpus=(), gpu_inventory_complete=value)
+
+
+def test_hardware_complete_gpu_inventory_requires_observations():
+    from h3server.domain import HardwareInfo
+
+    with pytest.raises(ValueError):
+        HardwareInfo(gpu_inventory_complete=True)

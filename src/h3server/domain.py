@@ -22,7 +22,11 @@ class GPUInfo:
 
 @dataclass(frozen=True)
 class HardwareInfo:
-    """None means unmeasured; an empty GPU tuple means measured absence."""
+    """None means unmeasured; gpus contains observed devices, not necessarily all.
+
+    An empty GPU tuple proves absence only with gpu_inventory_complete=True.
+    False means the inventory is not known complete, including hand-built facts.
+    """
 
     distribution: str | None = None
     distribution_version: str | None = None
@@ -36,8 +40,13 @@ class HardwareInfo:
     disk_free_bytes: int | None = None
     service_manager: str | None = None
     evidence: tuple[str, ...] = ()
+    gpu_inventory_complete: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.gpu_inventory_complete) is not bool:
+            raise ValueError("gpu_inventory_complete must be bool")
+        if self.gpu_inventory_complete and self.gpus is None:
+            raise ValueError("a complete GPU inventory requires observed devices or measured absence")
         for name in ("cpu_count", "ram_bytes", "disk_free_bytes"):
             value = getattr(self, name)
             if value is not None:

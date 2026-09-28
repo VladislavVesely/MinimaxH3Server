@@ -255,6 +255,13 @@ def probe_hardware(runner: CommandRunner, *, disk_path: str = "/", timeout: floa
     if nvidia:
         combined.update(nvidia[0])
     gpus = tuple(combined.values()) if pci is not None or nvidia is not None else None
+    # NVIDIA only enumerates its own devices. Complete PCI evidence must also
+    # account for every observed NVIDIA address; conflicting scans stay unknown.
+    gpu_inventory_complete = pci is not None and (nvidia is None or nvidia[0].keys() <= pci.keys())
+    observations.append("GPU inventory: " + (
+        "complete PCI enumeration" if gpu_inventory_complete
+        else "not known complete; additional devices may be unobserved"
+    ))
     compatibility = re.findall(r"CUDA Version:\s*([0-9]+\.[0-9]+)\b", outputs["nvidia_status"])
     toolkit = re.findall(r"Cuda compilation tools, release ([0-9]+\.[0-9]+)\b", outputs["cuda_toolkit"])
     cuda = CUDAEvidence(compatibility[0] if len(compatibility) == 1 else None,
@@ -271,6 +278,7 @@ def probe_hardware(runner: CommandRunner, *, disk_path: str = "/", timeout: floa
         HardwareInfo(distribution=distribution, distribution_version=version, architecture=arch,
                      cpu=cpu, cpu_count=cpu_count, ram_bytes=ram, gpus=gpus,
                      driver_version=driver, cuda_available=None, disk_free_bytes=disk,
-                     service_manager=manager, evidence=tuple(observations)),
+                     service_manager=manager, evidence=tuple(observations),
+                     gpu_inventory_complete=gpu_inventory_complete),
         kernel, cuda, disk_path, tuple(records), tuple(issues),
     )

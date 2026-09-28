@@ -5,7 +5,7 @@ import importlib
 
 import pytest
 
-from h3server.domain import HardwareInfo
+from h3server.domain import GPUInfo, HardwareInfo
 from test_probe import GIB, scan
 
 
@@ -177,3 +177,50 @@ def test_profiles_require_nonempty_provenance(evidence):
 def test_profiles_reject_malformed_or_contradictory_optional_evidence(changes):
     with pytest.raises(ValueError):
         profile(**changes)
+
+
+@pytest.mark.parametrize("pci", [
+    {"returncode": None, "error": "not-found"},
+    {"stdout": "malformed PCI output\n"},
+], ids=["missing-pci", "malformed-pci"])
+@pytest.mark.parametrize("requirements", [
+    {"min_gpu_count": 2},
+    {"min_gpu_vram_bytes": 40 * GIB},
+], ids=["insufficient-observed-count", "insufficient-observed-vram"])
+def test_profiles_partial_gpu_inventory_cannot_prove_insufficient_hardware(pci, requirements):
+    hw = replace(scan(overrides={"pci": pci}).hardware, cuda_available=True)
+    assert len(hw.gpus) == 1
+    assert hw.gpus[0].vram_bytes == 24 * GIB
+    result = api().evaluate_profile(hw, profile(**requirements))
+    assert result.status == api().RecommendationStatus.UNKNOWN
+    assert any("inventory" in reason.lower() for reason in result.reasons)
+
+
+@pytest.mark.parametrize("fixture,requirements", [
+    ("rtx4090", {"min_gpu_count": 2}),
+    ("multi_gpu", {"min_gpu_vram_bytes": 40 * GIB}),
+    ("no_gpu", {"min_gpu_count": 1}),
+])
+def test_profiles_complete_gpu_inventory_can_prove_insufficient_hardware(fixture, requirements):
+    assert evaluated(fixture, ready=True, **requirements).status == api().RecommendationStatus.UNSUPPORTED
+
+
+def test_profiles_sufficient_observed_gpus_do_not_require_complete_inventory():
+    hw = replace(scan(overrides={"pci": {"returncode": None, "error": "not-found"}}).hardware,
+                 cuda_available=True)
+    assert api().evaluate_profile(hw, profile()).status == api().RecommendationStatus.EXPERIMENTAL
+
+
+def test_profiles_partial_inventory_does_not_pool_observed_vram():
+    hw = replace(scan("multi_gpu", {"pci": {"returncode": None, "error": "not-found"}}).hardware,
+                 cuda_available=True)
+    result = api().evaluate_profile(hw, profile(min_gpu_vram_bytes=40 * GIB))
+    assert result.status == api().RecommendationStatus.UNKNOWN
+    assert not any("enough individual devices" in reason for reason in result.reasons)
+
+
+@pytest.mark.parametrize("gpus", [(), None, (GPUInfo("NVIDIA GeForce RTX 4090", 24 * GIB),)],
+                         ids=["empty", "unmeasured", "one-observed-gpu"])
+def test_profiles_hand_built_gpu_inventory_defaults_conservatively(gpus):
+    result = api().evaluate_profile(HardwareInfo(gpus=gpus), profile(min_gpu_count=2))
+    assert result.status == api().RecommendationStatus.UNKNOWN
