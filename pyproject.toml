@@ -7,16 +7,23 @@ name = "h3server"
 version = "0.1.0"
 description = "Domain and path foundations for a self-hosted H3 service"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.135,<0.136",
+    "starlette>=0.46,<1",  # Keep the httpx-based test/ASGI compatibility contract.
+    "anyio>=4.8,<4.12",
+    "uvicorn>=0.34,<1",
+    "paramiko>=3.5,<5",
+]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10"]
+test = ["pytest>=8,<10", "httpx>=0.28,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 "h3server.backends" = ["manifest.json"]
+"h3server.controller" = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
