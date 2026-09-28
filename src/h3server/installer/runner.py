@@ -25,7 +25,7 @@ import subprocess
 from h3server.domain import StageStatus
 from h3server.installer.planner import Approval, validate_approval, validate_plan
 from h3server.installer.steps import (
-    CommandFailure, ProcessIO, Steps, artifact_path, atomic_text, change_versions,
+    CommandFailure, PENDING_DPKG_STATES, ProcessIO, Steps, artifact_path, atomic_text, change_versions,
 )
 from h3server.paths import AppPaths
 from h3server.store import SetupState, Store, canonical_plan_digest
@@ -153,6 +153,14 @@ if test -s "$stage/dpkg-audit"; then
     test -s "$stage/pending" || exit 1
     comm -23 "$stage/pending" "$stage/allowed-names" > "$stage/unapproved"
     if test -s "$stage/unapproved"; then echo 'Unrelated dpkg state; administrator repair required'; exit 1; fi
+    # Validate all current states/versions before any privileged configuration.
+    while IFS= read -r package; do
+        dpkg-query -W -f='${{Status}}\\t${{Version}}\\n' "$package" > "$stage/pending-status"
+        version=$(awk -F '\\t' 'NR == 1 && NF == 2 && $1 ~ /^install ok ({'|'.join(PENDING_DPKG_STATES)})$/ {{ value=$2; valid=1 }} END {{ if (NR != 1 || !valid) exit 1; print value }}' "$stage/pending-status")
+        if ! grep -Fx -- "$package $version" "$stage/allowed-packages" > /dev/null; then
+            echo 'Pending dpkg version differs from approved plan; rescan required'; exit 1
+        fi
+    done < "$stage/pending"
     # Tokens are a subset of generated, validated package names (no shell code).
     sudo -n env DEBIAN_FRONTEND=noninteractive dpkg --configure $(cat "$stage/pending")
 fi

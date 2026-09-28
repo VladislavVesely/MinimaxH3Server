@@ -171,6 +171,8 @@ class AptIO(FakeIO):
         if argv[0] == "dpkg" and "--audit" in argv:
             return self.audit
         if argv[0] == "dpkg-query":
+            if not self.installed and self.audit:
+                return "install ok unpacked\t1\n"
             return "install ok installed\t1\n" if self.installed else ""
         if argv[:2] == ("apt-get", "-s"):
             return self.simulation
@@ -323,3 +325,100 @@ def test_transitive_package_versions_are_explicit_at_execution(tmp_path):
     runner.run(runner.create(p).setup_id, approval(p, privileged=True))
     install = next(argv for argv, _ in io.calls if "-y" in argv)
     assert "git=1" in install and "git-man=1" in install
+
+
+def test_missing_driver_executable_proceeds_to_approved_install(tmp_path):
+    paths, p, store = prepared(tmp_path, driver_working=False, driver_package="nvidia-driver-580",
+                               packages=("nvidia-driver-580=1",),
+                               package_changes=("Inst nvidia-driver-580 (1 Ubuntu [amd64])",))
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+
+    class MissingDriverIO(AptIO):
+        def run(self, argv, **kw):
+            if argv == ("nvidia-smi",):
+                # Real Popen ENOENT, not the CommandFailure stand-in used above.
+                return ProcessIO().run(argv, **{**kw, "env": {**kw["env"], "PATH": str(empty_path)}})
+            return super().run(argv, **kw)
+
+    io = MissingDriverIO(simulation="Inst nvidia-driver-580 (1 Ubuntu [amd64])")
+    runner = Installer(paths, store, io=io)
+    result = runner.run(runner.create(p).setup_id, approval(p, privileged=True))
+    assert any("-y" in argv and "nvidia-driver-580=1" in argv for argv, _ in io.calls)
+    assert result.state == SetupState.WAITING_FOR_REBOOT
+
+
+def test_process_permission_error_is_not_missing_driver(tmp_path):
+    executable = tmp_path / "nvidia-smi"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o600)
+    with (tmp_path / "log").open("w") as log:
+        with pytest.raises(PermissionError):
+            ProcessIO().run((str(executable),), env=dict(os.environ), log=log)
+
+
+@pytest.mark.parametrize("pending_status", [
+    "install ok unpacked\t2\n",
+    "install reinstreq half-installed\t1\n",
+    "install ok installed\t1\n",
+])
+def test_pending_dpkg_version_and_state_checked_before_mutation(tmp_path, pending_status):
+    paths, p, store = prepared(tmp_path, packages=("git=1",), package_changes=("Inst git (1 Debian [amd64])",))
+
+    class PendingIO(AptIO):
+        def run(self, argv, **kw):
+            result = super().run(argv, **kw)
+            if argv[0] == "dpkg-query" and not self.installed:
+                return pending_status
+            return result
+
+    io = PendingIO(audit="The following packages are unpacked:\n git Git tool\n")
+    runner = Installer(paths, store, io=io)
+    with pytest.raises(CommandFailure, match="pending dpkg"):
+        runner.run(runner.create(p).setup_id, approval(p, privileged=True))
+    assert not any("--configure" in argv or "-y" in argv for argv, _ in io.calls)
+
+
+@pytest.mark.parametrize("pending_status,allowed", [
+    ("install ok unpacked\t2\n", False),
+    ("install reinstreq half-installed\t1\n", False),
+    ("install ok installed\t1\n", False),
+    ("install ok unpacked\t1\n", True),
+])
+def test_bootstrap_checks_pending_version_and_state_before_configuration(tmp_path, pending_status, allowed):
+    """Execute the generated shell with fake OS commands, never real sudo/apt."""
+    import shlex
+    import shutil
+    paths, p, _ = prepared(tmp_path, python_ready=False, packages=("git=1",),
+                           package_changes=("Inst git (1 Debian [amd64])",))
+    script = stage_bootstrap(paths, p, approval(p, privileged=True))
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    mutation_log = tmp_path / "mutations"
+
+    def command(name, body):
+        path = binary / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(0o700)
+
+    for name in ("awk", "sort", "comm", "cat"):
+        (binary / name).symlink_to(shutil.which(name))
+    grep = shlex.quote(shutil.which("grep"))
+    command("grep", f'case "$*" in */etc/os-release*) exit 0;; esac\nexec {grep} "$@"')
+    command("id", "echo 1000")
+    command("uname", "echo x86_64")
+    command("flock", "exit 0")
+    command("sha256sum", "exit 0")
+    command("dpkg", "printf 'The following packages are unpacked:\\n git Git tool\\n'")
+    command("dpkg-query", "printf '%s' " + shlex.quote(pending_status))
+    # Stop at the first mutation, so a positive case cannot enter Python/apt.
+    command("sudo", f'if test "$2" = true; then exit 0; fi\nprintf "%s\\n" "$*" >> {shlex.quote(str(mutation_log))}\nexit 19')
+    command("apt-get", "exit 91")
+    result = subprocess.run(("/bin/sh", str(script)), env={**os.environ, "PATH": str(binary)},
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert (script.parent / "status").read_text().strip() == "failed"
+    if allowed:
+        assert "dpkg --configure git" in mutation_log.read_text()
+    else:
+        assert not mutation_log.exists()

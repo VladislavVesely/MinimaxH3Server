@@ -15,6 +15,9 @@ class CommandFailure(RuntimeError):
     pass
 
 
+PENDING_DPKG_STATES = ("unpacked", "half-configured", "triggers-awaited", "triggers-pending")
+
+
 def safe_log(text):
     # Never forward terminal controls or URL userinfo into replay/UI logs.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
@@ -34,9 +37,15 @@ class ProcessIO:
         collected = []
         size = 0
         pending, dropping = "", False
-        with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, env=env, shell=False,
-                              pass_fds=(() if self.lock_fd is None else (self.lock_fd,))) as process:
+        try:
+            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, env=env, shell=False,
+                                       pass_fds=(() if self.lock_fd is None else (self.lock_fd,)))
+        except FileNotFoundError as error:
+            # Missing optional probes (not permission or other IO failures) share
+            # the failed-command boundary used by driver discovery/reboot checks.
+            raise CommandFailure(f"executable {Path(argv[0]).name} not found") from error
+        with process:
             try:
                 while chunk := process.stdout.read1(4096):
                     text = chunk.decode("utf-8", "replace")
@@ -157,9 +166,16 @@ class Steps:
         audit = self.run("dpkg", "--audit", capture=True)
         if audit.strip():
             pending = set(re.findall(r"^ ([a-z0-9][a-z0-9+.:_-]*)\s", audit, re.M))
-            allowed = {name for name, _ in change_versions(self.plan["package_changes"])}
-            if not pending or not pending.issubset(allowed):
+            allowed = change_versions(self.plan["package_changes"])
+            if not pending or not pending.issubset({name for name, _ in allowed}):
                 raise CommandFailure("unrelated/incomplete dpkg state requires administrator repair and a new plan")
+            # Check EVERY pending package before running any configuration scripts.
+            # An approved name alone must not authorize a newly unpacked version.
+            for package in sorted(pending):
+                text = self.run("dpkg-query", "-W", "-f=${Status}\\t${Version}\\n", package, capture=True)
+                match = re.fullmatch(r"install ok (?:" + "|".join(PENDING_DPKG_STATES) + r")\t(" + VERSION + r")\n?", text)
+                if not match or (package, match[1]) not in allowed:
+                    raise CommandFailure("pending dpkg version/state differs from approved plan; rescan required")
             self.run("sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", "dpkg", "--configure", *sorted(pending))
         pins = self.plan["packages"]
         complete = True
