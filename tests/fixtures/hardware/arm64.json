@@ -1,0 +1,40 @@
+{
+  "description": "Synthetic parser fixture; not H3 feasibility evidence or a product default.",
+  "commands": {
+    "kernel": {
+      "stdout": "Linux\n"
+    },
+    "os_release": {
+      "stdout": "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n"
+    },
+    "architecture": {
+      "stdout": "aarch64\n"
+    },
+    "cpu": {
+      "stdout": "processor : 0\nCPU implementer : 0x41\nHardware : Fixture ARM CPU\n"
+    },
+    "memory": {
+      "stdout": "MemTotal:       30408704 kB\nMemAvailable: 10000000 kB\n"
+    },
+    "pci": {
+      "stdout": "0000:00:00.0 Host bridge [0600]: Fixture bridge [8086:1234]\n0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation AD102 [GeForce RTX 4090] [10de:2684] (rev a1)\n"
+    },
+    "nvidia_gpus": {
+      "stdout": "00000000:01:00.0, NVIDIA GeForce RTX 4090, 24576, 550.54.14\n"
+    },
+    "nvidia_status": {
+      "stdout": "| NVIDIA-SMI 550.54.14   Driver Version: 550.54.14   CUDA Version: 12.4 |\n"
+    },
+    "cuda_toolkit": {
+      "returncode": null,
+      "error": "not-found",
+      "stderr": "nvcc unavailable"
+    },
+    "disk": {
+      "stdout": "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 524288000 104857600 419430400 20% /\n"
+    },
+    "service_manager": {
+      "stdout": "systemd\n"
+    }
+  }
+}
