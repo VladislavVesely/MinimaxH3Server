@@ -45,6 +45,17 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Saved generation inputs
+
+Queue/history cards show the seed directly alongside geometry and steps. Expand
+**Inputs** to inspect the full untruncated prompt, model, dimensions, frames,
+steps, seed, SageAttention, LoRAs and sparse-attention selection. These come from
+that job's persisted request, not the current form; existing history works too.
+Expansion and video elements survive dashboard polling. Prompt text is rendered
+as text, never HTML. Missing legacy settings are explicitly marked unavailable.
+Images are not yet a supported input; their durable references must join the job
+request when image support is implemented.
+
 ## Optional SageAttention
 
 `POST /setup/start` accepts `sage_attention: true` to add the pinned optional

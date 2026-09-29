@@ -813,6 +813,28 @@
     replaceOutput($('job-events'), (jobLogs.get(selectedJob) || []).join('\n') || 'Waiting for output from this job.');
     for (const [id, card] of jobCards) card.item.classList.toggle('selected', id === selectedJob);
   }
+  function inputValue(value) {
+    if (value === null || value === undefined) return 'Not specified';
+    if (typeof value === 'boolean') return value ? 'On' : 'Off';
+    if (Array.isArray(value) && !value.length) return 'None';
+    if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) return 'Outside exact browser integer range';
+    return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  }
+  function jobInputs(request) {
+    const details = node('details', undefined, 'job-inputs');
+    details.append(node('summary', 'Inputs'));
+    if (!request) { details.append(node('p', 'Inputs were not recorded.')); return details; }
+    details.append(node('h5', 'Prompt'), node('p', request.prompt ?? 'Not recorded', 'job-prompt'));
+    const fields = node('dl');
+    const labels = { profile: 'Model', seed: 'Seed', width: 'Width', height: 'Height', num_frames: 'Frames',
+      steps: 'Sampling steps', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'LoRAs' };
+    const add = (key, value) => fields.append(node('dt', labels[key] || key.replaceAll('_', ' ')), node('dd', inputValue(value)));
+    for (const [key, value] of Object.entries(request.settings || {})) add(key, value);
+    if (!request.settings) details.append(node('p', 'Generation settings were not recorded for this older job.'));
+    for (const [key, value] of Object.entries(request)) if (!['prompt', 'settings'].includes(key)) add(key, value);
+    details.append(fields);
+    return details;
+  }
   function updateJobTimes() {
     for (const job of currentJobs) {
       const card = jobCards.get(job.job_id);
@@ -851,10 +873,10 @@
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
-        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}` : '', 'field-hint');
+        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · Seed ${inputValue(settings.seed)} · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}` : '', 'field-hint');
         const timing = node('p', undefined, 'job-timing');
         timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
-        item.append(heading, caption, status, timing, meter, detail, output);
+        item.append(heading, caption, jobInputs(job.request), status, timing, meter, detail, output);
         card = { item, status, timing, meter, detail, output, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
         $('jobs').insertBefore(item, nextItem);

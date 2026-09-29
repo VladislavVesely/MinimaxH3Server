@@ -144,6 +144,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 .job-card { border: 1px solid #dadde6; border-radius: 10px; padding: 16px; margin: 10px 0; }
 .job-card.selected { border-color: #7776d8; }
 .job-card h4 { margin: 0; }
+.job-inputs { margin: 12px 0; padding: 12px; background: #f4f5f8; border-radius: 6px; }
+.job-inputs summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.job-inputs h5 { margin: 14px 0 6px; }
+.job-prompt, .job-inputs dd { white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-prompt { max-height: 20rem; overflow-y: auto; font-size: 13px; }
+.job-inputs dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 6px 12px; font-size: 12px; }
+.job-inputs dt { font-weight: 600; }
+.job-inputs dd { margin: 0; min-width: 0; }
 .job-card progress { width: 100%; height: 10px; accent-color: #7572dc; }
 .job-card[data-status="completed"] progress { accent-color: #258769; }
 .job-card[data-status="failed"] .job-detail { color: #b52e47; }
