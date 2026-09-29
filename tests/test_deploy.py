@@ -710,3 +710,30 @@ def test_service_errors_remain_strict_without_no_previous_release_exception(tmp_
     with pytest.raises(RuntimeError):
         TargetIO(AppPaths(tmp_path)).service(command, allow_absent=allow_absent)
     assert len(calls) == 1  # Never weaken updates/previous-release recovery or other commands.
+
+
+def test_composite_download_cancellation_is_bound_to_owned_operation(tmp_path, monkeypatch, capsys):
+    import io, sys
+    from types import SimpleNamespace
+    from h3server.backends.base import atomic_json
+    from h3server.controller import target
+    paths, plan = staged_target(tmp_path)
+    digest = canonical_plan_digest(plan)
+    atomic_json(paths, f'bootstrap/{digest}/plan.json', plan)
+    record = {'action': 'download', 'state': 'running', 'operation': 'a' * 32, 'plan_digest': digest}
+    atomic_json(paths, 'state/operation.json', record)
+    monkeypatch.setattr(sys, 'argv', ['target', '--root', str(paths.root), '--digest', digest, 'cancel-download'])
+    def request(operation):
+        monkeypatch.setattr(sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(json.dumps({'operation': operation}).encode())))
+        target.main()
+    with pytest.raises(ValueError):
+        request('b' * 32)
+    assert not (paths.state / 'download-cancel.json').exists()
+    atomic_json(paths, 'state/operation.json', {**record, 'plan_digest': 'f' * 64})
+    with pytest.raises(ValueError):
+        request(record['operation'])
+    assert not (paths.state / 'download-cancel.json').exists()
+    atomic_json(paths, 'state/operation.json', record)
+    request(record['operation'])
+    assert json.loads(capsys.readouterr().out)['state'] == 'cancellation_requested'
+    assert json.loads((paths.state / 'download-cancel.json').read_text()) == {'operation': record['operation']}

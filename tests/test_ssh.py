@@ -575,3 +575,27 @@ def test_real_paramiko_success_cancels_deadline_without_disconnect(memory_ssh):
     time.sleep(0.15)
     assert connection.status()["state"] == "authenticated"
     assert transport.is_active() and not sock._closed
+
+
+def test_setup_sudo_check_uses_only_fixed_command_stdin_and_suppresses_echo(tmp_path, monkeypatch):
+    from h3server.controller.ssh import ControllerError
+    network, connection = trusted_connection(tmp_path)
+    secret = 'SSH-SUDO-SECRET'
+    connection.check_setup_password(secret)
+    command = network.commands[-1]
+    assert shlex.split(command) == ['sudo', '-S', '-k', '-p', '', '--', '/bin/sh', '-c',
+                                    'cat >/dev/null || exit 76; exec true </dev/null']
+    assert network.sftp_packets[-1] == (secret + '\n').encode()
+    assert secret not in command
+    network.outputs[command] = secret.encode()
+    monkeypatch.setattr(FakeChannel, 'recv_exit_status', lambda self: 1)
+    with pytest.raises(ControllerError, match='setup_sudo_password_rejected') as error:
+        connection.check_setup_password(secret)
+    assert secret not in str(error.value)
+    for bad in ('bad\nsecret', 'bad\rsecret', 'bad\0secret', ''):
+        count = len(network.commands)
+        with pytest.raises(ControllerError, match='setup_sudo_password_rejected'):
+            connection.check_setup_password(bad)
+        assert len(network.commands) == count
+    assert all(secret.encode() not in p.read_bytes() for p in tmp_path.rglob('*') if p.is_file())
+    connection.close()

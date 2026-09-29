@@ -415,6 +415,14 @@ class SSHConnection:
             _close_quietly(client)
         return {"state": "disconnected", "fingerprint": None, "key_type": None}
 
+    def interrupt_setup(self):
+        """Interrupt owned setup IO without waiting for its connection lock.
+
+        Caller must exclude target replacement until its worker has stopped.
+        Durable remote package guardians/detached work are not killed or replayed.
+        """
+        _abort_transport(self._socket, self._transport)
+
     @_locked
     def open_sftp(self) -> paramiko.SFTPClient:
         """Authenticated SFTP for later controller callers, not an HTTP file API.
@@ -490,6 +498,23 @@ class SSHConnection:
             self.close()
             return CommandResult(returncode=None, error="timeout")
         return result
+
+    @_locked
+    def check_setup_password(self, password: str):
+        """Fixed sudo authentication probe; credential/output never leave memory.
+
+        Drain unused input under NOPASSWD before executing the allowlisted true.
+        A rejection can also mean sudo policy/requiretty; never retry or prompt.
+        """
+        if not isinstance(password, str) or not 0 < len(password) <= 4096 or any(c in password for c in '\r\n\x00'):
+            raise ControllerError('setup_sudo_password_rejected')
+        command = shlex.join(('sudo', '-S', '-k', '-p', '', '--', '/bin/sh', '-c',
+                              'cat >/dev/null || exit 76; exec true </dev/null'))
+        result = self._execute(command, 30, stdin=(password + '\n').encode(), suppress_output=True)
+        if not result.succeeded:
+            if result.error:
+                raise ControllerError('setup_credential_check_failed')
+            raise ControllerError('setup_sudo_password_rejected')
 
     @_locked
     def install_prerequisites(self, *, root: str, plan: dict, approval,

@@ -191,7 +191,41 @@ class Deployment:
                 'license_text': license_document(), 'license_sha256': load_manifest()['sources']['license']['sha256'],
                 'selection': profile_document(self.plan['profile'])}
 
-    def install(self, approval, *, service_digest, sudo_password=None):
+    def install_once(self, approval, *, service_digest, sudo_password=None):
+        """Composite-only durable at-most-once launch guard, including lost replies.
+
+        Exclusive creation precedes mutation. An incomplete/ambiguous launch must
+        be observed or explicitly repaired via the low-level APIs, never replayed
+        by another Install click or a restarted controller. No credential is saved.
+        """
+        with self.connection.lock:
+            self._authenticated()
+            if self.plan is None:
+                raise ControllerError('plan_required')
+            try:
+                validate_approval(self.plan, approval)
+            except (ValueError, ApprovalRequired):
+                raise ControllerError('approval_required') from None
+            if self.plan['purpose'] == 'environment' and (not self.service or approval.privileged is not True or service_digest != canonical_plan_digest(self.service)):
+                raise ControllerError('approval_required')
+            path = f'{self.root}/bootstrap/{approval.plan_digest}/composite-install.json'
+            with self.connection.private_sftp() as sftp:
+                _directory(sftp, str(PurePosixPath(path).parent))
+                try:
+                    sftp.lstat(path)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise ControllerError('setup_operation_outcome_unknown')
+                # Unlike replacement staging, wx is exclusive across controllers.
+                # A partial marker also blocks replay, deliberately failing closed.
+                with sftp.open(path, 'wx') as stream:
+                    sftp.chmod(path, 0o600)
+                    stream.write(json.dumps({'plan_digest': approval.plan_digest}).encode())
+                    stream.flush()
+            return self.install(approval, service_digest=service_digest, sudo_password=sudo_password, replan=False)
+
+    def install(self, approval, *, service_digest, sudo_password=None, replan=True):
         with self.connection.lock:
             self._authenticated()
             if self.plan is None:
@@ -215,7 +249,10 @@ class Deployment:
             self._stage(approval)
             if self.plan['purpose'] == 'prerequisites':
                 self.connection.install_prerequisites(root=self.root, plan=self.plan, approval=approval, sudo_password=sudo_password)
-                # Never reuse consent across the required fresh discovery round.
+                # The composite coordinator budgets discovery itself. Low-level
+                # callers retain their fresh-review response and explicit approval.
+                if not replan:
+                    return {'state': 'waiting_for_replan'}
                 return {'state': 'waiting_for_replan', 'review': self.make_plan(self.plan['profile'], sudo_password_available=sudo_password is not None)}
             if active_release:
                 return self.connection.deployment_action(root=self.root, artifact=self.release.artifact,

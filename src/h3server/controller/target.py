@@ -373,7 +373,9 @@ def main():
         return
     if args.action == 'cancel-download':
         record = read_json(paths, 'state/operation.json')
-        if record['action'] != 'download' or record['state'] != 'running':
+        if (record['action'] != 'download' or record['state'] != 'running'
+                or ('operation' in data and (data['operation'] != record['operation']
+                                            or record['plan_digest'] != args.digest))):
             raise ValueError('no running download')
         atomic_json(paths, 'state/download-cancel.json', {'operation': record['operation']})
         print(json.dumps({'state': 'cancellation_requested'}))

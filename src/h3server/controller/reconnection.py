@@ -24,13 +24,16 @@ class SetupRecovery:
         self._cancel = threading.Event()
         self._worker = None
         self._password = self._target = None
+        self._setup_enabled = False
+        self.observation_allowed = lambda: True
         self._state, self._error = 'idle', None
         self._cycle = 0
 
     def status(self):
         with self._lock:
             return {'state': self._state, 'error': self._error, 'cycle': self._cycle,
-                    'credential_retained': self._password is not None}
+                    'credential_retained': self._password is not None,
+                    'setup_credential_retained': self._password is not None and self._setup_enabled}
 
     def active(self):
         with self._lock:
@@ -43,16 +46,37 @@ class SetupRecovery:
     def expire(self):
         # Called periodically even when no browser is open. Never wait on SSH IO.
         if not self._session_active():
-            with self._lock:
-                self._password = None
-                self._cancel.set()
+            self.revoke()
+
+    def revoke(self):
+        """Drop credentials and signal recovery without waiting for remote IO."""
+        with self._lock:
+            self._password = None
+            self._setup_enabled = False
+            self._cancel.set()
+
+    def target(self):
+        with self._lock:
+            return self._target
+
+    def setup_target(self):
+        with self._lock:
+            if not self._setup_enabled or self._password is None or not self._session_active():
+                raise ControllerError('setup_credential_required')
+            return self._target
+
+    def setup_password(self, target):
+        with self._lock:
+            if target != self.setup_target():
+                raise ControllerError('recovery_binding_changed')
+            return self._password
 
     def observe(self):
         """Detect setup transport loss even if the browser is not polling."""
         if not self.operations.acquire(blocking=False):
             return
         try:
-            if (not self.active() and self._password is not None
+            if (self.observation_allowed() and not self.active() and self._password is not None
                     and self.deployment.plan is not None
                     and self.connection.status()['state'] == 'disconnected'):
                 self.start()
@@ -62,8 +86,7 @@ class SetupRecovery:
     def clear(self):
         with self.operations:
             with self._lock:
-                self._password = None
-                self._cancel.set()
+                self.revoke()
                 worker = self._worker
             if worker is not None:
                 worker.join()
@@ -79,11 +102,12 @@ class SetupRecovery:
         self.clear()
         self._target = target
 
-    def remember(self, password, *, enabled):
+    def remember(self, password, *, enabled, reuse_for_setup=False):
         self.clear()
         with self._lock:
             if enabled and self._target is not None and self._session_active():
                 self._password = password
+                self._setup_enabled = reuse_for_setup
 
     @contextmanager
     def operation(self, *, replace=False):

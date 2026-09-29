@@ -5,7 +5,7 @@ Supply the exact listener origin (including its port). Launch the browser at
 enters HTTP access logs, and the bundled UI removes it before consumption.
 Deployment uses digest-bound approvals; the remote API travels over SSH only.
 SSH credentials may be retained with consent in local controller memory for setup
-recovery. Sudo credentials remain request-scoped; neither enters stored records.
+recovery and explicitly requested composite setup/sudo. Neither enters stored records.
 """
 
 import asyncio
@@ -33,6 +33,7 @@ from h3server.controller.proxy import RemoteProxy
 from h3server.controller.reconnection import SetupRecovery
 from h3server.installer.planner import Approval
 from h3server.controller.session import BrowserSession
+from h3server.controller.setup import SetupCoordinator
 from h3server.controller.ssh import ControllerError, SSHConnection
 from h3server.probe import probe_hardware
 from h3server.profiles import recommend_profiles
@@ -181,11 +182,18 @@ class ApprovalRequest(StrictRequest):
 
 class AuthenticationRequest(StrictRequest):
     retain_for_setup_recovery: bool = False
+    reuse_for_setup: bool = False
     password: SecretStr = Field(min_length=1, max_length=4096)
 
 
 class EmptyRequest(StrictRequest):
     pass
+
+
+class SetupStartRequest(StrictRequest):
+    profile: str = Field(min_length=1, max_length=100)
+    artifact_set_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,64}$')
 
 
 class PlanRequest(StrictRequest):
@@ -237,6 +245,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     async def expire_credentials():
         while True:
             recovery.expire()
+            await run_in_threadpool(setup.expire)
             await run_in_threadpool(recovery.observe)
             await asyncio.sleep(.1)
 
@@ -249,17 +258,26 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             session.invalidate()
             recovery.expire()
             expiry.cancel()
+            await run_in_threadpool(setup.close)
             await run_in_threadpool(recovery.close)
             await run_in_threadpool(connection.close)
 
     deployment = Deployment(connection, release)
     recovery = SetupRecovery(connection, deployment, lambda: session.active)
+    setup = SetupCoordinator(deployment, recovery, lambda: session.active)
     proxy = RemoteProxy(connection)
+
+    def setup_idle(*, cancel=False):
+        if setup.active():
+            if cancel:
+                setup.cancel()
+            raise ControllerError('setup_in_progress')
 
     def observed(function):
         @wraps(function)
         def call(*args, **kwargs):
             with recovery.operation():
+                setup_idle()
                 try:
                     return function(*args, **kwargs)
                 except Exception:
@@ -273,6 +291,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     app.state.connection = connection
     app.state.deployment = deployment
     app.state.recovery = recovery
+    app.state.setup = setup
     app.add_middleware(LocalSecurity, origin=origin, session=session)
 
     @app.exception_handler(ControllerError)
@@ -320,6 +339,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def status():
         with recovery.operations:
             recovery.expire()
+            if setup.active():
+                return {**setup.connection_status(),
+                        'recovery': recovery.status(), 'setup': setup.status(),
+                        'csrf_token': session.csrf_token,
+                        'capabilities': {**CAPABILITIES, 'release_available': release is not None}}
             if recovery.active():
                 state = {'state': 'disconnected'}
                 recovery_state = recovery.status()
@@ -332,7 +356,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 recovery_state = recovery.status()
                 if recovery_state['state'] == 'recovered':
                     state = connection.status()
-            return {**state, 'recovery': recovery_state, "csrf_token": session.csrf_token,
+            return {**state, 'recovery': recovery_state, 'setup': setup.status(), "csrf_token": session.csrf_token,
                     "capabilities": {**CAPABILITIES, 'release_available': release is not None}}
 
     @app.get(API + "/fingerprint")
@@ -341,12 +365,15 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + "/connect")
     def connect(body: ConnectRequest):
-        with recovery.operation(replace=True):
-            deployment.reset()
-            recovery.set_target(None)
-            result = connection.connect(body.host, body.port, body.username)
-            recovery.set_target((body.host, body.port, body.username))
-            return result
+        with recovery.operations:
+            setup_idle(cancel=True)
+            with recovery.operation(replace=True):
+                deployment.reset()
+                setup.reset()
+                recovery.set_target(None)
+                result = connection.connect(body.host, body.port, body.username)
+                recovery.set_target((body.host, body.port, body.username))
+                return result
 
     @app.post(API + "/approve")
     @observed
@@ -355,21 +382,30 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + "/authenticate")
     def authenticate(body: AuthenticationRequest):
-        with recovery.operation(replace=True):
-            result = connection.authenticate(body.password.get_secret_value())
-            recovery.remember(body.password.get_secret_value(), enabled=body.retain_for_setup_recovery)
-            return {**result, 'recovery': recovery.status()}
+        with recovery.operations:
+            setup_idle()
+            with recovery.operation(replace=True):
+                result = connection.authenticate(body.password.get_secret_value())
+                recovery.remember(body.password.get_secret_value(),
+                                  enabled=body.retain_for_setup_recovery or body.reuse_for_setup,
+                                  reuse_for_setup=body.reuse_for_setup)
+                return {**result, 'recovery': recovery.status()}
 
     @app.post(API + "/disconnect")
     def disconnect(body: EmptyRequest | None = Body(default=None)):
-        with recovery.operation(replace=True):
-            deployment.reset()
-            return connection.close()
+        with recovery.operations:
+            setup_idle(cancel=True)
+            with recovery.operation(replace=True):
+                deployment.reset()
+                setup.reset()
+                return connection.close()
 
     @app.post(API + '/recovery/forget')
     def forget_recovery(body: EmptyRequest):
-        with recovery.operation(replace=True):
-            return recovery.status()
+        with recovery.operations:
+            setup_idle(cancel=True)
+            with recovery.operation(replace=True):
+                return recovery.status()
 
     @app.get(API + '/profiles')
     def profiles():
@@ -388,6 +424,19 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 **profile_catalog(probe.hardware),
                 "compatibility": "Unverified compatibility: experimental pinned-source budgets are not proof of H3 fit or generation readiness.",
                 "capabilities": CAPABILITIES}
+
+    @app.post(API + '/setup/start', status_code=202)
+    def setup_start(body: SetupStartRequest):
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id)
+
+    @app.get(API + '/setup/status')
+    def setup_status():
+        setup.expire()
+        return setup.status()
+
+    @app.post(API + '/setup/cancel', status_code=202)
+    def setup_cancel(body: EmptyRequest):
+        return setup.cancel()
 
     @app.post(API + '/setup/plan')
     @observed
