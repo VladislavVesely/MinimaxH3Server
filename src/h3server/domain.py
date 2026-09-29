@@ -227,7 +227,22 @@ class JobRequest:
 
 
 @dataclass(frozen=True)
+class JobTiming:
+    """UTC lifecycle timestamps for the current attempt, not video duration."""
+    queued_at: float | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+
+    def __post_init__(self):
+        for name in ('queued_at', 'started_at', 'finished_at'):
+            value = getattr(self, name)
+            if value is not None:
+                _nonnegative(value, name)
+
+
+@dataclass(frozen=True)
 class Job:
     job_id: str
     request: JobRequest
     status: JobStatus = JobStatus.QUEUED
+    timing: JobTiming | None = None

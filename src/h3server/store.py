@@ -13,9 +13,10 @@ import hashlib
 from pathlib import Path
 import re
 import sqlite3
+import time
 from uuid import uuid4
 
-from h3server.domain import Capabilities, Event, GenerationSettings, Job, JobRequest, JobStatus, StageStatus
+from h3server.domain import Capabilities, Event, GenerationSettings, Job, JobRequest, JobStatus, JobTiming, StageStatus
 from h3server.events import (
     MAX_EVENT_PAGE, EventPage, EventRecord, ReplayGap, _dump, _keys, _load,
     _text, decode_event, encode_event,
@@ -164,6 +165,9 @@ def _request_data(request: JobRequest) -> dict:
 
 def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     request = _load(row["request"])
+    timing = request.pop('_timing', None) if type(request) is dict else None
+    if timing is not None:
+        timing = JobTiming(**_keys(timing, {'queued_at', 'started_at', 'finished_at'}))
     # Additive JSON migration: v1 rows remain readable without rewriting history.
     # Legacy jobs have no executable settings and must not run with guessed ones.
     if type(request) is dict and "settings" not in request:
@@ -179,7 +183,7 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     if type(request["loras"]) is not list:
         raise ValueError("invalid LoRA list")
     request["loras"] = tuple(request["loras"])
-    job = Job(_identifier(row["job_id"]), JobRequest(**request), JobStatus(row["status"]))
+    job = Job(_identifier(row["job_id"]), JobRequest(**request), JobStatus(row["status"]), timing)
     output = None
     if row["output"] is not None:
         data = _load(row["output"])
@@ -358,7 +362,6 @@ class Store:
 
     def accept_job(self, request: JobRequest, *, capabilities: Capabilities, pending_limit: int | None = None) -> Job:
         request.validate_capabilities(capabilities)
-        payload = _dump(_request_data(request))
         job = Job(uuid4().hex, request)
         if pending_limit is not None:
             _bounded_int(pending_limit, 1)
@@ -367,6 +370,8 @@ class Store:
                 pending = db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued', 'running')").fetchone()[0]
                 if pending >= pending_limit:
                     raise QueueFull("pending job limit reached")
+            job = Job(job.job_id, request, timing=JobTiming(queued_at=time.time()))
+            payload = _dump({**_request_data(request), '_timing': asdict(job.timing)})
             db.execute("INSERT INTO jobs VALUES (?, ?, ?, NULL)", (job.job_id, payload, job.status.value))
             _stored(_decode_job, db.execute("SELECT * FROM jobs WHERE job_id=?", (job.job_id,)).fetchone())
             self._append(db, "job", job.job_id, Event("queued", StageStatus.PENDING))
@@ -410,12 +415,25 @@ class Store:
         if output is not None and not isinstance(output, OutputMetadata):
             raise ValueError("expected OutputMetadata")
         payload = _dump(asdict(output)) if output is not None else None
-        db.execute("UPDATE jobs SET status=?, output=? WHERE job_id=?", (target.value, payload, job_id))
+        timing = job.timing or JobTiming()
+        now = time.time()
+        if target is JobStatus.QUEUED:
+            timing = JobTiming(queued_at=now)
+        elif target is JobStatus.RUNNING:
+            timing = JobTiming(timing.queued_at, now)
+        elif job.status is JobStatus.INTERRUPTED or target is JobStatus.INTERRUPTED:
+            # Restart/cancellation after a crash cannot establish when execution stopped.
+            timing = JobTiming(timing.queued_at, timing.started_at)
+        else:
+            timing = JobTiming(timing.queued_at, timing.started_at, now)
+        request_payload = _dump({**_request_data(job.request), '_timing': asdict(timing)})
+        db.execute("UPDATE jobs SET status=?, output=?, request=? WHERE job_id=?",
+                   (target.value, payload, request_payload, job_id))
         stage_status = {JobStatus.QUEUED: StageStatus.PENDING, JobStatus.RUNNING: StageStatus.RUNNING,
                         JobStatus.COMPLETED: StageStatus.COMPLETED, JobStatus.CANCELLED: StageStatus.CANCELLED,
                         JobStatus.FAILED: StageStatus.FAILED, JobStatus.INTERRUPTED: StageStatus.FAILED}[target]
         self._append(db, "job", job_id, Event(target.value, stage_status))
-        return Job(job_id, job.request, target)
+        return Job(job_id, job.request, target, timing)
 
     def transition_job(self, job_id: str, target: JobStatus, *, output: OutputMetadata | None = None) -> Job:
         with self._transaction(write=True) as db:

@@ -813,6 +813,17 @@
     replaceOutput($('job-events'), (jobLogs.get(selectedJob) || []).join('\n') || 'Waiting for output from this job.');
     for (const [id, card] of jobCards) card.item.classList.toggle('selected', id === selectedJob);
   }
+  function updateJobTimes() {
+    for (const job of currentJobs) {
+      const card = jobCards.get(job.job_id);
+      if (!card) continue;
+      const age = Math.max(0, (performance.now() - (job.timingReceivedAt ?? performance.now())) / 1000);
+      const live = ['queued', 'running'].includes(job.status);
+      const stale = live && (connection.state !== 'authenticated' || age > 15);
+      card.timing.textContent = H3JobTiming.timingText(job, stale ? 0 : age) + (stale ? ' (last update)' : '');
+    }
+  }
+  const timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
   function reconcileJobs(jobs) {
     currentJobs = jobs;
     const queued = jobs.filter(job => job.status === 'queued').slice().reverse();
@@ -841,8 +852,10 @@
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
         const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}` : '', 'field-hint');
-        item.append(heading, caption, status, meter, detail, output);
-        card = { item, status, meter, detail, output, cancel: null, outputIdentity: null };
+        const timing = node('p', undefined, 'job-timing');
+        timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
+        item.append(heading, caption, status, timing, meter, detail, output);
+        card = { item, status, timing, meter, detail, output, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
         $('jobs').insertBefore(item, nextItem);
       }
@@ -893,6 +906,7 @@
         card.output.append(video, link, error);
       } else if (job.output?.expired) card.output.append(node('p', 'Output expired by retention policy.'));
     }
+    updateJobTimes();
   }
   async function dashboard() {
     clearTimeout(jobTimer);
@@ -904,6 +918,7 @@
     const capability = await request('/remote/capabilities');
     if (!current()) return;
     const data = await request('/remote/jobs');
+    for (const job of data.jobs) job.timingReceivedAt = performance.now();
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
     showSage(capability.optional_features?.sage_attention);
@@ -949,7 +964,7 @@
       await dashboard();
     });
   });
-  window.addEventListener('pagehide', () => { pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pagehide', () => { clearInterval(timingTimer); pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
 
   async function start() {
     busy = true;

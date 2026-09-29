@@ -1,0 +1,11 @@
+const assert = require('node:assert/strict');
+const { timingText } = require('../src/h3server/web/job-timing.js');
+assert.equal(timingText({status:'completed'}), 'Timing unavailable (not recorded)');
+const timing = {queued_at:100, started_at:110, finished_at:null, observed_at:120};
+assert.equal(timingText({status:'running', timing}, 5), 'Run 15s · Wait 10s · Total 25s');
+assert.equal(timingText({status:'completed', timing:{...timing,finished_at:180}}, 90), 'Run 1m 10s · Wait 10s · Total 1m 20s');
+assert.equal(timingText({status:'queued',timing:{queued_at:100,observed_at:120}}, 5), 'Waiting 25s');
+assert.equal(timingText({status:'interrupted',timing}, 90), 'Run unavailable · Wait 10s · Total unavailable');
+assert.equal(timingText({status:'cancelled',timing:{queued_at:100,finished_at:120}}), 'Not started · Wait 20s · Total 20s');
+assert.equal(timingText({status:'running',timing:{...timing,observed_at:90}}), 'Run unavailable · Wait 10s · Total unavailable');
+console.log('7 job timing display checks passed');

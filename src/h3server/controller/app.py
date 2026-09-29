@@ -43,6 +43,7 @@ BODY_LIMIT = 16384
 CAPABILITIES = {"scan": True, "installer": True, "generation": True}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
+              "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
               "/assets/styles.css": ("styles.css", "text/css")}
 SECURITY_HEADERS = {
     "cache-control": "no-store",

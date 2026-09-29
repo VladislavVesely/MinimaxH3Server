@@ -65,6 +65,7 @@ main { max-width: 1540px; padding: 40px; margin: auto; }
 .state-badge[data-state="authenticated"] { color: var(--green); border-color: #cce5db; background: #f0f8f4; }
 .section-copy, .unavailable p { color: var(--muted); font-size: 12px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.job-timing { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .form-row { display: flex; gap: 16px; }
 .generation-lengths { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 760px) { .generation-lengths { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

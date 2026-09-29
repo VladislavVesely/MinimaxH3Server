@@ -106,8 +106,11 @@ def load_token(paths: AppPaths) -> str:
 
 
 def _job_data(store, job):
+    import time
     job, output = store.get_job_snapshot(job.job_id)
     value = asdict(job)
+    if value['timing'] is not None:
+        value['timing']['observed_at'] = time.time()
     if job.request.settings is not None:
         value["effective_duration"] = job.request.settings.duration
         s = job.request.settings
