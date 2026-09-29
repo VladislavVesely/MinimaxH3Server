@@ -875,11 +875,18 @@
     details.append(node('h5', 'Prompt'), node('p', request.prompt ?? 'Not recorded', 'job-prompt'));
     const fields = node('dl');
     const labels = { profile: 'Model', seed: 'Seed', width: 'Width', height: 'Height', num_frames: 'Frames',
-      steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'Additional LoRAs' };
+      steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'LoRAs' };
     const add = (key, value) => fields.append(node('dt', labels[key] || key.replaceAll('_', ' ')), node('dd', inputValue(value)));
     for (const [key, value] of Object.entries(request.settings || {})) add(key, value);
     if (!request.settings) details.append(node('p', 'Generation settings were not recorded for this older job.'));
-    for (const [key, value] of Object.entries(request)) if (!['prompt', 'settings'].includes(key)) add(key, value);
+    const loras = request.settings?.turbo_lora ? ['Turbo v4-600 EMA'] : [];
+    for (const lora of request.loras || []) loras.push(inputValue(lora));
+    add('loras', loras.length ? loras.join('\n') : request.settings ? 'None' : 'Not recorded');
+    for (const [key, value] of Object.entries(request)) {
+      if (['prompt', 'settings', 'loras'].includes(key)) continue;
+      if (key === 'sparse_attention' && value == null) continue;
+      add(key, value);
+    }
     details.append(fields);
     return details;
   }
