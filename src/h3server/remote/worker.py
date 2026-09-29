@@ -159,7 +159,11 @@ class Worker:
         if self._stopping.is_set() or (self._thread is not None and not self._thread.is_alive()):
             return ("Worker scheduler is not available",)
         try:
-            reasons = self.backend.readiness()
+            from h3server.backends.h3 import RuntimeReadiness
+            if isinstance(self.backend.readiness, RuntimeReadiness):
+                reasons = self.backend.readiness(refresh=self._active is None)
+            else:
+                reasons = self.backend.readiness()
             if not isinstance(reasons, tuple) or any(not isinstance(item, str) for item in reasons):
                 raise ValueError("invalid readiness result")
             return reasons

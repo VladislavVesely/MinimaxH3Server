@@ -30,6 +30,10 @@
   let dashboardEpoch = 0;
   let dashboardRequest = 0;
   const jobCards = new Map();
+  const jobLogs = new Map();
+  const jobPhases = new Map();
+  let selectedJob = null;
+  let currentJobs = [];
 
   function resetSetupPolling() {
     clearTimeout(setupTimer);
@@ -164,7 +168,8 @@
     if (data.state !== 'authenticated') {
       runtimeReady = false;
       resetDashboardPolling();
-      jobCards.clear(); $('jobs').replaceChildren(); jobCursor = 0;
+      jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
+      $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
       if (!setup.busy && setup.state === 'idle') clearScan();
       $('readiness').textContent = 'SSH disconnected. No generation readiness assumed.';
     }
@@ -670,33 +675,91 @@
     if (!current()) return;
     for (const block of text.split('\n\n')) {
       const fields = Object.fromEntries(block.split('\n').filter(line => line.includes(':')).map(line => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
-      if (fields.event === 'reset') { jobCursor = Number(JSON.parse(fields.data).minimum_cursor); $('job-events').replaceChildren(); }
+      if (fields.event === 'reset') { jobCursor = Number(JSON.parse(fields.data).minimum_cursor); jobLogs.clear(); jobPhases.clear(); }
       if (fields.event === 'job') {
         const record = JSON.parse(fields.data); jobCursor = Number(fields.id);
-        $('job-events').append(node('li', eventLine(record)));
+        if (!currentJobs.some(job => job.job_id === record.subject_id)) continue;
+        const event = record.event;
+        const previous = jobPhases.get(record.subject_id);
+        if (event.stage !== 'diagnosis') {
+          const same = previous?.stage === event.stage;
+          jobPhases.set(record.subject_id, { ...event,
+            progress: event.progress || (same ? previous.progress : null),
+            error: (event.status === 'failed' && event.message && event.stage !== 'worker')
+              ? event.message : previous?.error });
+        }
+        // Console details are separate from phase/progress, scoped to one job.
+        const line = event.message ? `[${event.stage}] ${event.message}`
+          : previous?.stage !== event.stage || event.status !== 'running' ? `${event.stage.replaceAll('_', ' ')} · ${event.status}` : '';
+        if (line) {
+          const lines = jobLogs.get(record.subject_id) || [];
+          if (lines.at(-1) !== line) lines.push(line);
+          while (lines.length > 300 || lines.join('\n').length > 64000) lines.shift();
+          jobLogs.set(record.subject_id, lines);
+        }
       }
     }
-    while ($('job-events').children.length > 100) $('job-events').firstElementChild.remove();
+    reconcileJobs(currentJobs);
+    showJobTerminal();
+  }
+  function showJobTerminal() {
+    $('terminal-job').textContent = selectedJob ? `Job ${selectedJob.slice(0, 8)} · live output` : 'Select a job';
+    replaceOutput($('job-events'), (jobLogs.get(selectedJob) || []).join('\n') || 'Waiting for output from this job.');
+    for (const [id, card] of jobCards) card.item.classList.toggle('selected', id === selectedJob);
   }
   function reconcileJobs(jobs) {
+    currentJobs = jobs;
+    const queued = jobs.filter(job => job.status === 'queued').slice().reverse();
+    const running = jobs.filter(job => job.status === 'running');
+    const history = jobs.filter(job => !['queued', 'running'].includes(job.status));
+    $('queue-summary').textContent = `${running.length} running · ${queued.length} waiting · ${history.length} finished`;
+    if (!selectedJob || !jobs.some(job => job.job_id === selectedJob)) selectedJob = running[0]?.job_id || queued[0]?.job_id || jobs[0]?.job_id;
+    const ordered = [...running, ...queued, ...history];
     const present = new Set(jobs.map(job => job.job_id));
     for (const [id, card] of jobCards) {
-      if (!present.has(id)) { card.item.remove(); jobCards.delete(id); }
+      if (!present.has(id)) { card.item.remove(); jobCards.delete(id); jobLogs.delete(id); jobPhases.delete(id); }
     }
     let nextItem = $('jobs').firstElementChild;
-    for (const job of jobs) {
+    for (const job of ordered) {
       let card = jobCards.get(job.job_id);
       if (!card) {
         const item = node('article', undefined, 'job-card');
         const status = node('p');
         const output = node('div');
-        item.append(node('h4', job.job_id), status, output);
-        card = { item, status, output, cancel: null, outputIdentity: null };
+        const heading = node('div', undefined, 'job-heading');
+        const title = node('h4', `Job ${job.job_id.slice(0, 8)}`); title.title = job.job_id;
+        const logs = node('button', 'View terminal', 'text-button'); logs.type = 'button';
+        logs.addEventListener('click', () => { selectedJob = job.job_id; showJobTerminal(); });
+        heading.append(title, logs);
+        const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
+        const detail = node('p', undefined, 'job-detail');
+        const settings = job.request?.settings;
+        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps` : '', 'field-hint');
+        item.append(heading, caption, status, meter, detail, output);
+        card = { item, status, meter, detail, output, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
         $('jobs').insertBefore(item, nextItem);
       }
+      if (card.item !== nextItem) $('jobs').insertBefore(card.item, nextItem);
       nextItem = card.item.nextElementSibling;
-      if (card.status.textContent !== job.status) card.status.textContent = job.status;
+      card.item.dataset.status = job.status;
+      const phase = jobPhases.get(job.job_id);
+      const label = (phase?.stage || 'preparing').replaceAll('_', ' ');
+      card.status.textContent = job.status === 'queued' ? `Waiting · queue position ${queued.indexOf(job) + 1}`
+        : job.status === 'running' ? label.charAt(0).toUpperCase() + label.slice(1)
+        : job.status.charAt(0).toUpperCase() + job.status.slice(1);
+      card.meter.hidden = ['failed', 'cancelled'].includes(job.status);
+      if (job.status === 'completed' || job.status === 'queued') {
+        card.meter.max = 1; card.meter.value = job.status === 'completed' ? 1 : 0;
+        card.detail.textContent = job.status === 'completed' ? 'Video ready' : 'Will start automatically when the worker is available.';
+      } else if (job.status === 'running' && phase?.progress?.total > 0) {
+        card.meter.max = phase.progress.total; card.meter.value = phase.progress.completed;
+        card.detail.textContent = `${phase.progress.completed} / ${phase.progress.total} ${phase.progress.unit} · current phase`;
+      } else {
+        card.meter.removeAttribute('value');
+        card.detail.textContent = job.status === 'running' ? 'Working · this phase does not report a measurable total. See terminal for details.'
+          : phase?.error || 'See this job’s terminal for the failure details.';
+      }
       if (['queued', 'running'].includes(job.status)) {
         if (!card.cancel) {
           card.cancel = node('button', 'Cancel job', 'secondary'); card.cancel.type = 'button';
@@ -730,7 +793,8 @@
     const epoch = dashboardEpoch;
     const sequence = ++dashboardRequest;
     const current = () => epoch === dashboardEpoch && sequence === dashboardRequest && connection.state === 'authenticated';
-    runtimeReady = false; render();
+    // Keep the last confirmed readiness during background polling. Only a real
+    // response or connection failure may disable Queue, not an in-flight read.
     const capability = await request('/remote/capabilities');
     if (!current()) return;
     const data = await request('/remote/jobs');
@@ -746,8 +810,11 @@
       }
       $('steps').value = capability.service_limits.steps_default;
     }
-    runtimeReady = capability.runtime_ready && profiles.length > 0;
     const diagnostic = capability.diagnostic || {};
+    const backgroundCheck = diagnostic.environment_ready === true && diagnostic.model_ready === true
+      && capability.not_ready_reasons?.length === 1
+      && capability.not_ready_reasons[0] === 'Runtime and verified model diagnostic is running';
+    runtimeReady = (capability.runtime_ready || backgroundCheck) && profiles.length > 0;
     const generated = data.jobs.some(job => profiles.includes(job.request?.settings?.profile) && job.status === 'completed' && job.output && !job.output.expired);
     $('readiness').textContent = `Daemon connected. Active backend: ${capability.backend}; profiles: ${profiles.join(', ')}. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
     reconcileJobs(data.jobs);
@@ -769,7 +836,9 @@
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value) };
       if (!$('lora-field').hidden && $('lora').value) body.loras = [$('lora').value];
-      await request('/remote/jobs', body); await dashboard();
+      const accepted = await request('/remote/jobs', body);
+      selectedJob = accepted.job_id || accepted.job?.job_id || null;
+      await dashboard();
     });
   });
   window.addEventListener('pagehide', () => { pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });

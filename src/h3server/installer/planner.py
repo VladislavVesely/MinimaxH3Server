@@ -17,7 +17,7 @@ from h3server.store import ApprovalRequired, canonical_plan_digest
 SUPPORTED = {"ubuntu": ("24.04", "26.04"), "debian": ("12", "13")}
 PACKAGE = r"[a-z0-9][a-z0-9+.-]*(?::amd64)?"
 VERSION = r"[A-Za-z0-9.+:~_-]+"
-BASE_PACKAGES = ("python3", "python3-venv", "git", "ca-certificates")
+BASE_PACKAGES = ("python3", "python3-venv", "python3-dev", "build-essential", "git", "ca-certificates")
 
 
 @dataclass(frozen=True)

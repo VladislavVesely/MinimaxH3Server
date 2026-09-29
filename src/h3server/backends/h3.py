@@ -442,8 +442,9 @@ def execute_document(request_path, *, emit):
 class RuntimeReadiness:
     """Bounded background diagnostic, never torch imports in the daemon/event loop.
 
-    Polling returns checking/unavailable while hashing ~144GB. Results expire in
-    60s; each execution independently rechecks consent, full hashes and runtime.
+    Initial checks block admission. Successful results remain usable during a
+    background refresh; active generation defers expensive refreshes. Each
+    execution independently rechecks consent, full hashes and runtime.
     No saved report is trusted as proof of the current installed environment.
     """
     def __init__(self, paths, *, profile=None, command=None):
@@ -477,19 +478,18 @@ class RuntimeReadiness:
         with self.lock:
             return json.loads(json.dumps(self.report))
 
-    def __call__(self):
+    def __call__(self, *, refresh=True):
         try:
             require_consent(self.paths, profile_name=self.profile)
         except (OSError, ValueError):
             return ("Persisted model download/license/eligibility consent is required",)
         with self.lock:
-            if time.monotonic() - self.checked > 60 and (self.thread is None or not self.thread.is_alive()):
+            if refresh and time.monotonic() - self.checked > 60 and (self.thread is None or not self.thread.is_alive()):
                 self.thread = threading.Thread(target=self._check, daemon=True)
                 self.thread.start()
-                return ("Runtime and verified model diagnostic is running",)
-            if self.thread is not None and self.thread.is_alive():
-                return ("Runtime and verified model diagnostic is running",)
             if not self.report.get("environment_ready") or not self.report.get("model_ready"):
+                if self.thread is not None and self.thread.is_alive():
+                    return ("Runtime and verified model diagnostic is running",)
                 return tuple(self.report["issues"]) or ("Runtime or model is not ready",)
             return ()
 

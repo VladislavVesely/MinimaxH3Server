@@ -46,7 +46,7 @@ def parse_request(value):
     return request
 
 
-def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False):
+def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, prepare_weights=False):
     """Explicit imports from verified pinned sources; no plugin discovery/main.py.
 
     cpu_smoke is a Python-only test seam, not a daemon/generation CLI mode. It
@@ -79,7 +79,7 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False):
     from h3server.backends.safetensors_compat import artifact_directory, REPAIRS
     folders = {name: [str(snapshot/name)] for name in ('diffusion_models','text_encoders','vae')}
     for artifact in selected.artifacts:
-        if artifact.sha256 in REPAIRS:
+        if prepare_weights and artifact.sha256 in REPAIRS:
             print(f'Preparing checksum-verified runtime copy: {Path(artifact.local_relative_path).name}', flush=True)
             normalized = artifact_directory(paths, snapshot, artifact)
             folders[Path(artifact.local_relative_path).parent.as_posix()].insert(0, str(normalized))
@@ -198,10 +198,17 @@ def runtime_diagnostic(paths, profile):
                   artifact_set_digest=get_artifact_set(profile).digest,
                   memory_status='unmeasured')
     try:
+        import shutil, sysconfig
+        if not (shutil.which('cc') or shutil.which('gcc')):
+            raise RuntimeError('C compiler missing; install build-essential for Triton')
+        if not (Path(sysconfig.get_path('include')) / 'Python.h').is_file():
+            raise RuntimeError('Python development headers missing; install python3-dev for Triton')
         environment = verify_provisioned(paths, profile)
         from h3server.downloads import snapshot_path
         rt = load_runtime(environment, paths, snapshot_path(paths, profile_name=profile), get_artifact_set(profile))
         check_gpu(rt, get_artifact_set(profile))
+        from triton.backends.nvidia.driver import CudaUtils
+        CudaUtils()  # Compile/import the helper actually needed by text encoding.
         import av
         # Native import/allocation/kernel/codec smoke, never model loading.
         with rt.torch.inference_mode():
@@ -211,8 +218,9 @@ def runtime_diagnostic(paths, profile):
             if y.sum().item() != 512: raise ValueError('CUDA kernel failed')
         av.CodecContext.create('libx264','w'); av.CodecContext.create('aac','w')
         report['environment_ready'] = True
-    except Exception:
-        report['issues'].append('Pinned runtime, dependency, GPU or codec checks failed')
+    except Exception as error:
+        from h3server.installer.diagnostics import safe_log
+        report['issues'].append(safe_log(f'{type(error).__name__}: {error}')[:2000])
     return report
 
 
@@ -239,7 +247,7 @@ def execute_document(request_path, *, emit, profile=None):
     snapshot = verify_snapshot(paths, profile_name=profile)
     emit(Event('loading', StageStatus.RUNNING, 'Model checksums verified; checking runtime and preparing model components.'))
     environment = verify_provisioned(paths, profile)
-    rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile))
+    rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile), prepare_weights=True)
     check_gpu(rt, get_artifact_set(profile))
     cancelled = threading.Event()
     old_signal = signal.signal(signal.SIGTERM, lambda *args: cancelled.set())
