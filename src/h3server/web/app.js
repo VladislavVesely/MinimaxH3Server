@@ -20,6 +20,24 @@
   let backendCapabilities = {};
   let setupTimer = null;
   let jobTimer = null;
+  let setupEpoch = 0;
+  let setupRequest = 0;
+  let acceptedLaunch = null;
+  let dashboardEpoch = 0;
+  let dashboardRequest = 0;
+  const jobCards = new Map();
+  // An accepted detached launch is not evidence that its child has started.
+  const LAUNCH_WAIT_MS = 30000;
+
+  function resetSetupPolling() {
+    clearTimeout(setupTimer);
+    setupEpoch++;
+    acceptedLaunch = null;
+  }
+  function resetDashboardPolling() {
+    clearTimeout(jobTimer);
+    dashboardEpoch++;
+  }
 
   const messages = {
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
@@ -123,11 +141,13 @@
     if (data.state !== 'authenticated') {
       clearScan();
       runtimeReady = false;
-      clearTimeout(setupTimer); clearTimeout(jobTimer);
+      resetSetupPolling(); resetDashboardPolling();
+      jobCards.clear(); $('jobs').replaceChildren();
       planReview = null; setupCursor = 0; jobCursor = 0;
       $('plan-review').hidden = true;
       $('sudo-password').value = '';
       $('readiness').textContent = 'SSH disconnected. Reauthenticate and restore saved setup; credentials were not retained.';
+      $('setup-status').textContent = 'Setup observation stopped. Reauthenticate and restore saved setup to replay durable progress.';
     }
     if (data.state !== 'awaiting_authentication') $('password').value = '';
     render();
@@ -330,10 +350,13 @@
     $('hardware-heading').focus();
   }));
   function showPlan(data) {
+    resetSetupPolling();
+    setupCursor = 0; $('setup-events').replaceChildren();
     planReview = data;
     $('plan-review').hidden = false;
     $('plan-document').textContent = JSON.stringify({ plan: data.plan, service: data.service }, null, 2);
     $('license-document').textContent = data.license_text;
+    $('setup-status').textContent = 'Plan reviewed; no new operation launched. Replay setup progress to inspect durable checkpoints.';
     for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'cancel-check']) $(id).checked = false;
     $('sudo-password').value = '';
     render();
@@ -354,32 +377,58 @@
     return text;
   }
   async function setupProgress() {
+    clearTimeout(setupTimer);
+    const epoch = setupEpoch;
+    const sequence = ++setupRequest;
+    const current = () => epoch === setupEpoch && sequence === setupRequest && connection.state === 'authenticated';
     const data = await request('/setup/events?after=' + setupCursor);
+    if (!current()) return;
     if (data.reset) { setupCursor = 0; $('setup-events').replaceChildren(); }
     for (const record of data.events) $('setup-events').append(node('li', eventLine(record)));
     setupCursor = data.cursor;
     while ($('setup-events').children.length > 100) $('setup-events').firstElementChild.remove();
     const setup = data.setups.find(item => item.plan_digest === planReview?.plan_digest);
     $('setup-status').textContent = `Environment checkpoint: ${setup?.state || 'not started'}. Operation: ${data.operation?.action || 'none'} ${data.operation?.state || ''}. Active release: ${data.active_release?.release || 'none'}. Model and real generation are checked separately in the dashboard.`;
-    clearTimeout(setupTimer);
     const pending = ['running', 'reconnecting', 'waiting_for_reboot'].includes(setup?.state) || data.operation?.state === 'running';
-    if (data.has_more || pending) setupTimer = setTimeout(() => {
-      if (connection.state === 'authenticated') setupProgress().catch(error => { clearTimeout(setupTimer); showError(error, false); });
+    const awaitingStart = !setup || ['planned', 'awaiting_approval'].includes(setup.state);
+    if (pending || !awaitingStart) acceptedLaunch = null;
+    if (acceptedLaunch) {
+      acceptedLaunch.delayed = Date.now() >= acceptedLaunch.deadline;
+      $('setup-status').textContent += acceptedLaunch.delayed
+        ? ' Launch delayed: no running checkpoint observed within 30 seconds. Automatic launch checks paused; use Replay setup progress to check again. No completion is assumed.'
+        : ' Launch accepted; waiting for the initial running checkpoint (up to 30 seconds).';
+    }
+    if (data.has_more || pending || (acceptedLaunch && !acceptedLaunch.delayed)) setupTimer = setTimeout(() => {
+      if (!current()) return;
+      const nextSequence = setupRequest + 1;
+      setupProgress().catch(error => {
+        if (epoch === setupEpoch && nextSequence === setupRequest) { clearTimeout(setupTimer); showError(error, false); }
+      });
     }, data.has_more ? 100 : 2000);
   }
   async function setupAction(action, data) {
+    resetSetupPolling();
+    const epoch = setupEpoch;
     const result = await request('/setup/' + action, data);
+    if (epoch !== setupEpoch || connection.state !== 'authenticated') return;
     if (result.review) showPlan(result.review);
+    if (result.state === 'accepted') acceptedLaunch = { deadline: Date.now() + LAUNCH_WAIT_MS, delayed: false };
     $('setup-status').textContent = `Request ${result.state}. This is not completion; replaying durable target progress.`;
     await setupProgress();
   }
   for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'generation-profile']) $(id).addEventListener('change', render);
-  $('plan').addEventListener('click', () => perform('Staging verified release and inspecting exact changes…', async () => {
-    showPlan(await request('/setup/plan', { profile: $('install-profile').value, sudo_password_available: $('sudo-available').checked }));
-    setupCursor = 0; $('setup-events').replaceChildren();
-  }));
+  async function loadPlan(path, data) {
+    resetSetupPolling();
+    const epoch = setupEpoch;
+    const review = await request(path, data);
+    if (epoch !== setupEpoch || connection.state !== 'authenticated') return false;
+    showPlan(review);
+    return true;
+  }
+  $('plan').addEventListener('click', () => perform('Staging verified release and inspecting exact changes…', () =>
+    loadPlan('/setup/plan', { profile: $('install-profile').value, sudo_password_available: $('sudo-available').checked })));
   $('restore-setup').addEventListener('click', () => perform('Restoring durable setup after authentication…', async () => {
-    showPlan(await request('/setup/restore', {})); await setupProgress();
+    if (await loadPlan('/setup/restore', {})) await setupProgress();
   }));
   $('install').addEventListener('click', () => perform('Launching explicitly approved installation…', () => setupAction('install', approval())));
   $('reboot').addEventListener('click', () => perform('Requesting separately approved reboot…', async () => {
@@ -397,12 +446,17 @@
     eligibility_confirmed: $('eligibility-check').checked, download_approved: $('download-check').checked,
   })));
   $('cancel-download').addEventListener('click', () => perform('Requesting model download cancellation…', () => setupAction('cancel-download', { plan_digest: planReview.plan_digest })));
-  $('setup-refresh').addEventListener('click', () => perform('Replaying durable setup events…', setupProgress));
+  $('setup-refresh').addEventListener('click', () => perform('Replaying durable setup events…', () => {
+    if (acceptedLaunch?.delayed) acceptedLaunch = { deadline: Date.now() + LAUNCH_WAIT_MS, delayed: false };
+    return setupProgress();
+  }));
 
-  async function jobEvents() {
+  async function jobEvents(current) {
     const response = await fetch(API + '/remote/events?after=' + jobCursor, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
     if (!response.ok) throw { code: 'remote_unavailable' };
-    for (const block of (await response.text()).split('\n\n')) {
+    const text = await response.text();
+    if (!current()) return;
+    for (const block of text.split('\n\n')) {
       const fields = Object.fromEntries(block.split('\n').filter(line => line.includes(':')).map(line => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
       if (fields.event === 'reset') { jobCursor = Number(JSON.parse(fields.data).minimum_cursor); $('job-events').replaceChildren(); }
       if (fields.event === 'job') {
@@ -412,37 +466,78 @@
     }
     while ($('job-events').children.length > 100) $('job-events').firstElementChild.remove();
   }
+  function reconcileJobs(jobs) {
+    const present = new Set(jobs.map(job => job.job_id));
+    for (const [id, card] of jobCards) {
+      if (!present.has(id)) { card.item.remove(); jobCards.delete(id); }
+    }
+    let nextItem = $('jobs').firstElementChild;
+    for (const job of jobs) {
+      let card = jobCards.get(job.job_id);
+      if (!card) {
+        const item = node('article', undefined, 'job-card');
+        const status = node('p');
+        const output = node('div');
+        item.append(node('h4', job.job_id), status, output);
+        card = { item, status, output, cancel: null, outputIdentity: null };
+        jobCards.set(job.job_id, card);
+        $('jobs').insertBefore(item, nextItem);
+      }
+      nextItem = card.item.nextElementSibling;
+      if (card.status.textContent !== job.status) card.status.textContent = job.status;
+      if (['queued', 'running'].includes(job.status)) {
+        if (!card.cancel) {
+          card.cancel = node('button', 'Cancel job', 'secondary'); card.cancel.type = 'button';
+          card.cancel.addEventListener('click', () => perform('Cancelling selected job…', async () => {
+            await request('/remote/jobs/' + job.job_id + '/cancel', {}); await dashboard();
+          }));
+          card.item.insertBefore(card.cancel, card.output);
+        }
+        card.cancel.disabled = busy;
+      } else if (card.cancel) { card.cancel.remove(); card.cancel = null; }
+      const available = job.status === 'completed' && job.output && !job.output.expired;
+      // Output records are immutable except retention expiry. Never detach an
+      // unchanged video or reassign src: either can interrupt browser playback.
+      const identity = available ? JSON.stringify([job.output.filename, job.output.size_bytes, job.output.media_type])
+        : job.output?.expired ? 'expired' : null;
+      if (identity === card.outputIdentity) continue;
+      card.outputIdentity = identity;
+      card.output.replaceChildren();
+      if (available) {
+        const url = API + '/remote/jobs/' + job.job_id + '/video';
+        const video = node('video'); video.controls = true; video.preload = 'metadata'; video.src = url;
+        const error = node('p', 'Preview unavailable or output expired. Refresh the dashboard.'); error.hidden = true;
+        video.addEventListener('error', () => { error.hidden = false; });
+        const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
+        card.output.append(video, link, error);
+      } else if (job.output?.expired) card.output.append(node('p', 'Output expired by retention policy.'));
+    }
+  }
   async function dashboard() {
+    clearTimeout(jobTimer);
+    const epoch = dashboardEpoch;
+    const sequence = ++dashboardRequest;
+    const current = () => epoch === dashboardEpoch && sequence === dashboardRequest && connection.state === 'authenticated';
     runtimeReady = false; render();
     const capability = await request('/remote/capabilities');
+    if (!current()) return;
+    const data = await request('/remote/jobs');
+    if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
     runtimeReady = capability.runtime_ready;
     const diagnostic = capability.diagnostic || {};
-    const data = await request('/remote/jobs');
     const generated = data.jobs.some(job => job.status === 'completed' && job.output && !job.output.expired);
     $('readiness').textContent = `Daemon connected. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
-    $('jobs').replaceChildren();
-    for (const job of data.jobs) {
-      const item = node('article', undefined, 'job-card');
-      item.append(node('h4', job.job_id), node('p', job.status));
-      if (['queued', 'running'].includes(job.status)) {
-        const cancel = node('button', 'Cancel job', 'secondary'); cancel.type = 'button'; cancel.disabled = busy;
-        cancel.addEventListener('click', () => perform('Cancelling selected job…', async () => { await request('/remote/jobs/' + job.job_id + '/cancel', {}); await dashboard(); }));
-        item.append(cancel);
-      }
-      if (job.status === 'completed' && job.output && !job.output.expired) {
-        const url = API + '/remote/jobs/' + job.job_id + '/video';
-        const video = node('video'); video.controls = true; video.preload = 'metadata'; video.src = url;
-        video.addEventListener('error', () => { item.append(node('p', 'Preview unavailable or output expired. Refresh the dashboard.')); });
-        const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
-        item.append(video, link);
-      } else if (job.output?.expired) item.append(node('p', 'Output expired by retention policy.'));
-      $('jobs').append(item);
-    }
-    await jobEvents(); render();
-    clearTimeout(jobTimer);
+    reconcileJobs(data.jobs);
+    await jobEvents(current);
+    if (!current()) return;
+    render();
     if (data.jobs.some(job => ['queued', 'running'].includes(job.status))) jobTimer = setTimeout(() => {
-      if (connection.state === 'authenticated') dashboard().catch(error => { runtimeReady = false; render(); showError(error, false); });
+      if (!current()) return;
+      const nextSequence = dashboardRequest + 1;
+      dashboard().catch(error => {
+        if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
+      });
     }, 2000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
@@ -455,7 +550,7 @@
       await request('/remote/jobs', body); await dashboard();
     });
   });
-  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; clearTimeout(setupTimer); clearTimeout(jobTimer); });
+  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
 
   async function start() {
     busy = true;

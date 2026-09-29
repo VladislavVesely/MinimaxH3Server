@@ -7,6 +7,7 @@ from dataclasses import replace
 import hashlib
 from importlib.resources import files
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -33,7 +34,14 @@ from h3server.paths import AppPaths
 from h3server.probe import CommandResult
 from h3server.remote.app import create_app as remote_app, load_token
 from h3server.remote.worker import Worker
-from h3server.store import Store, canonical_plan_digest
+from h3server.store import Store, SetupState, canonical_plan_digest
+
+
+class ControlledIO(FakeIO):
+    """Hold a real running checkpoint until the browser test releases IO."""
+    def run(self, *args, **kwargs):
+        assert self.finish.wait(60), 'TEST ONLY installer IO gate timed out'
+        return super().run(*args, **kwargs)
 
 
 class DirectTransport(BrowserTransport):
@@ -72,8 +80,19 @@ class FixtureSSH(SSHConnection):
         if action == 'prepare':
             approval = Approval(**json.loads((paths.bootstrap/digest/'approval.json').read_text()))
             assert kwargs['service_digest'] == canonical_plan_digest(service_plan(paths, plan, uid=1000))
-            setup = runner.create(plan)
-            runner.run(setup.setup_id, approval)
+            if os.environ.get('H3_TEST_CONTROLLED_SETUP'):
+                setup = store.create_setup(plan)
+                if os.environ['H3_TEST_CONTROLLED_SETUP'] == 'awaiting_approval':
+                    store.transition_setup(setup.setup_id, SetupState.AWAITING_APPROVAL)
+                io = ControlledIO(); io.finish = self.finish_setup
+                runner = Installer(paths, store, io=io)
+                def launch():
+                    if self.start_setup.wait(60):
+                        runner.run(setup.setup_id, approval)
+                threading.Thread(target=launch, daemon=True).start()
+            else:
+                setup = runner.create(plan)
+                runner.run(setup.setup_id, approval)
             return CommandResult(returncode=0)
         raise AssertionError('TEST ONLY unsupported SSH action')
     def deployment_action(self, *, root, artifact, digest, action, data):
@@ -112,6 +131,20 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
         network.outputs.update({'LC_ALL=C uname -s':b'Linux', 'LC_ALL=C uname -m':b'x86_64',
             'LC_ALL=C cat /etc/os-release':b'ID=ubuntu\nVERSION_ID="24.04"\n'})
         connection = FixtureSSH(Path(temporary)/'trust', socket_factory=network.socket, transport_factory=network.transport)
+        connection.start_setup = threading.Event(); connection.finish_setup = threading.Event()
+        # Private subprocess pipe only: no fixture controls on the HTTP API.
+        def controls():
+            for line in sys.stdin:
+                command = json.loads(line)
+                if command['action'] == 'start-setup': connection.start_setup.set()
+                elif command['action'] == 'finish-setup': connection.finish_setup.set()
+                elif command['action'] == 'expire-output': store.expire_job_output(command['job_id'])
+                elif command['action'] == 'delete-job':
+                    with store._transaction(write=True) as db:
+                        db.execute('DELETE FROM jobs WHERE job_id=?', (command['job_id'],))
+                else: raise AssertionError('TEST ONLY unsupported control')
+                print(json.dumps({'controlled': command['action']}), flush=True)
+        threading.Thread(target=controls, daemon=True).start()
         listener.bind(('127.0.0.1',0)); origin = f'http://127.0.0.1:{listener.getsockname()[1]}'
         app = create_app(state_dir=Path(temporary)/'trust', origin=origin, connection=connection, release=bundle(Path(temporary)))
         # An unmistakable fixture label, without production fake-backend switches.
