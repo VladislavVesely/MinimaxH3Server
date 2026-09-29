@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 root = Path(SPECPATH).parent
 payload = root / 'build' / 'controller-payload'
-datas = collect_data_files('h3server', includes=['web/*', 'backends/*.json', 'backends/*.txt'])
+datas = collect_data_files('h3server', includes=['web/*', 'backends/*.json', 'backends/*.txt', 'installer/compat/*.whl'])
 datas += copy_metadata('h3server')
 datas += [(str(path), 'h3server/payload') for path in payload.iterdir()]
 a = Analysis([str(root / 'src/h3server/__main__.py')], pathex=[str(root / 'src')],

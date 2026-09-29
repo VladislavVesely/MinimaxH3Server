@@ -19,6 +19,9 @@ def verify_wheel(path):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     ReleaseBundle(path, digest)
     with zipfile.ZipFile(path) as archive:
+        from h3server.installer.compatibility import PREVIOUS_ARTIFACT, PREVIOUS_SHA256
+        predecessor = archive.read('h3server/installer/compat/' + PREVIOUS_ARTIFACT.filename)
+        assert hashlib.sha256(predecessor).hexdigest() == PREVIOUS_SHA256
         required = ['h3server/__main__.py', 'h3server/controller/target.py',
                     'h3server/remote/__main__.py', 'h3server/remote/worker.py',
                     'h3server/backends/manifest.json', 'h3server/backends/LICENSE.h3.txt',

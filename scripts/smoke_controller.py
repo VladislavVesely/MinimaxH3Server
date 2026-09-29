@@ -28,6 +28,11 @@ def verify_embedded(executable, source_root=None):
     assert hashlib.sha256(wheel).hexdigest() == manifest['sha256']
     import io
     with zipfile.ZipFile(io.BytesIO(wheel)) as release:
+        from h3server.installer.compatibility import PREVIOUS_ARTIFACT, PREVIOUS_SHA256
+        compatibility_name = 'h3server/installer/compat/' + PREVIOUS_ARTIFACT.filename
+        predecessor = extract(compatibility_name)
+        assert hashlib.sha256(predecessor).hexdigest() == PREVIOUS_SHA256
+        assert release.read(compatibility_name) == predecessor
         for name in ['web/index.html', 'web/app.js', 'web/styles.css', 'backends/manifest.json', 'backends/LICENSE.h3.txt']:
             assert release.read('h3server/' + name) == extract('h3server/' + name)
         for name in ['controller/target.py', 'backends/catalog.py', 'backends/comfy_runtime.py', 'backends/pruned.py']:
@@ -87,9 +92,15 @@ def smoke(command):
             assert b'id="selected-profile"' in html and b'id="install-scope"' in html
             for obsolete in (b'id="review-panel"', b'id="sudo-password"', b'id="license-check"', b'id="retain-recovery"'):
                 assert obsolete not in html
+            for control in (b'id="setup-output"', b'id="retry-setup"', b'id="inspect-setup"',
+                            b'id="install-disabled-reason"', b'id="download-setup-log"'):
+                assert control in html
             assert b'reuse_for_setup: true' in request('/assets/app.js')[2]
             status, _, setup_body = request(api + '/setup/status')
             assert status == 200 and json.loads(setup_body)['state'] == 'idle'
+            assert json.loads(setup_body)['phase_elapsed_seconds'] is None
+            assert request(api + '/setup/retry', {}, {'Origin': origin})[0] == 403
+            assert request(api + '/setup/restore-compatible', {}, {'Origin': origin})[0] == 403
             assert request(api + '/setup/start', {}, {'Origin': origin})[0] == 403
             print('Native authenticated catalog equals source: both Abiray collections, exact totals/digests, no target IO')
             assert request(api + '/disconnect', {}, {'Origin': origin})[0] == 403

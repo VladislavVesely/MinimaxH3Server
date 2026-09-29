@@ -32,6 +32,8 @@ def embedded_payload(request, tmp_path, monkeypatch):
     resources = {f'h3server/{name}': f'fixture: {name}'.encode() for name in [
         'web/index.html', 'web/app.js', 'web/styles.css',
         'backends/manifest.json', 'backends/LICENSE.h3.txt']}
+    from h3server.installer.compatibility import previous_payload
+    resources['h3server/installer/compat/h3server-0.1.0-py3-none-any.whl'] = previous_payload()
     wheel_bytes = io.BytesIO()
     with zipfile.ZipFile(wheel_bytes, 'w') as wheel:
         for name, data in resources.items():
@@ -46,6 +48,8 @@ def embedded_payload(request, tmp_path, monkeypatch):
         selected = dict(resources)
         if corruption == 'resource':
             selected['h3server/web/app.js'] = b'tampered resource'
+        if corruption == 'compatibility':
+            selected['h3server/installer/compat/h3server-0.1.0-py3-none-any.whl'] = b'tampered predecessor'
         if corruption == 'digest':
             manifest['sha256'] = '0' * 64
         selected['h3server/payload/' + manifest['wheel']] = wheel_data
@@ -70,7 +74,7 @@ def test_verify_embedded_native_carchive_names_preserve_posix_wheel_members(embe
     assert 'Embedded release wheel, web, manifest and full license verified' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('corruption', ['digest', 'resource'])
+@pytest.mark.parametrize('corruption', ['digest', 'resource', 'compatibility'])
 def test_verify_embedded_native_carchive_names_keep_integrity_checks(embedded_payload, corruption):
     smoke, build = embedded_payload
     with pytest.raises(AssertionError):
