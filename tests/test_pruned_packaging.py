@@ -20,7 +20,7 @@ def test_wheel_verifier_checks_pruned_runtime_and_source_equality(tmp_path, corr
     wheel = tmp_path / 'h3server-0.1.0-py3-none-any.whl'
     with zipfile.ZipFile(wheel, 'w') as archive:
         for path in (ROOT / 'src/h3server').rglob('*'):
-            if path.is_file() and path.suffix in {'.py', '.json', '.txt', '.js', '.css', '.html'}:
+            if path.is_file() and path.suffix in {'.py', '.json', '.txt', '.js', '.css', '.html', '.whl'}:
                 data = path.read_bytes()
                 if corrupt and path.name == 'catalog.py':
                     data = b'# stale legacy distribution\n'
