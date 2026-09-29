@@ -314,6 +314,13 @@ class SetupCoordinator:
                     if not checked_password:
                         self._call(lambda: self.connection.check_setup_password(self.recovery.setup_password(target)))
                         checked_password = True
+                    if plan['purpose'] == 'environment' and document['service'] is None:
+                        # Read-only inspection deliberately omits service-plan IO.
+                        # Load it only for explicit Install, before exact consent
+                        # and the durable at-most-once launch marker are checked.
+                        self._call(lambda: self.deployment.restore(expected_digest=digest,
+                            expected_root=self._root, observation_only=True))
+                        document = self._binding()
                     submitted[digest] = time.monotonic()
                     self._publish(phase='prerequisites' if plan['purpose'] == 'prerequisites' else 'installing')
                     self._call(lambda: self.deployment.install_once(Approval(digest, True, True, True, True),

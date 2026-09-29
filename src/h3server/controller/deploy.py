@@ -276,19 +276,30 @@ class Deployment:
         rewritten and the original environment digest remains authoritative.
         """
         from h3server.installer.compatibility import compatible_plan, previous_payload, PREVIOUS_ARTIFACT
-        from h3server.controller.discovery import record as read_record, directory, strict_json
+        from h3server.controller.discovery import record as read_record, directory, strict_json, prove_unlaunched, ERROR
         with self.connection.lock:
             self._authenticated()
             if self.compatible and self.plan is not None:
                 return self.document()
             with self.connection.private_sftp() as sftp:
                 try:
-                    _, record, _ = read_record(sftp, self.root)
+                    raw, record, _ = read_record(sftp, self.root)
                 except FileNotFoundError:
                     return None
                 except (ValueError, TypeError, KeyError, ControllerError):
                     raise ControllerError('stale_discovery_unproven') from None
                 if record.get('artifact') != asdict(PREVIOUS_ARTIFACT) or record['artifact'] == asdict(self.release.artifact):
+                    return None
+                try:
+                    prove_unlaunched(sftp, self.root, raw)
+                except ControllerError as error:
+                    if error.code != ERROR:
+                        raise
+                    # Not proved unlaunched: only the independent failed-stage
+                    # compatibility proof below may authorize recovery.
+                else:
+                    # Leave discovery to rediscover_stale_plan, which repeats
+                    # this proof under all ownership locks before replacement.
                     return None
                 digest = record.get('digest')
                 if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):

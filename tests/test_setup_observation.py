@@ -97,3 +97,43 @@ def test_saved_record_damage_is_not_mistaken_for_absent_setup(flow, damage):
     assert response.json()['error']['code'] == 'invalid_checkpoint'
     assert app.state.deployment.plan is None
     assert not calls
+
+
+def test_inspect_unlaunched_environment_then_explicit_install_loads_service_once(flow):
+    from test_setup_coordinator import start, finished
+    app, client, headers, calls, _, _, _ = flow
+    document = app.state.deployment.make_plan(PROFILE)
+    calls.clear()
+    observed = client.post(API + '/setup/restore', json={}, headers=headers)
+    assert observed.status_code == 200
+    assert observed.json()['service'] is None
+    assert not calls  # Inspection is still read-only, without service-plan execution.
+    assert start(client, headers).status_code == 202
+    status = finished(app)
+    assert status['state'] == 'completed', status
+    assert status['plan_digest'] == document['plan_digest']
+    assert calls == ['service-plan', 'prepare', 'activate', 'download']
+    assert start(client, headers).status_code == 202
+    assert calls.count('prepare') == 1
+
+
+def test_inspected_plan_service_observation_failure_never_writes_launch_marker(flow, monkeypatch):
+    from h3server.probe import CommandResult
+    from test_setup_coordinator import start, finished
+    app, client, headers, calls, _, _, sftp = flow
+    document = app.state.deployment.make_plan(PROFILE)
+    assert client.post(API + '/setup/restore', json={}, headers=headers).status_code == 200
+    calls.clear()
+    def unavailable(**kw):
+        calls.append(kw['action'])
+        assert kw['action'] == 'service-plan'
+        assert kw['digest'] == document['plan_digest']
+        assert kw['artifact'] == app.state.deployment.release.artifact
+        return CommandResult(returncode=1)
+    monkeypatch.setattr(app.state.connection, 'recovery', unavailable)
+    assert start(client, headers).status_code == 202
+    assert finished(app)['state'] == 'failed'
+    assert calls == ['service-plan']
+    stage = sftp.path(app.state.deployment.root + '/bootstrap/' + document['plan_digest'])
+    assert not (stage / 'composite-install.json').exists()
+    assert not (stage / 'approval.json').exists()

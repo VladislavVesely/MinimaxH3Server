@@ -309,12 +309,22 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                 command = json.loads(line)
                 if command['action'] == 'calls':
                     print(json.dumps({'calls': connection.calls}), flush=True); continue
+                elif command['action'] == 'stage-current-plan':
+                    document = app.state.deployment.make_plan('h3-convrot-int8', sudo_password_available=True)
+                    connection.calls.clear()
+                    print(json.dumps({'plan_digest': document['plan_digest']}), flush=True)
+                    continue
                 elif command['action'] == 'stage-stale-release':
                     from h3server.controller.deploy import Deployment, ReleaseBundle, _write
                     from h3server.installer.planner import build_plan
                     from test_deploy import wheel
                     old_dir = Path(temporary)/'old-release'; old_dir.mkdir()
-                    old_wheel = wheel(old_dir, 'h3server/old_only.py')
+                    if command.get('trusted'):
+                        from h3server.installer.compatibility import PREVIOUS_ARTIFACT, previous_payload
+                        old_wheel = old_dir/PREVIOUS_ARTIFACT.filename
+                        old_wheel.write_bytes(previous_payload())
+                    else:
+                        old_wheel = wheel(old_dir, 'h3server/old_only.py')
                     old = ReleaseBundle(old_wheel, hashlib.sha256(old_wheel.read_bytes()).hexdigest())
                     assert old.artifact != app.state.deployment.release.artifact
                     prior = Deployment(connection, old)

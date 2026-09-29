@@ -426,28 +426,32 @@ test('retry of an undelivered Install preserves its public id and selection with
   expect(JSON.stringify(attempts)).not.toContain('TEST-ONLY-secret');
 });
 
-test.describe('stale unlaunched release discovery', () => {
-  test.use({ controlledSetup: 'stale-release', prunedProfile: 'h3-convrot-int8' });
-  test('one Install preserves completed prerequisites and prepares the current ConvRot release once', async ({ page, controller }) => {
-    await login(page, controller);
-    const release = await controller.control({ action: 'stage-stale-release' });
-    expect(release.old_release).not.toEqual(release.current_release);
-    expect(release.staged_history_count).toBe(2);
-    await page.locator('#scan').click();
-    await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
-    await page.locator('#install-profile').selectOption('h3-convrot-int8');
-    expect((await controller.control({ action: 'calls' })).calls).toEqual([]);
-    await page.getByRole('button', { name: 'Install', exact: true }).click();
-    await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()).state), { timeout: 20000 }).toBe('completed');
-    const calls = (await controller.control({ action: 'calls' })).calls;
-    expect(calls.filter(action => action === 'prepare')).toHaveLength(1);
-    const status = await page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()));
-    expect(status.profile).toBe('h3-convrot-int8');
-    expect(status.model_ready).toBe(true);
-    expect(status.generation_tested).toBe(false);
-    expect(status.error).toBeNull();
+for (const trusted of [false, true]) {
+  test.describe(`stale unlaunched release discovery (${trusted ? 'audited predecessor' : 'synthetic release'})`, () => {
+    test.use({ controlledSetup: 'stale-release', prunedProfile: 'h3-convrot-int8' });
+    test('one Install preserves completed prerequisites and prepares the current ConvRot release once', async ({ page, controller }) => {
+      await login(page, controller);
+      const release = await controller.control({ action: 'stage-stale-release', trusted });
+      if (trusted) expect(release.old_release).toBe('d7e9af0db46e5256428a0bc1ff76fc9a56ee3209b21c74758ee5b92022f7dbba');
+      expect(release.old_release).not.toEqual(release.current_release);
+      expect(release.staged_history_count).toBe(2);
+      await page.locator('#scan').click();
+      await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
+      await page.locator('#install-profile').selectOption('h3-convrot-int8');
+      expect((await controller.control({ action: 'calls' })).calls).toEqual([]);
+      await page.getByRole('button', { name: 'Install', exact: true }).click();
+      await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()).state), { timeout: 20000 }).toBe('completed');
+      const calls = (await controller.control({ action: 'calls' })).calls;
+      expect(calls.filter(action => action === 'prepare')).toHaveLength(1);
+      const status = await page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()));
+      expect(status.profile).toBe('h3-convrot-int8');
+      expect(status.model_ready).toBe(true);
+      expect(status.generation_tested).toBe(false);
+      expect(status.error).toBeNull();
+    });
   });
-});
+
+}
 
 for (const mode of ['pip-failure', 'pip-permanent']) {
   test.describe(`native command diagnostics ${mode}`, () => {
@@ -559,5 +563,24 @@ test.describe('live package cancellation', () => {
     await expect(page.locator('#setup-recovery')).toContainText('detached work may continue');
     await expect(page.locator('#retry-setup')).toBeHidden();
     await controller.control({action:'finish-package'});
+  });
+});
+
+test.describe('inspect before Install', () => {
+  test.use({prunedProfile:'h3-convrot-int8'});
+  test('read-only inspection of an unlaunched current plan does not strand Install', async ({page,controller}) => {
+    await login(page,controller);
+    await expect(page.locator('#install')).toBeEnabled();
+    const saved = await controller.control({action:'stage-current-plan'});
+    await page.locator('#inspect-setup').click();
+    await expect(page.locator('#setup-checkpoint')).toContainText(saved.plan_digest);
+    await expect(page.locator('#install-profile')).toHaveValue('h3-convrot-int8');
+    expect((await controller.control({action:'calls'})).calls).toEqual([]);
+    await page.locator('#install').click();
+    await completed(page);
+    const calls = (await controller.control({action:'calls'})).calls;
+    expect(calls.filter(c => c === 'service-plan')).toHaveLength(1);
+    expect(calls.filter(c => c === 'prepare')).toHaveLength(1);
+    expect((await controllerStatus(page)).setup.plan_digest).toBe(saved.plan_digest);
   });
 });

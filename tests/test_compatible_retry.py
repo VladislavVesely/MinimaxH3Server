@@ -144,3 +144,43 @@ def test_audited_predecessor_service_contract_is_unchanged():
     with zipfile.ZipFile(io.BytesIO(previous_payload())) as archive:
         predecessor = archive.read('h3server/installer/recovery.py').decode()
     assert contract(predecessor) == contract(inspect.getsource(recovery))
+
+
+def test_packaged_predecessor_unlaunched_plan_uses_proved_rediscovery(flow, tmp_path):
+    from test_setup_coordinator import start, finished
+    app, client, headers, calls, _, _, sftp = flow
+    wheel = tmp_path / PREVIOUS_ARTIFACT.filename
+    wheel.write_bytes(previous_payload())
+    prior = Deployment(app.state.connection, ReleaseBundle(wheel, PREVIOUS_SHA256))
+    document = prior.make_plan(PROFILE)
+    old_plan = sftp.path(prior.root + '/bootstrap/' + document['plan_digest'] + '/plan.json')
+    before = old_plan.read_bytes()
+    calls.clear()
+    assert start(client, headers).status_code == 202
+    status = finished(app)
+    assert status['state'] == 'completed', status
+    assert status['plan_digest'] != document['plan_digest']
+    assert old_plan.read_bytes() == before
+    assert not app.state.deployment.compatible
+    assert app.state.deployment.plan['artifact'] == asdict(app.state.deployment.release.artifact)
+    assert calls == ['service-plan', 'prepare', 'activate', 'download']
+
+
+@pytest.mark.parametrize('evidence', ['approval.json', 'composite-install.json'])
+def test_packaged_predecessor_ambiguous_launch_is_not_rediscovered(flow, tmp_path, evidence):
+    from test_setup_coordinator import start, finished
+    app, client, headers, calls, _, _, sftp = flow
+    wheel = tmp_path / PREVIOUS_ARTIFACT.filename
+    wheel.write_bytes(previous_payload())
+    prior = Deployment(app.state.connection, ReleaseBundle(wheel, PREVIOUS_SHA256))
+    document = prior.make_plan(PROFILE)
+    root = sftp.path(prior.root)
+    (root / 'bootstrap' / document['plan_digest'] / evidence).write_bytes(b'')
+    pointer = (root / 'config/deployment.json').read_bytes()
+    calls.clear()
+    assert start(client, headers).status_code == 202
+    status = finished(app)
+    assert status['state'] == 'failed'
+    assert status['error'] == 'compatible_retry_not_safe'
+    assert (root / 'config/deployment.json').read_bytes() == pointer
+    assert not calls  # Neither service observation nor privileged launch was allowed.

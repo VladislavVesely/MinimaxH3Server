@@ -15,7 +15,9 @@ and CSRF protection for POST. There is no caller-supplied command or log-path AP
 - `POST /api/v1/controller/setup/restore {}`: exact-release, observation-only discovery.
   Resolves the authenticated target root and reads saved records, without staging,
   prerequisite replan or remote service-plan execution (`service`/`service_digest`
-  are null). Missing deployment record returns `setup_not_found`; missing/malformed
+  are null). A subsequent explicit Install observes the omitted service contract
+  against the same root/plan digest before approving or recording a launch; inspection
+  alone never does so. Missing deployment record returns `setup_not_found`; missing/malformed
   plan records remain errors, not consent to create a new plan. Follow with events
   after browser/controller reload. Do not turn observation into a retry automatically.
 - `POST /api/v1/controller/setup/restore-compatible {}`: explicit narrow discovery of the audited
@@ -63,7 +65,10 @@ Times are target Unix seconds; ages are calculated on target to avoid controller
 clock skew. Null exit status is not success. Launch errors have an error and no
 exit code. Automatic retry metadata, when present, is
 `{attempt, reason, delay_seconds, at}`; it is distinct from eligibility below.
-Persisted output is a rolling **32 KiB UTF-8 tail**, not an audit archive. `offset`
+Persisted output is a rolling **32 KiB UTF-8 tail**, not an audit archive.
+Legacy raw-log reads discard the first line fragment when the bounded read starts
+inside the file, before redaction: a truncated credential prefix must never expose
+its value. An oversized line without a newline is omitted entirely. `offset`
 counts sanitized bytes; replace the browser tail when generation changes or bytes
 before `start_offset` expire. The API returns the entire bounded tail, allowing
 clients to replace it on every poll instead of merging. The object is safe copy/
@@ -147,6 +152,12 @@ completed-stage/service receipts and no active/conflicting deployment. No hostna
 user-specific plan digest or setup ID is hardcoded. Unknown releases, contract
 changes, active releases and invalid receipts fail closed. Error codes include
 `compatible_retry_contract_changed` and `compatible_retry_not_safe`.
+
+An audited-predecessor plan proved never launched is not a failed-stage recovery:
+explicit Install uses the existing stale-discovery path, repeating the complete
+unlaunched proof under ownership locks before replacing its discovery pointer.
+Failure to prove unlaunched does not permit replacement; only the independent
+approved failed-stage compatibility proof can allow diagnostic/retry recovery.
 
 This is not a general update migration, active-service conversion, or automatic
 resume of arbitrary historical failures. It does not establish why the original
