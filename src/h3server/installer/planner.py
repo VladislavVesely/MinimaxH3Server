@@ -8,7 +8,9 @@ import re
 import subprocess
 import os
 
-from h3server.backends import load_manifest
+from h3server.backends import load_manifest, get_profile, get_artifact_set
+from h3server.backends.catalog import PRUNED_PROFILE_NAMES
+from h3server.backends.comfy_runtime import CANDIDATE_REQUIREMENTS, provision_contract
 from h3server.probe import CommandResult, _os_release
 from h3server.store import ApprovalRequired, canonical_plan_digest
 
@@ -175,15 +177,17 @@ def inspect_prerequisites(run=inspect_local, *, sudo_password_available=False) -
                       sudo_password_available)
 
 
-def requirements():
+def requirements(profile=None):
+    if profile in PRUNED_PROFILE_NAMES:
+        return list(CANDIDATE_REQUIREMENTS)
     constraints = load_manifest()["candidate_environment"]["constraints"]
     return ["diffusers @ " + constraints["diffusers"]] + [name + spec for name, spec in constraints.items() if name != "diffusers"]
 
 
 def build_plan(inspection: Inspection, *, profile: str, artifact: ReleaseArtifact) -> dict:
     manifest = load_manifest()
-    if profile not in {p["name"] for p in manifest["profiles"]}:
-        raise ValueError("unknown experimental profile")
+    get_profile(profile)
+    selected = get_artifact_set(profile) if profile in PRUNED_PROFILE_NAMES else None
     blockers = list(inspection.issues)
     if inspection.version not in SUPPORTED.get(inspection.distribution, ()) or inspection.architecture != "x86_64":
         blockers.append("Supported installer matrix: Ubuntu 24.04/26.04, Debian 12/13, x86_64 only; this is not runtime certification.")
@@ -205,8 +209,9 @@ def build_plan(inspection: Inspection, *, profile: str, artifact: ReleaseArtifac
         "schema": 1, "purpose": "prerequisites" if discovery else "environment",
         "platform": {"distribution": inspection.distribution, "version": inspection.version, "architecture": inspection.architecture},
         "profile": profile, "profile_confidence": "experimental", "artifact": asdict(artifact),
-        "backend_revision": manifest["backend"]["revision"], "model_revision": manifest["model"]["revision"],
-        "license": manifest["license"], "requirements": requirements(),
+        "backend_revision": selected.runtime_sources[0].revision if selected else manifest["backend"]["revision"],
+        "model_revision": selected.artifacts[0].revision if selected else manifest["model"]["revision"],
+        "license": manifest["license"], "requirements": requirements(profile),
         "packages": list(inspection.packages), "package_changes": list(inspection.package_changes),
         "refresh_metadata": inspection.refresh_metadata,
         "driver_action": "preserve" if inspection.driver_working else "discover" if discovery else "install",
@@ -225,6 +230,14 @@ def build_plan(inspection: Inspection, *, profile: str, artifact: ReleaseArtifac
                     "Resolve candidate Python dependencies on target and record pip report/freeze; not a globally tested lock.",
                     "No service activation, model download or generation in this plan."],
     }
+    if selected:
+        p.update(runtime=provision_contract(profile), artifact_set_digest=selected.digest)
+        p['changes'] += [
+            'Provision only the listed pinned ComfyUI/GGUF sources in this digest environment; preserve upstream licenses. No ComfyUI service or custom-node discovery.',
+            'Native import/CUDA BF16/codec smoke gates readiness, not inference certification. NVFP4 requires positively identified Blackwell.',
+            'Selected weight inventory is separate: setup does NOT authorize or download weights. Present all auxiliary license disclosures before separate approval.',
+            'Known source bytes include tokenizer once. Package wheels, Git objects, unpacking and prior environments are additional unmeasured disk use; require output reserve and fail safely on exhaustion.'
+        ]
     validate_plan(p)
     return p
 
@@ -247,10 +260,20 @@ def validate_plan(plan):
     if any(plan[name] for name in ("installation_ready", "model_ready", "generation_tested")):
         raise ValueError("a proposed plan cannot assert readiness")
     m = load_manifest()
-    if plan.get("schema") != 1 or plan.get("requirements") != requirements() or plan.get("backend_revision") != m["backend"]["revision"] or plan.get("model_revision") != m["model"]["revision"] or plan.get("license") != m["license"]:
-        raise ValueError("unsupported plan or changed pinned backend requirements")
-    if plan.get("profile") not in {p["name"] for p in m["profiles"]}:
-        raise ValueError("unknown profile")
+    profile = plan.get('profile')
+    get_profile(profile)
+    selected = get_artifact_set(profile) if profile in PRUNED_PROFILE_NAMES else None
+    backend_revision = selected.runtime_sources[0].revision if selected else m['backend']['revision']
+    model_revision = selected.artifacts[0].revision if selected else m['model']['revision']
+    if (plan.get('schema') != 1 or plan.get('requirements') != requirements(profile)
+        or plan.get('backend_revision') != backend_revision or plan.get('model_revision') != model_revision
+        or plan.get('license') != m['license']):
+        raise ValueError('unsupported plan or changed pinned backend requirements')
+    if selected:
+        if plan.get('runtime') != provision_contract(profile) or plan.get('artifact_set_digest') != selected.digest:
+            raise ValueError('changed runtime or selected artifact contract')
+    elif 'runtime' in plan or 'artifact_set_digest' in plan:
+        raise ValueError('legacy plan cannot provision a pruned runtime')
     if plan.get("purpose") not in {"prerequisites", "environment"}:
         raise ValueError("unknown plan purpose")
     expected = ["system-packages", "replan"] if plan["purpose"] == "prerequisites" else ["system-packages", "environment", "dependencies", "verify"]

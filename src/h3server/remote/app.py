@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 from starlette.background import BackgroundTask
 
 from h3server.domain import GenerationSettings, H3_PROFILES, JobRequest
+from h3server.backends.catalog import PRUNED_PROFILE_NAMES
 from h3server.events import ReplayGap
 from h3server.paths import AppPaths
 from h3server.remote.worker import BackendUnavailable, QueueFull, Worker, _directory
@@ -40,7 +41,8 @@ class GenerationInput(BaseModel):
     """Canvas area<=1,032,192 is service policy, not an upstream hard maximum.
 
     Frames round UP to 17*n+5. Nominal 15 seconds is invalid after alignment.
-    Steps are sigma-grid points; denoising progress reports measured model calls.
+    Steps map to the runtime sampler (legacy default 50, pruned default 20).
+    Denoising progress reports actual stage-local work.
     """
     model_config = ConfigDict(extra="forbid", strict=True)
     prompt: Annotated[StrictStr, Field(min_length=1, max_length=16000)]
@@ -50,7 +52,8 @@ class GenerationInput(BaseModel):
     height: Annotated[StrictInt, Field(ge=32, le=1344)] = 768
     steps: Annotated[StrictInt, Field(ge=2, le=1000)] = 50
     seed: Annotated[StrictInt, Field(ge=0, le=2**63 - 1)] = 42
-    profile: Literal["h3-bf16-cpu-offload-experimental", "h3-int8-group-offload-experimental"] = H3_PROFILES[0]
+    profile: Literal["h3-bf16-cpu-offload-experimental", "h3-int8-group-offload-experimental",
+                     "h3-gguf-q4-k-m", "h3-gguf-q5-k-m", "h3-convrot-mixed", "h3-convrot-int8", "h3-nvfp4"] = H3_PROFILES[0]
     loras: Annotated[list[StrictStr], Field(max_length=8)] = Field(default_factory=list)
     sparse_attention: StrictBool | None = None
 
@@ -70,8 +73,11 @@ class GenerationInput(BaseModel):
 
     def to_request(self) -> JobRequest:
         frames = self.num_frames if self.num_frames is not None else (self.duration * 24 if self.duration is not None else 124)
+        if self.profile in PRUNED_PROFILE_NAMES:
+            frames = max(5, round(frames))
         aligned = math.ceil((frames - 5) / 17) * 17 + 5
-        settings = GenerationSettings(aligned, self.width, self.height, self.steps, self.seed, self.profile)
+        steps = 20 if self.profile in PRUNED_PROFILE_NAMES and 'steps' not in self.model_fields_set else self.steps
+        settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile)
         return JobRequest(self.prompt, tuple(self.loras), self.sparse_attention, settings)
 
 
@@ -104,6 +110,9 @@ def _job_data(store, job):
     value = asdict(job)
     if job.request.settings is not None:
         value["effective_duration"] = job.request.settings.duration
+        s = job.request.settings
+        value['effective_geometry'] = dict(width=s.width, height=s.height, num_frames=s.num_frames,
+                                           fps=24, duration=s.duration)
     value["output"] = asdict(output) if output else None
     return value
 
@@ -195,14 +204,16 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     @app.get("/api/v1/capabilities")
     def capabilities():
         reasons = worker.readiness()
-        return {"backend": "diffusers-minimax-h3-t2va", "runtime_ready": not reasons,
+        return {"backend": worker.backend.runtime_id, "runtime_ready": not reasons,
                 "not_ready_reasons": reasons, "generation_tested": False,
-                "source_support": {"lora": "supported", "sparse_attention": "unsupported"},
+                "source_support": {name: getattr(worker.backend.capabilities, name).status.value
+                                   for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
-                "profiles": H3_PROFILES, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
+                "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
                                    "canvas_pixels": 1344 * 768, "steps_min": 2, "steps_max": 1000,
+                                   "steps_default": 20 if worker.backend.runtime_id.startswith('comfyui-h3-') else 50,
                                    "pending_jobs": worker.queue_limit, "max_output_bytes": worker.max_output_bytes}}
 
     @app.post("/api/v1/jobs", status_code=202)

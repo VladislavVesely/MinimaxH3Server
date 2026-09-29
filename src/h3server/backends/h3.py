@@ -59,6 +59,8 @@ def parse_request(value):
     if type(value["settings"]) is not dict or set(value["settings"]) != set(asdict(GenerationSettings())):
         raise ValueError("unknown or missing settings")
     settings = GenerationSettings(**value["settings"])
+    if settings.profile not in H3_PROFILES:
+        raise ValueError("legacy adapter requires a legacy profile")
     request = JobRequest(value["prompt"], tuple(loras), value["sparse_attention"], settings)
     request.validate_capabilities(CAPABILITIES)
     if loras and settings.profile == H3_PROFILES[1]:
@@ -444,8 +446,10 @@ class RuntimeReadiness:
     60s; each execution independently rechecks consent, full hashes and runtime.
     No saved report is trusted as proof of the current installed environment.
     """
-    def __init__(self, paths):
+    def __init__(self, paths, *, profile=None, command=None):
         self.paths = paths
+        self.profile = profile
+        self.command = command or (sys.executable, "-m", "h3server.backends.h3")
         self.report = {"environment_ready": False, "model_ready": False, "model_loaded": False, "generation_tested": False,
                        "issues": ["Runtime/model diagnostic has not run"]}
         self.lock = threading.Lock()
@@ -457,7 +461,7 @@ class RuntimeReadiness:
             env = {key: os.environ[key] for key in ("PATH", "LANG", "LD_LIBRARY_PATH", "CUDA_VISIBLE_DEVICES") if key in os.environ}
             env.update(self.paths.cache_environment())
             env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-            result = subprocess.run([sys.executable, "-m", "h3server.backends.h3", "--diagnose", "--root", str(self.paths.root)],
+            result = subprocess.run([*self.command, "--diagnose", "--root", str(self.paths.root)],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, timeout=1800, check=False)
             if result.returncode or len(result.stdout) > 16384:
                 raise ValueError("diagnostic failed")
@@ -475,7 +479,7 @@ class RuntimeReadiness:
 
     def __call__(self):
         try:
-            require_consent(self.paths)
+            require_consent(self.paths, profile_name=self.profile)
         except (OSError, ValueError):
             return ("Persisted model download/license/eligibility consent is required",)
         with self.lock:

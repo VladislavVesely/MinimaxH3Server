@@ -23,6 +23,7 @@ def configuration(argv=None):
     parser.add_argument("--root")
     parser.add_argument("--config")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--profile")
     args = parser.parse_args(argv)
     config = {}
     if args.config:
@@ -41,6 +42,10 @@ def configuration(argv=None):
     config.pop("port", None)
     if type(port) is not int or not 1 <= port <= 65535 or not isinstance(root, str):
         raise ValueError("invalid root or port")
+    if args.profile is not None:
+        from h3server.backends import get_profile
+        get_profile(args.profile)
+        config['profile'] = args.profile
     return root, port, config
 
 

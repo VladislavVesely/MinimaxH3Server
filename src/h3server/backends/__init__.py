@@ -40,3 +40,23 @@ def get_profile(profile_name: str) -> Profile:
             return profile
     get_artifact_set(profile_name)  # supplies the unavailable/unknown explanation
     raise ValueError("unknown profile")
+
+
+def select_backend(paths, *, profile=None):
+    """Release-owned active selection; no model/runtime auto-discovery or fallback."""
+    from h3server.domain import H3_PROFILES
+    if profile is None or profile in H3_PROFILES:
+        from h3server.backends.h3 import backend
+        result = backend(paths)
+        if profile is not None:
+            from dataclasses import replace
+            original = result.validate_request
+            def validate(request):
+                original(request)
+                if request.settings.profile != profile:
+                    raise ValueError('request differs from active profile')
+            result = replace(result, profiles=(profile,), validate_request=validate)
+        return result
+    get_artifact_set(profile)
+    from h3server.backends.pruned import backend
+    return backend(paths, profile)

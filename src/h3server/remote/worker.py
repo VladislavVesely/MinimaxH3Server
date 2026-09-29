@@ -1,6 +1,8 @@
 """Single-process scheduler and isolated, bounded JSONL backend protocol.
 
-Task10 adapter contract: ``python -m h3server.backends.h3 --request PATH``.
+Adapter contract: ``python -m h3server.backends.h3 --request PATH`` (legacy),
+or ``python -m h3server.backends.pruned --profile NAME --request PATH``.
+An approved active profile selects one backend; requests never switch runtimes.
 PATH is a daemon-created 0600 JSON document with schema_version=1, job_id,
 request (prompt, loras, sparse_attention, normalized settings), output_path and
 root. The adapter must use local verified artifacts, enforce persisted license
@@ -38,7 +40,7 @@ import threading
 import time
 from typing import Callable
 
-from h3server.domain import Capabilities, Event, JobRequest, JobStatus
+from h3server.domain import Capabilities, Event, JobRequest, JobStatus, H3_PROFILES
 from h3server.events import decode_event
 from h3server.paths import AppPaths
 from h3server.store import OutputMetadata, QueueFull, Store
@@ -97,6 +99,8 @@ class Backend:
     validate_video: Callable[[int], bool] = validate_mp4
     validate_request: Callable[[JobRequest], None] = lambda request: None
     diagnostics: Callable[[], dict] = lambda: {}
+    runtime_id: str = 'diffusers-minimax-h3-t2va'
+    profiles: tuple[str, ...] = H3_PROFILES
 
 
 def _job_id(value: str) -> str:
@@ -124,7 +128,8 @@ class Worker:
     def __init__(self, store: Store, paths: AppPaths, *, backend: Backend | None = None,
                  queue_limit: int = 8, max_output_bytes: int = 4 * 1024**3,
                  min_free_bytes: int = 1024**3, retention_seconds: float = 7 * 86400,
-                 retained_bytes: int = 20 * 1024**3, max_runtime_seconds: float = 6 * 3600):
+                 retained_bytes: int = 20 * 1024**3, max_runtime_seconds: float = 6 * 3600,
+                 profile: str | None = None):
         for value in (queue_limit, max_output_bytes, retained_bytes):
             if type(value) is not int or value < 1:
                 raise ValueError("worker limits must be positive integers")
@@ -135,8 +140,8 @@ class Worker:
                 raise ValueError("worker durations must be positive and finite")
         self.store, self.paths = store, paths
         if backend is None:
-            from h3server.backends.h3 import backend as h3_backend
-            backend = h3_backend(paths)
+            from h3server.backends import select_backend
+            backend = select_backend(paths, profile=profile)
         self.backend = backend
         self.queue_limit, self.max_output_bytes = queue_limit, max_output_bytes
         self.min_free_bytes, self.retention_seconds = min_free_bytes, retention_seconds
@@ -347,7 +352,7 @@ class Worker:
     def _cleanup_partial(self, job_id: str):
         try:
             with _directory(self.paths.root, "tmp", "jobs", _job_id(job_id)) as directory:
-                for name in ("request.json", "video.mp4"):
+                for name in ("request.json", "video.mp4", "partial.mp4"):
                     try:
                         os.unlink(name, dir_fd=directory)
                     except FileNotFoundError:
@@ -377,7 +382,8 @@ class Worker:
         names = ("PATH", "LANG", "LC_ALL", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH")
         result = {key: os.environ[key] for key in names if key in os.environ}
         result.update(self.paths.cache_environment())
-        result.update({"HOME": str(self.paths.root), "PYTHONUNBUFFERED": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        result.update({"HOME": str(self.paths.root), "PYTHONUNBUFFERED": "1", "PYTHONNOUSERSITE": "1",
+                       "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
         return result
 
     def _execute(self, job):
@@ -436,9 +442,14 @@ class Worker:
                 if self.store.get_job(job.job_id).status is JobStatus.RUNNING:
                     self.store.transition_job(job.job_id, JobStatus.FAILED)
         finally:
-            self._terminate(process)
-            if process is not None and process.stdout is not None:
-                process.stdout.close()
+            try:
+                self._terminate(process)
+            finally:
+                # Even a native/process termination error must close our pipe.
+                # Propagate the error, retaining ownership/process state so stop
+                # or service recovery can retry; do not silently orphan it.
+                if process is not None and process.stdout is not None:
+                    process.stdout.close()
             with self._lock:
                 if self.store.get_job(job.job_id).status is not JobStatus.COMPLETED:
                     self._cleanup_partial(job.job_id)
@@ -491,7 +502,14 @@ class Worker:
 
     def _open_output(self, job_id, *, allow_empty=False):
         with _directory(self.paths.root, "tmp", "jobs", _job_id(job_id)) as directory:
-            fd = os.open("video.mp4", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            try:
+                fd = os.open("video.mp4", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                if not allow_empty:
+                    raise
+                # Pruned mux atomically publishes only after validation. Enforce
+                # the same live byte limit on its unfinished MP4 as legacy output.
+                fd = os.open("partial.mp4", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not (0 if allow_empty else 1) <= info.st_size <= self.max_output_bytes:
             os.close(fd)

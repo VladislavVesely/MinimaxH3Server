@@ -150,6 +150,11 @@ class Activation:
         readiness = json.loads((environment / 'readiness.json').read_text())
         if readiness.get('environment_ready') is not True or not (environment / 'resolved.txt').is_file():
             raise ValueError('verified environment and resolved dependency record required')
+        if plan.get('runtime') is not None:
+            from h3server.backends.comfy_runtime import runtime_record
+            resolved = (environment / 'resolved.txt').read_text()
+            if read_json(paths, f'environments/{digest}/runtime.json') != runtime_record(plan['profile'], resolved):
+                raise ValueError('candidate runtime differs from approved profile')
         self.io.preflight(environment / 'bin/python')
         previous = active_release(paths)
         unit = render_units(paths, plan)['h3server.service']
@@ -196,6 +201,8 @@ class Activation:
                 'model_revision': plan['model_revision'], 'resolved_dependencies': str(environment / 'resolved.txt'),
                 'resolved_sha256': hashlib.sha256((environment / 'resolved.txt').read_bytes()).hexdigest(),
                 'dependency_status': 'target-resolved; not a portable transitive hash lock'}
+            if plan.get('runtime') is not None:
+                runtime_document.update(runtime=plan['runtime'], artifact_set_digest=plan['artifact_set_digest'])
             runtime_path = f"releases/{plan['artifact']['release_id']}/runtime-{digest}.json"
             try:
                 if read_json(paths, runtime_path) != runtime_document:
@@ -378,7 +385,8 @@ def main():
     if args.action == 'download':
         record_consent(paths, license_sha256=data.get('license_sha256'),
             license_acknowledged=data.get('license_acknowledged'), eligibility_confirmed=data.get('eligibility_confirmed'),
-            download_approved=data.get('download_approved'))
+            download_approved=data.get('download_approved'), profile_name=plan['profile'],
+            artifact_set_digest=data.get('artifact_set_digest'))
     if args.action == 'activate' and (data.get('activation_approved') is not True or data.get('policy') not in {'reject', 'drain', 'cancel'}
                                     or (data['policy'] == 'cancel' and data.get('cancel_confirmed') is not True)):
         raise ValueError('activation approval required')
@@ -421,7 +429,8 @@ def main():
                         return read_json(paths, 'state/download-cancel.json')['operation'] == operation
                     except FileNotFoundError:
                         return False
-                download_model(paths, emit=lambda event: store.append_event('setup', setup.setup_id, event), cancelled=cancelled)
+                download_model(paths, emit=lambda event: store.append_event('setup', setup.setup_id, event), cancelled=cancelled,
+                               profile_name=plan['profile'])
             record['state'] = 'completed'
             store.append_event('setup', setup.setup_id, Event(args.action, StageStatus.COMPLETED, 'Operation completed; model loading and generation require separate validation.'))
         except DownloadCancelled:

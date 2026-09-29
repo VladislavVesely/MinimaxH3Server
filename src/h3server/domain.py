@@ -145,7 +145,8 @@ class GenerationSettings:
     """Normalized H3 settings. Canvas/step caps are service resource policy.
 
     Both orientations fit the default canvas area; these are not assertions of
-    upstream explicit-input maxima. Steps count sigma points, not model calls.
+    upstream explicit-input maxima. Steps map to the selected runtime's sampler;
+    progress reports actual stage-local work rather than assuming model calls.
     """
 
     num_frames: int = 124
@@ -167,8 +168,10 @@ class GenerationSettings:
             raise ValueError("canvas exceeds service pixel-area limit")
         if not 2 <= self.steps <= 1000 or not 0 <= self.seed <= 2**63 - 1:
             raise ValueError("steps or seed outside service bounds")
-        if self.profile not in H3_PROFILES:
-            raise ValueError("unknown H3 profile")
+        # Lazy catalog lookup avoids domain/catalog import cycles and preserves
+        # the legacy defaults; an explicit selected profile never falls back.
+        from h3server.backends import get_profile
+        get_profile(self.profile)
 
     @property
     def duration(self) -> float:

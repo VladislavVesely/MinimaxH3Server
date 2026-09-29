@@ -82,7 +82,7 @@ class ProcessIO:
 def environment(paths):
     # Ignore user pip/Python configuration; preserve HOME and ordinary OS locale
     # information without allowing PYTHONPATH/PIP_TARGET to escape the app root.
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "PYTHON"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "PYTHON", "GIT_"))}
     env.update(paths.cache_environment())
     env.update(LC_ALL="C", PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1",
                PIP_NO_INPUT="1", PYTHONNOUSERSITE="1", GIT_CONFIG_NOSYSTEM="1",
@@ -222,6 +222,8 @@ class Steps:
         }, sort_keys=True) + "\n")
 
     def dependencies(self):
+        if self.plan.get('runtime') is not None:
+            return self.pruned_dependencies()
         wheel = artifact_path(self.paths, self.plan)
         self.run(self.python, "-m", "pip", "install", "--index-url", "https://pypi.org/simple",
                  "--only-binary=:all:", "--report", str(self.directory / "resolution.json"), str(wheel), *self.plan["requirements"])
@@ -231,9 +233,48 @@ class Steps:
             raise CommandFailure("dependency resolution produced no installed versions")
         atomic_text(self.directory / "resolved.txt", frozen)
 
+    def pruned_dependencies(self):
+        from h3server.backends.comfy_runtime import verify_sources, runtime_record
+        import shutil
+        contract = self.plan['runtime']
+        if shutil.disk_usage(self.paths.root).free < contract['source_bytes'] + contract['output_reserve_bytes']:
+            raise CommandFailure('insufficient source/output reserve; dependency disk use is additional')
+        # A prior successful resolution is reused on retry; candidate source and
+        # direct constraints remain approval-bound. All IO stays under AppPaths.
+        for source in contract['sources']:
+            dest = self.directory / source['directory']
+            if dest.is_symlink() or not dest.resolve().is_relative_to(self.directory):
+                raise CommandFailure('runtime source escapes environment')
+            self.run('git', 'init', str(dest))
+            self.run('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
+                     'fetch', '--depth=1', '--no-tags', 'https://github.com/' + source['repository'] + '.git', source['revision'])
+            self.run('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
+                     'checkout', '--detach', source['revision'])
+        verify_sources(self.directory, self.plan['profile'])
+        args = []
+        for source in contract['sources']:
+            args.extend(('-r', str(self.directory / source['directory'] / 'requirements.txt')))
+        resolved = self.directory / 'resolved.txt'
+        if resolved.exists():
+            args.extend(('-c', str(resolved)))
+        wheel = artifact_path(self.paths, self.plan)
+        self.run(self.python, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
+                 '--only-binary=:all:', '--report', str(self.directory / 'resolution.json'),
+                 str(wheel), *self.plan['requirements'], *args)
+        self.run(self.python, '-m', 'pip', 'check')
+        frozen = self.run(self.python, '-m', 'pip', 'freeze', '--all', capture=True)
+        if not frozen.strip():
+            raise CommandFailure('dependency resolution produced no installed versions')
+        atomic_text(resolved, frozen)
+        atomic_text(self.directory / 'runtime.json', json.dumps(runtime_record(self.plan['profile'], frozen), sort_keys=True))
+
     def verify(self):
         self.run(self.python, "-m", "pip", "check")
-        self.run(self.python, "-c", PREFLIGHT)
+        if self.plan.get('runtime') is not None:
+            self.run(self.python, '-m', 'h3server.backends.pruned', '--diagnose', '--environment-only',
+                     '--root', str(self.paths.root), '--profile', self.plan['profile'])
+        else:
+            self.run(self.python, "-c", PREFLIGHT)
         atomic_text(self.directory / "readiness.json", json.dumps({
             "environment_ready": True, "model_ready": False, "generation_tested": False,
         }, sort_keys=True) + "\n")

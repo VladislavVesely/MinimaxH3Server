@@ -181,6 +181,10 @@ def render_units(paths, plan):
         if plan['deployment_config'] != expected:
             raise ValueError('deployment config must use the approved root and loopback API port')
         config = ' --config ' + _quote(wheel.parent / 'daemon.json', exec_value=True)
+    if plan.get('runtime') is not None:
+        # Selection is in the approved unit even before activation/reboot resume;
+        # never depend on an old active-release pointer for runtime dispatch.
+        config += ' --profile ' + _quote(plan['profile'], exec_value=True)
     daemon = substitute(DAEMON_UNIT, {'ROOT': _quote(paths.root, exec_value=True), 'CONFIG': config,
                                      'PYTHON': _quote(python, exec_value=True),
                                      'READINESS': _scalar_path(python.parent.parent / 'readiness.json'),
