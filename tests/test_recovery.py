@@ -339,69 +339,164 @@ def test_real_detached_launcher_closes_inherited_pipes(tmp_path):
     assert int(marker.read_text()) != os.getsid(0)
 
 
-def test_python_absent_password_prerequisites_fixed_stdin_contract(tmp_path, monkeypatch):
+# Rootless subprocess harness: real /bin/sh and pipes, simulated package/sudo
+# binaries. On Linux, flock/setsid/dd are the real OS tools; macOS substitutes
+# only those Linux-specific utilities. This is NOT native systemd/VM acceptance.
+@pytest.fixture
+def prerequisite_machine(tmp_path, monkeypatch):
+    import os
+    import select
+    import shutil
+    import sys
+    import time
     from test_ssh import trusted_connection
-    from h3server.probe import CommandResult
-    paths, p, store = prepared(tmp_path, python_ready=False, sudo_available=False,
-                              sudo_password_available=True, packages=('python3=3.12', 'python3-venv=3.12'),
-                              package_changes=('Inst python3 (3.12 Ubuntu [amd64])', 'Inst python3-venv (3.12 Ubuntu [amd64])'))
-    network, connection = trusted_connection(tmp_path)
-    calls, files = [], {}
-    installed = [False]
-    class File:
-        def __init__(self, name): self.name = name
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-        def write(self, value): files[self.name] = value
-        def flush(self): pass
-    class SFTP:
-        def open(self, name, mode): return File(name)
-        def chmod(self, *args): pass
-        def posix_rename(self, source, target): files[target] = files.pop(source)
-        def close(self): pass
-    monkeypatch.setattr(connection, 'open_sftp', SFTP)
-    def execute(command, timeout, *, stdin=b'', suppress_output=False):
-        calls.append((command, stdin, suppress_output))
-        if 'cat /etc/os-release' in command: return CommandResult('ID=ubuntu\nVERSION_ID="24.04"')
-        if 'uname -m' in command: return CommandResult('x86_64')
-        if 'dpkg-query' in command: return CommandResult('install ok installed\t3.12\n' if installed[0] else '')
-        if 'apt-get -s' in command:
-            return CommandResult('' if installed[0] else '\n'.join(p['package_changes']))
-        if 'apt-get -y' in command: installed[0] = True
-        return CommandResult('')
-    monkeypatch.setattr(connection, '_execute', execute)
-    result = connection.install_prerequisites(root='/home/test/app', plan=p,
-                    approval=approval(p, privileged=True), sudo_password='only-stdin')
-    assert result == 'waiting_for_replan' and installed[0]
-    mutating = [c for c in calls if 'sudo' in c[0]]
-    assert mutating and all(c[1] == b'only-stdin\n' for c in mutating)
-    assert all(c[2] for c in mutating)
-    assert all('only-stdin' not in c[0] for c in calls)
-    assert all('only-stdin' not in str(data) for data in files.values())
-    assert all('flock -n' in c[0] and 'setsid --wait' in c[0] for c in mutating)
-    count = sum('apt-get -y' in c[0] for c in calls)
-    connection.install_prerequisites(root='/home/test/app', plan=p,
-                    approval=approval(p, privileged=True), sudo_password='only-stdin')
-    assert sum('apt-get -y' in c[0] for c in calls) == count
-    assert any(name.endswith('/approval.json') for name in files)
-    for error in ['wrong password', 'requiretty policy denial', 'transport-error']:
-        def denied(command, timeout, *, stdin=b'', suppress_output=False):
-            if 'sudo' in command:
-                return CommandResult('only-stdin ' + error, returncode=None, error='transport-error')
-            return execute(command, timeout, stdin=stdin, suppress_output=suppress_output)
-        monkeypatch.setattr(connection, '_execute', denied)
-        with pytest.raises(CommandFailure) as failure:
-            connection.install_prerequisites(root='/home/test/app', plan=p,
-                        approval=approval(p, privileged=True), sudo_password='only-stdin')
-        assert 'only-stdin' not in str(failure.value) and error not in str(failure.value)
-        assert 'waiting_for_replan' not in calls[-1][0]
-    before = len(calls)
-    with pytest.raises(ApprovalRequired):
-        connection.install_prerequisites(root='/home/test/app', plan=p,
-                    approval=approval(p, privileged=False), sudo_password='only-stdin')
-    assert len(calls) == before
-    connection.close()
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    machine = tmp_path / 'machine'
+    machine.mkdir()
+    script = '''import os,sys,time,fcntl
+from pathlib import Path
+name=Path(sys.argv[0]).name; args=sys.argv[1:]; root=Path(os.environ['H3_TEST_MACHINE'])
+if name=='setsid': os.execvp(args[1],args[1:])
+if name=='flock':
+    fd=os.open(args[3],os.O_CREAT|os.O_RDWR,0o600)
+    try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(75)
+    os.set_inheritable(fd,True); os.execvp(args[4],args[4:])
+if name=='dd':
+    size=int(args[0].split('=')[1]); data=b''
+    while len(data)<size:
+        part=os.read(0,size-len(data))
+        if not part: break
+        data+=part
+    written=0
+    try:
+        while written<len(data): written+=os.write(1,data[written:])
+    except BrokenPipeError: pass
+    for count,direction in [(len(data),'in'),(written,'out')]:
+        sys.stderr.write(('1+0' if count==size else '0+1')+' records '+direction+'\\n')
+    sys.exit(0 if len(data)==size and written==size else 1)
+if name=='sudo':
+    with (root/'sudo-argv').open('a') as log: log.write(repr(args)+'\\n')
+    os.closerange(3,256)  # emulate sudo's closefrom boundary
+    mode=(root/'auth').read_text()
+    if mode=='reject': sys.exit(1)
+    if mode in ['accept','wrong']:
+        data=b''
+        while not data.endswith(b'\\n'):
+            part=os.read(0,1)
+            if not part: break
+            data+=part
+        if mode=='wrong' or data!=b'only-stdin\\n':
+            print('H3DONE '+'0'*32+' 0', flush=True)
+            print(data.decode(errors='replace'), file=sys.stderr)
+            sys.exit(1)
+    os.execvp(args[args.index('--')+1],args[args.index('--')+1:])
+if name=='cat':
+    if args==['/etc/os-release']: print('ID=ubuntu\\nVERSION_ID="24.04"'); sys.exit()
+    os.execv('/bin/cat',['cat',*args])
+if name=='uname': print('x86_64'); sys.exit()
+if name=='dpkg-query':
+    if (root/'installed').exists(): print('install ok installed\\t1')
+    else: sys.exit(1)
+if name=='apt-get':
+    if '-s' in args:
+        (root/'simulated').touch()
+        end=time.monotonic()+8
+        while (root/'simhold').exists() and not (root/'simrelease').exists() and time.monotonic()<end: time.sleep(.01)
+        print('H3DONE '+'0'*32+' 0')  # ordinary output cannot forge a per-request nonce
+        if not (root/'installed').exists(): print('Inst git (1 Debian [amd64])')
+    if '-y' in args:
+        assert os.read(0,100)==b'', 'credential reached package operation'
+        (root/'mutating').write_text(str(os.getpid()))
+        end=time.monotonic()+8
+        while (root/'hold').exists() and not (root/'release').exists() and time.monotonic()<end: time.sleep(.01)
+        (root/'installed').write_text('yes')
+        with (root/'installs').open('a') as log: log.write('installed\\n')
+'''
+    for name in ['setsid', 'flock', 'dd', 'sudo', 'cat', 'uname', 'dpkg', 'dpkg-query', 'apt-get']:
+        if name in {'setsid', 'flock', 'dd'} and sys.platform == 'linux' and shutil.which(name):
+            continue
+        file = tools / name
+        file.write_text('#!' + sys.executable + '\n' + script)
+        file.chmod(0o700)
+    (machine / 'auth').write_text('accept')
+    processes, connections = [], []
+    class Channel:
+        def __init__(self): self.eof = set()
+        def settimeout(self, timeout): pass
+        def exec_command(self, command):
+            self.process = subprocess.Popen(('/bin/sh', '-c', command), stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'], 'H3_TEST_MACHINE': str(machine)})
+            processes.append(self.process)
+        def send(self, data):
+            return os.write(self.process.stdin.fileno(), data)
+        def shutdown_write(self):
+            if not self.process.stdin.closed: self.process.stdin.close()
+        def close(self): self.shutdown_write()
+        def ready(self, stream):
+            return stream not in self.eof and bool(select.select([stream], [], [], 0)[0])
+        def receive(self, stream, size):
+            value = os.read(stream.fileno(), size)
+            if not value: self.eof.add(stream)
+            return value
+        def recv_ready(self): return self.ready(self.process.stdout)
+        def recv_stderr_ready(self): return self.ready(self.process.stderr)
+        def recv(self, size): return self.receive(self.process.stdout, size)
+        def recv_stderr(self, size): return self.receive(self.process.stderr, size)
+        def exit_status_ready(self): return self.process.poll() is not None
+        def recv_exit_status(self): return self.process.wait()
+    def connect():
+        _, connection = trusted_connection(tmp_path / ('client' + str(len(connections))))
+        monkeypatch.setattr(connection._transport, 'open_session', lambda **kw: Channel())
+        connections.append(connection)
+        return connection
+    try:
+        yield machine, connect, Channel, processes
+    finally:
+        (machine / 'release').touch()
+        (machine / 'simrelease').touch()
+        for process in processes:
+            if not process.stdin.closed: process.stdin.close()
+            try: process.wait(timeout=10)
+            except subprocess.TimeoutExpired: process.kill(); process.wait()
+            process.stdout.close(); process.stderr.close()
+        for connection in connections: connection.close()
 
+
+def test_python_absent_password_prerequisites_fixed_stdin_contract(tmp_path, prerequisite_machine):
+    machine, connect, _, _ = prerequisite_machine
+    paths, p, _ = prepared(tmp_path / 'target', python_ready=False, sudo_available=False,
+                           sudo_password_available=True, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    connection = connect()
+    for _ in range(2):
+        assert connection.install_prerequisites(root=str(paths.root), plan=p,
+                    approval=approval(p, privileged=True), sudo_password='only-stdin') == 'waiting_for_replan'
+    assert (machine / 'installs').read_text() == 'installed\n'
+    stage = paths.bootstrap / canonical_plan_digest(p)
+    assert (stage / 'status').read_text().strip() == 'waiting_for_replan'
+    assert json.loads((stage / 'approval.json').read_text())['privileged'] is True
+    for file in [*stage.iterdir(), machine / 'sudo-argv']:
+        assert b'only-stdin' not in file.read_bytes()
+    for mode in ['nopasswd', 'wrong', 'reject']:
+        (machine / 'auth').write_text(mode)
+        if mode == 'nopasswd':
+            (machine / 'installed').unlink()
+            # Max UTF-8 frame, with no auth prompt: the real approved-operation
+            # stand-in asserts that its stdin is empty, never this credential.
+            assert connection.install_prerequisites(root=str(paths.root), plan=p,
+                        approval=approval(p, privileged=True), sudo_password='😀' * 4096) == 'waiting_for_replan'
+            for file in [*stage.iterdir(), machine / 'sudo-argv']:
+                assert '😀'.encode() not in file.read_bytes()
+        else:
+            with pytest.raises(CommandFailure):
+                connection.install_prerequisites(root=str(paths.root), plan=p,
+                        approval=approval(p, privileged=True), sudo_password='only-stdin')
+    with pytest.raises(ApprovalRequired):
+        connection.install_prerequisites(root=str(paths.root), plan=p,
+                    approval=approval(p), sudo_password='only-stdin')
 
 def test_connect_deadline_includes_dns_and_discards_late_socket(tmp_path):
     from h3server.controller.ssh import SSHConnection
@@ -449,3 +544,260 @@ def test_service_environment_symlink_cannot_escape_root(tmp_path):
     (paths.environments / canonical_plan_digest(p)).symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match='escapes'):
         recovery.render_units(paths, p)
+
+
+@pytest.mark.parametrize('name', ['ordinary', 'space % dollar$ quote" slash\\segment'])
+def test_systemd_scalar_paths_are_not_exec_arguments(tmp_path, name):
+    paths, p, _ = prepared(tmp_path / name)
+    unit = recovery.render_units(paths, p)['h3server.service']
+    values = dict(line.split('=', 1) for line in unit.splitlines() if '=' in line)
+    assert values['WorkingDirectory'] == str(paths.root).replace('%', '%%')
+    readiness = paths.environments / canonical_plan_digest(p) / 'readiness.json'
+    assert values['ConditionPathExists'] == str(readiness).replace('%', '%%')
+    assert values['ExecStart'].startswith('"')
+
+
+def test_native_systemd_parser_without_activation(tmp_path):
+    import shutil
+    import sys
+    if sys.platform != 'linux' or not shutil.which('systemd-analyze'):
+        pytest.skip('native systemd parser unavailable; this is not Linux unit validation')
+    paths, p, _ = prepared(tmp_path / 'space % dollar$ quote"')
+    directory = paths.environments / canonical_plan_digest(p)
+    (directory / 'bin').mkdir(parents=True)
+    (directory / 'bin/python').symlink_to(sys.executable)
+    (directory / 'readiness.json').write_text('{}')
+    units = []
+    for name, text in recovery.render_units(paths, p).items():
+        unit = tmp_path / name
+        unit.write_text(text)
+        units.append(str(unit))
+    result = subprocess.run(('systemd-analyze', 'verify', '--man=no', *units),
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert 'not absolute' not in result.stderr and 'ignoring' not in result.stderr.lower()
+
+
+def test_prerequisites_reject_second_connection_before_any_checkpoint_or_check(tmp_path, monkeypatch):
+    """Pause A after simulation; B must not stage or simulate before A mutates."""
+    from test_ssh import trusted_connection
+    from contextlib import contextmanager
+    from h3server.probe import CommandResult
+    from h3server.installer.runner import InstallerBusy
+    paths, p, _ = prepared(tmp_path, python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    _, first = trusted_connection(tmp_path / 'first')
+    _, second = trusted_connection(tmp_path / 'second')
+    gate = threading.Lock()
+    simulated, release = threading.Event(), threading.Event()
+    calls, errors = [], []
+    class Transaction:
+        def run(self, argv, *, capture=False):
+            calls.append(argv)
+            if argv == ('cat', '/etc/os-release'): return 'ID=ubuntu\nVERSION_ID="24.04"'
+            if argv == ('uname', '-m'): return 'x86_64'
+            if argv[0] == 'dpkg-query': return 'install ok installed\t1\n' if ('install',) in calls else ''
+            if argv[:2] == ('apt-get', '-s'):
+                simulated.set()
+                assert release.wait(3)
+                return 'Inst git (1 Debian [amd64])'
+            if 'apt-get' in argv and '-y' in argv: calls.append(('install',))
+            return ''
+        def finish(self): calls.append(('finish',))
+    @contextmanager
+    def transaction(*args, **kwargs):
+        if not gate.acquire(blocking=False): raise InstallerBusy('prerequisite transaction busy')
+        try:
+            calls.append(('stage-approved-inputs',))
+            yield Transaction()
+        finally:
+            gate.release()
+    # Old per-command implementation ignores the transaction boundary and will
+    # produce no valid platform result, demonstrating the missing exclusion.
+    for connection in (first, second):
+        monkeypatch.setattr(connection, '_prerequisite_transaction', transaction, raising=False)
+        monkeypatch.setattr(connection, '_execute', lambda *a, **k: CommandResult(''))
+        monkeypatch.setattr(connection, 'open_sftp', lambda: (_ for _ in ()).throw(RuntimeError('unlocked staging')))
+    def run_first():
+        try: first.install_prerequisites(root='/home/test/app', plan=p, approval=approval(p, privileged=True))
+        except Exception as e: errors.append(e)
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    try:
+        assert simulated.wait(2), errors
+        before = list(calls)
+        with pytest.raises(InstallerBusy):
+            second.install_prerequisites(root='/home/test/app', plan=p, approval=approval(p, privileged=True))
+        assert calls == before
+    finally:
+        release.set()
+        thread.join(4)
+        first.close()
+        second.close()
+    assert not errors
+    assert calls.count(('install',)) == calls.count(('stage-approved-inputs',)) == 1
+
+
+def _wait_for_file(path):
+    import time
+    deadline = time.monotonic() + 5
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert path.exists(), path
+
+
+def test_real_guardian_two_connections_exclude_simulation_to_mutation_gap(tmp_path, prerequisite_machine):
+    from h3server.installer.runner import InstallerBusy
+    machine, connect, _, _ = prerequisite_machine
+    paths, p, _ = prepared(tmp_path / 'target', python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    first, second = connect(), connect()
+    (machine / 'simhold').touch()
+    errors = []
+    def install():
+        try:
+            first.install_prerequisites(root=str(paths.root), plan=p, approval=approval(p, privileged=True), sudo_password='only-stdin')
+        except Exception as e: errors.append(e)
+    thread = threading.Thread(target=install)
+    thread.start()
+    try:
+        _wait_for_file(machine / 'simulated')
+        stage = paths.bootstrap / canonical_plan_digest(p)
+        before = {file.name: (file.read_bytes(), file.stat().st_mtime_ns) for file in stage.iterdir()}
+        with pytest.raises(InstallerBusy):
+            second.install_prerequisites(root=str(paths.root), plan=p, approval=approval(p, privileged=True), sudo_password='only-stdin')
+        assert {file.name: (file.read_bytes(), file.stat().st_mtime_ns) for file in stage.iterdir()} == before
+        assert not (machine / 'installed').exists()
+    finally:
+        (machine / 'simrelease').touch()
+        thread.join(8)
+    assert not thread.is_alive() and not errors
+    assert (machine / 'installs').read_text() == 'installed\n'
+
+
+@pytest.mark.parametrize('interrupt', ['disconnect', 'guardian-crash'])
+def test_lock_survives_interruption_until_privileged_child_exits(tmp_path, prerequisite_machine, interrupt):
+    import os
+    import signal
+    from h3server.installer.runner import InstallerBusy
+    machine, connect, _, processes = prerequisite_machine
+    paths, p, _ = prepared(tmp_path / 'target', python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    first, second = connect(), connect()
+    (machine / 'hold').touch()
+    with first._prerequisite_transaction(str(paths.root), p, approval(p, privileged=True), 'only-stdin') as transaction:
+        credential = b'only-stdin\n'
+        transaction.channel.send(f'install 1 {len(credential)} '.encode() + b'a' * 32 + b'\ngit=1\n' + credential)
+        _wait_for_file(machine / 'mutating')
+        if interrupt == 'guardian-crash':
+            def parent(pid):
+                return int(subprocess.check_output(('ps', '-o', 'ppid=', '-p', str(pid)), text=True).strip())
+            operation = int((machine / 'mutating').read_text())
+            guardian = parent(parent(operation))
+            assert guardian != os.getpid()
+            os.kill(guardian, signal.SIGKILL)
+        else:
+            transaction.channel.shutdown_write()  # cancellation/transport EOF
+        with pytest.raises(InstallerBusy):
+            second.install_prerequisites(root=str(paths.root), plan=p, approval=approval(p, privileged=True), sudo_password='only-stdin')
+        assert not (machine / 'installed').exists()
+        (machine / 'release').touch()
+        _wait_for_file(machine / 'installed')
+        # The external guardian/lock supervisor may still be reaping; wait for
+        # EOF rather than interpreting the package marker as transaction success.
+        processes[0].wait(timeout=5)
+    # After SIGKILL, waitpid observes the guardian, not its orphaned supervisor.
+    # Wait for the actual inherited lock lifetime rather than a timing sleep.
+    import fcntl
+    import time
+    with (paths.state / 'installer.lock').open('a') as lock:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+    stage = paths.bootstrap / canonical_plan_digest(p)
+    assert (stage / 'status').read_text().strip() != 'waiting_for_replan'
+    # A separate authenticated transaction rechecks package state, never repeats
+    # a surviving install. The guardian-crash checkpoint may remain 'running'.
+    assert second.install_prerequisites(root=str(paths.root), plan=p, approval=approval(p, privileged=True), sudo_password='only-stdin') == 'waiting_for_replan'
+    assert (machine / 'installs').read_text() == 'installed\n'
+
+
+def test_truncated_credential_frame_cannot_mutate_or_poison_parser(tmp_path, prerequisite_machine):
+    machine, connect, _, processes = prerequisite_machine
+    paths, p, _ = prepared(tmp_path / 'target', python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    (machine / 'auth').write_text('nopasswd')
+    connection = connect()
+    nonce = 'a' * 32
+    with connection._prerequisite_transaction(str(paths.root), p, approval(p, privileged=True), 'only-stdin') as transaction:
+        transaction.channel.send(f'install 1 11 {nonce}\ngit=1\nonly'.encode())
+        transaction.channel.shutdown_write()
+        with pytest.raises(CommandFailure):
+            transaction.receive(nonce)
+        processes[-1].wait(timeout=5)
+    assert not (machine / 'installed').exists()
+    stage = paths.bootstrap / canonical_plan_digest(p)
+    assert (stage / 'status').read_text().strip() == 'failed'
+    assert b'only' not in (stage / 'frame-stat').read_bytes()
+    assert connection.install_prerequisites(root=str(paths.root), plan=p, approval=approval(p, privileged=True), sudo_password='only-stdin') == 'waiting_for_replan'
+
+
+def test_prerequisite_protocol_has_no_arbitrary_command_or_argument_escape(tmp_path):
+    paths, p, _ = prepared(tmp_path, python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    protocol = recovery.PrerequisiteProtocol(str(paths.root), p, approval(p, privileged=True))
+    for argv in [('sudo', '-n', 'sh'), ('sudo', '-n', 'env', 'DEBIAN_FRONTEND=noninteractive', 'dpkg', '--configure', 'unapproved'),
+                 ('cat', '/etc/shadow'), ('sh', '-c', 'id')]:
+        with pytest.raises(PermissionError): protocol.request(argv, 'secret')
+    assert 'eval ' not in protocol.command('a' * 32)
+
+
+@pytest.mark.parametrize('frame', [
+    b'authorize 0 99999 ' + b'a' * 32 + b'\n',
+    b'shell 0 0 ' + b'a' * 32 + b'\n',
+    b'install 1 0 ' + b'a' * 32 + b'\ngit=1;not-a-command\n',
+])
+def test_guardian_rejects_invalid_frames_before_sudo(tmp_path, prerequisite_machine, frame):
+    machine, connect, _, _ = prerequisite_machine
+    paths, p, _ = prepared(tmp_path / 'target', python_ready=False, packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    connection = connect()
+    with connection._prerequisite_transaction(str(paths.root), p, approval(p, privileged=True), None) as transaction:
+        transaction.channel.send(frame)
+        with pytest.raises(CommandFailure): transaction.receive('a' * 32)
+    assert not (machine / 'sudo-argv').exists()
+    assert not (machine / 'installed').exists()
+
+
+def test_privileged_io_nopasswd_cannot_pass_credentials_to_os_command(tmp_path, prerequisite_machine):
+    import os
+    machine, _, _, _ = prerequisite_machine
+    (machine / 'auth').write_text('nopasswd')
+    paths, p, _ = prepared(tmp_path / 'target', packages=('git=1',),
+                           package_changes=('Inst git (1 Debian [amd64])',))
+    adapter = recovery.PrivilegedIO(p, uid=1000, password='only-stdin')
+    env = {**os.environ, 'PATH': str(machine.parent / 'tools') + os.pathsep + os.environ['PATH'],
+           'H3_TEST_MACHINE': str(machine)}
+    adapter.run(('sudo', '-n', 'env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get',
+                 '-y', '--no-remove', 'install', 'git=1'), env=env, log=io.StringIO())
+    assert (machine / 'installed').exists()  # fake operation asserts empty stdin
+    assert 'only-stdin' not in (machine / 'sudo-argv').read_text()
+
+
+def test_privileged_io_timeout_never_exposes_password(tmp_path):
+    _, p, _ = prepared(tmp_path)
+    calls = []
+    def timeout(argv, **kwargs):
+        calls.append((argv, kwargs))
+        raise subprocess.TimeoutExpired(argv, 3600, output='only-stdin', stderr='only-stdin')
+    log = io.StringIO()
+    with pytest.raises(CommandFailure) as failure:
+        recovery.PrivilegedIO(p, uid=1000, password='only-stdin', run=timeout).run(
+            ('sudo', '-n', 'true'), env={}, log=log)
+    assert len(calls) == 1 and calls[0][1]['timeout'] == 3600
+    assert 'only-stdin' not in str(failure.value) + log.getvalue() + repr(calls[0][0])

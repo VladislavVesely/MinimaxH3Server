@@ -14,7 +14,8 @@ Prerequisite-only rounds (including Python absent) use
 SSHConnection.install_prerequisites(root, plan, approval, sudo_password=...) for
 password-only sudo, or runner.stage_bootstrap with existing scoped sudo -n. The
 SSH path reuses Steps.system_packages locally with fixed, flock-protected OS
-commands remotely; sudo reads directly from authenticated channel stdin. Both
+commands remotely in one transaction-wide guardian; bounded credential frames
+reach sudo through an isolated anonymous pipe, never its command's stdin. Both
 paths must replan and cannot register Python continuation until Python exists.
 No root Python, sudoers edits, downloaded shell, automatic Secure Boot enrollment,
 or automatic reboot on failure. Native systemd/VM acceptance is separate.
@@ -70,7 +71,7 @@ ConditionPathExists=@READINESS@
 Type=simple
 ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@
 Environment=@ENVIRONMENT@
-WorkingDirectory=@ROOT@
+WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120
@@ -142,6 +143,16 @@ def _quote(value, *, exec_value=False):
     return '"' + value + '"'
 
 
+def _scalar_path(value):
+    # These directives consume the entire rvalue, not ExecStart's quoted tokens.
+    # Only specifiers expand. Quotes/backslashes inside the path remain literal.
+    value = str(value)
+    if (not value.startswith('/') or value != value.rstrip() or value.endswith('\\')
+            or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+        raise ValueError('path cannot be represented as a systemd scalar')
+    return value.replace('%', '%%')
+
+
 def render_units(paths, plan):
     digest = canonical_plan_digest(plan)
     wheel = artifact_path(paths, plan)
@@ -161,10 +172,9 @@ def render_units(paths, plan):
                                           'DIGEST': digest, 'ENVIRONMENT': env(bootstrap_env)})
     daemon = substitute(DAEMON_UNIT, {'ROOT': _quote(paths.root, exec_value=True),
                                      'PYTHON': _quote(python, exec_value=True),
-                                     'READINESS': _quote(python.parent.parent / 'readiness.json'),
+                                     'READINESS': _scalar_path(python.parent.parent / 'readiness.json'),
+                                     'WORKINGDIRECTORY': _scalar_path(paths.root),
                                      'ENVIRONMENT': env(daemon_env)})
-    # WorkingDirectory does not perform ExecStart's dollar expansion.
-    daemon = daemon.replace('WorkingDirectory=' + _quote(paths.root, exec_value=True), 'WorkingDirectory=' + _quote(paths.root))
     return {'h3-bootstrap.service': bootstrap, 'h3server.service': daemon}
 
 
@@ -221,7 +231,14 @@ class PrivilegedIO(ProcessIO):
                    and bool(command[6:]) and self._required_pins.issubset(command[6:]) and set(command[6:]).issubset(self._pins))
         if argv[:2] != ('sudo', '-n') or (command not in self._allowed and not dpkg and not install) or capture:
             raise PermissionError('sudo operation is outside approved scope')
-        actual = ('sudo', '-n', '--', *command) if self._password is None else ('sudo', '-S', '-k', '-p', '', '--', *command)
+        actual = ('sudo', '-n', '--', *command)
+        if self._password is not None:
+            # subprocess.run closes this finite input pipe after the one secret.
+            # NOPASSWD must not pass unread credentials to package hooks. Only
+            # this constant wrapper and already-allowlisted OS argv run as root.
+            actual = ('sudo', '-S', '-k', '-p', '', '--', '/bin/sh', '-c',
+                      'cat >/dev/null || exit 76; exec "$@" </dev/null',
+                      'h3-approved-privilege', *command)
         try:
             result = self._run(actual, input=None if self._password is None else self._password + '\n',
                                text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -250,6 +267,143 @@ class _UnprivilegedIO:
         if argv[0] == 'sudo':
             raise PermissionError('no privileged operations in detached continuation')
         return self.delegate.run(argv, **kw)
+
+
+class PrerequisiteProtocol:
+    """Finite, plan-bound POSIX transaction; no remote Python or eval/RPC.
+
+    One flock open-file description spans staging, checks, mutation and status.
+    A non-execing unprivileged supervisor retains it while sudo closes its own
+    inherited descriptors. EOF is read only after children are reaped. A lost
+    controller therefore cannot release exclusion while an OS operation runs.
+
+    Credential frames are bounded and copied by dd into an anonymous sudo pipe,
+    never read into shell variables. A fixed root wrapper drains unused input
+    (NOPASSWD), verifies non-secret dd transfer counts, then redirects the actual
+    approved OS operation's stdin to /dev/null. Frame statistics contain counts,
+    not credentials, and are removed after both pipeline children exit.
+    """
+    def __init__(self, root, plan, approval):
+        import shlex
+        validate_approval(plan, approval)
+        if plan['purpose'] != 'prerequisites':
+            raise ValueError('expected a prerequisite plan')
+        self.root, self.plan, self.approval = root, plan, approval
+        versions = change_versions(plan['package_changes'])
+        self.pins = set(plan['packages']) | {f'{name}={version}' for name, version in versions}
+        self.names = {pin.split('=')[0] for pin in self.pins}
+        self.static = {
+            'os': ('cat', '/etc/os-release'), 'arch': ('uname', '-m'),
+            'audit': ('dpkg', '--audit'),
+            'simulate': ('apt-get', '-s', '--no-remove', 'install', *plan['packages']),
+        }
+        for index, name in enumerate(sorted(self.names)):
+            self.static[f'query{index}'] = ('dpkg-query', '-W', '-f=${Status}\\t${Version}\\n', name)
+        if plan['privileged_required']:
+            self.static.update({'authorize': ('sudo', '-n', 'true'),
+                                'check': ('sudo', '-n', 'apt-get', 'check')})
+            if plan['refresh_metadata']:
+                self.static['update'] = ('sudo', '-n', 'apt-get', '-o', 'APT::Update::Error-Mode=any', 'update')
+        self.dynamic = {}
+        if plan['privileged_required'] and self.pins and not plan['refresh_metadata']:
+            self.dynamic = {
+                'install': (('sudo', '-n', 'env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', '-y', '--no-remove', 'install'), self.pins),
+                'configure': (('sudo', '-n', 'env', 'DEBIAN_FRONTEND=noninteractive', 'dpkg', '--configure'), self.names),
+            }
+        cases = []
+        for operation, argv in self.static.items():
+            privileged = argv[:2] == ('sudo', '-n')
+            command = argv[2:] if privileged else argv
+            cases.append(f'{operation}) test "$argc" -eq 0 || exit 76; privileged={int(privileged)}; set -- {shlex.join(command)};;')
+        for operation, (prefix, allowed) in self.dynamic.items():
+            pattern = '|'.join(shlex.quote(a) for a in sorted(allowed))
+            cases.append(f'''{operation})
+    test "$argc" -gt 0 && test "$argc" -le {len(allowed)} || exit 76
+    privileged=1; set -- {shlex.join(prefix[2:])}
+    while test "$argc" -gt 0; do
+        IFS= read -r argument || exit 76
+        case "$argument" in {pattern}) ;; *) exit 76;; esac
+        set -- "$@" "$argument"; argc=$((argc - 1))
+    done;;''')
+        self.cases = '\n'.join(cases)
+
+    def request(self, argv, password=None):
+        for operation, command in self.static.items():
+            if tuple(argv) == command:
+                return operation, (), password if command[0] == 'sudo' else None
+        for operation, (prefix, allowed) in self.dynamic.items():
+            arguments = tuple(argv[len(prefix):])
+            if tuple(argv[:len(prefix)]) == prefix and arguments and len(arguments) <= len(allowed) and set(arguments).issubset(allowed):
+                if operation == 'install' and not set(self.plan['packages']).issubset(arguments):
+                    break
+                return operation, arguments, password
+        raise PermissionError('command is outside this prerequisite transaction')
+
+    def command(self, ready_token):
+        import shlex
+        q = shlex.quote
+        stage = self.root + '/bootstrap/' + canonical_plan_digest(self.plan)
+        # All script/OS command bytes derive from validated approved inputs.
+        # The only controller-supplied runtime fields are a finite ID, allowed
+        # package tokens, a bounded frame length and an unpredictable reply nonce.
+        wrapper = '''cat >/dev/null || exit 76
+if test "$1" != -; then
+    grep -Fxq '1+0 records in' "$1" && grep -Fxq '1+0 records out' "$1" && grep -Fxq 0 "$2" || exit 76
+fi
+shift 2
+exec "$@" </dev/null'''
+        script = f'''umask 077
+export LC_ALL=C
+stage={q(stage)}
+mkdir -p -- "$stage" || exit 76
+finished=no
+trap 'if test "$finished" != yes; then printf "%s\\n" failed > "$stage/status"; fi' 0
+printf '%s\\n' {q(json.dumps(self.plan, sort_keys=True))} > "$stage/plan.json.new" && mv -- "$stage/plan.json.new" "$stage/plan.json" || exit 76
+printf '%s\\n' {q(json.dumps(asdict(self.approval), sort_keys=True))} > "$stage/approval.json.new" && mv -- "$stage/approval.json.new" "$stage/approval.json" || exit 76
+printf '%s\\n' running > "$stage/status" || exit 76
+printf '%s\\n' {q('H3READY ' + ready_token)}
+while IFS=' ' read -r operation argc size nonce extra; do
+    test -z "$extra" || exit 76
+    case "$argc:$size" in *[!0-9:]*|:*|*:) exit 76;; esac
+    test "${{#argc}}" -le 6 && test "${{#size}}" -le 5 && test "$size" -le 16385 || exit 76
+    case "$nonce" in ''|*[!a-f0-9]*) exit 76;; esac
+    test "${{#nonce}}" -eq 32 || exit 76
+    privileged=0
+    case "$operation" in
+{self.cases}
+finish) test "$argc:$size" = 0:0 || exit 76
+    printf '%s\\n' waiting_for_replan > "$stage/status" || exit 76
+    finished=yes; printf '\\nH3DONE %s 0\\n' "$nonce"; exit 0;;
+*) exit 76;;
+    esac
+    if test "$privileged" -eq 1; then
+        if test "$size" -gt 0; then
+            # Neither shell read nor the approved command can consume this pipe.
+            # The subshell deliberately waits, retaining flock even if sudo
+            # closes its descriptors or the guardian itself is interrupted.
+            ( dd bs="$size" count=1 iflag=fullblock 2>"$stage/frame-stat"; result=$?; printf '%s\\n' "$result" > "$stage/frame-code" ) |
+                ( sudo -S -k -p '' -- /bin/sh -c {q(wrapper)} h3-prerequisite "$stage/frame-stat" "$stage/frame-code" "$@" >/dev/null 2>&1; result=$?; exit "$result" )
+            code=$?
+            grep -Fxq '1+0 records in' "$stage/frame-stat" && grep -Fxq '1+0 records out' "$stage/frame-stat" && grep -Fxq 0 "$stage/frame-code" || exit 76
+            rm -f -- "$stage/frame-stat" "$stage/frame-code" || exit 76
+        else
+            ( sudo -n -- "$@" </dev/null >/dev/null 2>&1; result=$?; exit "$result" )
+            code=$?
+        fi
+    else
+        test "$size" -eq 0 || exit 76
+        "$@" </dev/null; code=$?
+    fi
+    printf '\\nH3DONE %s %s\\n' "$nonce" "$code"
+done
+exit 76
+'''
+        lock = self.root + '/state/installer.lock'
+        # Only lock-parent directory creation precedes exclusion, not checkpoint
+        # contents or package probes. flock's fd stays inherited by supervisors.
+        return ('umask 077; mkdir -p -- ' + q(self.root + '/state') +
+                ' && exec setsid --wait flock -n -E 75 ' + q(lock) +
+                ' /bin/sh -c ' + q(script))
 
 
 class Recovery:
