@@ -24,6 +24,7 @@ class SetupCoordinator:
         self.timeout, self.poll_interval = timeout, poll_interval
         self._lock = threading.RLock()
         self._worker = None
+        self._phase_started = self._phase_ended = None
         self._cancel = threading.Event()
         self._requests = {}
         self._connection_status = {'state': 'disconnected'}
@@ -37,7 +38,9 @@ class SetupCoordinator:
 
     def status(self):
         with self._lock:
-            return {**deepcopy(self._status), 'busy': self.active()}
+            elapsed = None if self._phase_started is None else max(0, (
+                self._phase_ended if self._phase_ended is not None else time.monotonic()) - self._phase_started)
+            return {**deepcopy(self._status), 'busy': self.active(), 'phase_elapsed_seconds': elapsed}
 
     def connection_status(self):
         """Last observed SSH state; never wait on the worker's SSH lock."""
@@ -52,6 +55,10 @@ class SetupCoordinator:
 
     def _publish(self, **values):
         with self._lock:
+            if 'phase' in values and values['phase'] != self._status['phase']:
+                self._phase_started, self._phase_ended = time.monotonic(), None
+            if values.get('state') in {'completed', 'failed', 'cancelled'} and self._phase_ended is None:
+                self._phase_ended = time.monotonic()
             self._status.update(values)
 
     def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None):
@@ -78,6 +85,7 @@ class SetupCoordinator:
             if self.deployment.release is None:
                 raise ControllerError('release_unavailable')
             self._cancel = threading.Event()
+            self._phase_started, self._phase_ended = time.monotonic(), None
             self._status = {'state': 'running', 'phase': 'planning', 'operation_id': uuid.uuid4().hex,
                             'request_id': request_id, 'profile': profile, 'artifact_set_digest': artifact_set_digest,
                             'plan_digest': None, 'error': None, 'snapshot': None,
@@ -93,6 +101,7 @@ class SetupCoordinator:
         with self._lock:
             if self.active():
                 raise ControllerError('setup_in_progress')
+            self._phase_started = self._phase_ended = None
             self._status = {'state': 'idle', 'phase': 'idle', 'operation_id': None, 'error': None,
                             'installation_ready': False, 'model_ready': False, 'generation_tested': False}
 
@@ -217,8 +226,9 @@ class SetupCoordinator:
         if self.deployment.plan is None:
             try:
                 self._call(lambda: self.deployment.restore(observation_only=True))
-            except FileNotFoundError:
-                pass
+            except ControllerError as error:
+                if error.code != 'setup_not_found':
+                    raise
         if self.deployment.plan is not None:
             prior = self._call(self.deployment.snapshot)
             operation = prior.get('operation')

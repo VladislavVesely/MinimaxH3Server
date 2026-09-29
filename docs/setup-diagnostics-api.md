@@ -12,7 +12,11 @@ and CSRF protection for POST. There is no caller-supplied command or log-path AP
 - `GET /api/v1/controller/setup/events?after=<event cursor>`: authenticated target snapshot after
   restore, including `diagnostics` and `retry`. Unlike status, this performs bounded SSH
   observation. Event cursor and diagnostic byte offsets are separate concepts.
-- `POST /api/v1/controller/setup/restore {}`: unchanged exact-release discovery. Follow with events
+- `POST /api/v1/controller/setup/restore {}`: exact-release, observation-only discovery.
+  Resolves the authenticated target root and reads saved records, without staging,
+  prerequisite replan or remote service-plan execution (`service`/`service_digest`
+  are null). Missing deployment record returns `setup_not_found`; missing/malformed
+  plan records remain errors, not consent to create a new plan. Follow with events
   after browser/controller reload. Do not turn observation into a retry automatically.
 - `POST /api/v1/controller/setup/restore-compatible {}`: explicit narrow discovery of the audited
   predecessor described below. Returns the original plan document and `snapshot`.
@@ -48,6 +52,12 @@ and CSRF protection for POST. There is no caller-supplied command or log-path AP
   "observed_at": 1790000001.0
 }
 ```
+
+Coordinator status also includes `phase_elapsed_seconds`: elapsed controller-observed
+phase time from a monotonic clock, reset on an actual phase change/new operation,
+not on polls or same-phase updates, and frozen on terminal state. It is null for
+idle/unobserved historical phases after restart. This is separate from target
+command duration; neither value implies progress, percentage or ETA.
 
 Times are target Unix seconds; ages are calculated on target to avoid controller
 clock skew. Null exit status is not success. Launch errors have an error and no

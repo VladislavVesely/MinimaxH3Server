@@ -468,7 +468,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @app.post(API + '/setup/restore')
     @observed
     def setup_restore(body: EmptyRequest):
-        return deployment.restore()
+        return deployment.restore(observation_only=True, include_service=False)
 
     @app.get(API + '/setup/events')
     @observed
