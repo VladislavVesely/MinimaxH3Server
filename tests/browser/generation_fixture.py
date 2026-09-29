@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -26,7 +27,7 @@ from test_install_plan import facts
 from test_installer import FakeIO
 from test_worker import fixture_backend
 from h3server.controller.app import create_app
-from h3server.controller.ssh import SSHConnection
+from h3server.controller.ssh import SSHConnection, ControllerError
 from h3server.installer.recovery import service_plan, Recovery
 from h3server.installer.planner import Approval
 from h3server.installer.runner import Installer
@@ -100,6 +101,18 @@ class FixtureSSH(SSHConnection):
         from h3server.controller.target import snapshot
         paths = AppPaths(root)
         if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'])
+        if action == 'activate':
+            # Exercise the real target's prerequisite rejection, never activation.
+            # Refuse detaching even if that prerequisite check regresses.
+            code = """from unittest.mock import patch
+from h3server.controller.target import main
+with patch('h3server.controller.target._detach', side_effect=AssertionError('TEST ONLY detaching forbidden')):
+    main()
+"""
+            result = subprocess.run([sys.executable, '-c', code, '--root', root, '--digest', digest, action],
+                input=json.dumps(data), capture_output=True, text=True, timeout=10, check=False)
+            assert result.returncode != 0 and 'verified environment required' in result.stderr
+            raise ControllerError('deployment_operation_failed', 502)
         raise AssertionError('TEST ONLY unsupported deployment action')
 
 

@@ -407,10 +407,12 @@
     }, data.has_more ? 100 : 2000);
   }
   async function setupAction(action, data) {
-    resetSetupPolling();
     const epoch = setupEpoch;
+    // Keep observing existing work until the new action succeeds. A rejection
+    // must neither discard its accepted-launch window nor renew its deadline.
     const result = await request('/setup/' + action, data);
     if (epoch !== setupEpoch || connection.state !== 'authenticated') return;
+    resetSetupPolling();
     if (result.review) showPlan(result.review);
     if (result.state === 'accepted') acceptedLaunch = { deadline: Date.now() + LAUNCH_WAIT_MS, delayed: false };
     $('setup-status').textContent = `Request ${result.state}. This is not completion; replaying durable target progress.`;

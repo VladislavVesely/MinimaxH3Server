@@ -266,3 +266,77 @@ test.describe('bounded accepted launch observation', () => {
     });
   }
 });
+
+test.describe('rejected setup action preserves installation observation', () => {
+  test.use({ controlledSetup: 'planned' });
+
+  async function rejectActivation(page) {
+    const rejected = page.waitForResponse(response => response.url().endsWith('/setup/activate'));
+    await page.getByRole('button', { name: 'Approve activation / update' }).click();
+    const response = await rejected;
+    expect(response.status()).toBe(502);
+    expect(await response.json()).toEqual({ error: { code: 'deployment_operation_failed' } });
+    await expect(page.locator('#error')).toContainText('The target rejected or could not execute this operation.');
+    await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
+  }
+
+  for (const checkpoint of ['planned', 'running']) {
+    test(`rejected activation at ${checkpoint} does not stop automatic progress`, async ({ page, controller }) => {
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      let installs = 0;
+      page.on('request', request => { if (request.url().endsWith('/setup/install')) installs++; });
+      await approveControlledSetup(page, controller);
+      await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
+      if (checkpoint === 'running') {
+        await controller.control({ action: 'start-setup' });
+        await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
+      }
+      await rejectActivation(page);
+      if (checkpoint === 'planned') {
+        await controller.control({ action: 'start-setup' });
+        await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
+      }
+      await controller.control({ action: 'finish-setup' });
+      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 8000 });
+      expect(installs).toBe(1);
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test('late rejection cannot revive observation after page exit', async ({ page, controller }) => {
+    let polls = 0;
+    page.on('request', request => { if (request.url().includes('/setup/events?')) polls++; });
+    await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
+    await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
+    await approveControlledSetup(page, controller);
+    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
+    let release, received;
+    const held = new Promise(resolve => { release = resolve; });
+    const responseReceived = new Promise(resolve => { received = resolve; });
+    await page.route('**/setup/activate', async route => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(502);
+      received(); await held;
+      await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: 'Approve activation / update' }).click();
+    await responseReceived;
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+    const stopped = polls;
+    release();
+    await expect(page.locator('#error')).toContainText('The target rejected or could not execute this operation.');
+    await page.clock.runFor(10000);
+    expect(polls).toBe(stopped);
+  });
+
+  test('rejection neither drops nor extends the accepted launch deadline', async ({ page, controller }) => {
+    await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
+    await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
+    await approveControlledSetup(page, controller);
+    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
+    await page.clock.fastForward(20000);
+    await rejectActivation(page);
+    await page.clock.fastForward(11000);
+    await expect(page.locator('#setup-status')).toContainText('Launch delayed: no running checkpoint observed within 30 seconds.');
+  });
+});
