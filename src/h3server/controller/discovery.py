@@ -108,10 +108,14 @@ def empty_database(data):
             for table in ('setups', 'jobs', 'events'):
                 if db.execute('SELECT 1 FROM ' + table + ' LIMIT 1').fetchone():
                     raise ValueError('durable work exists')
-            if 'event_state' in _SCHEMA:
-                rows = db.execute('SELECT singleton,last_id,minimum_cursor FROM event_state').fetchall()
-                if rows not in ([], [(1, 0, 0)]):
-                    raise ValueError('event history exists')
+            rows = db.execute('SELECT singleton,last_id,minimum_cursor FROM event_state').fetchall()
+            if rows != [(1, 0, 0)]:
+                raise ValueError('invalid initial event replay metadata')
+            # Match Store's empty-log sequence invariant without constructing or
+            # migrating Store: no sequence yet, or exactly one initial zero.
+            sequence = db.execute("SELECT seq FROM sqlite_sequence WHERE name='events'").fetchall()
+            if sequence not in ([], [(0,)]):
+                raise ValueError('invalid initial event sequence')
         finally:
             db.close()
 

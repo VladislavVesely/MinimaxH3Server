@@ -39,8 +39,13 @@ def stale(flow, tmp_path, monkeypatch):
     return flow, prior, root
 
 
-def test_explicit_install_rediscovers_unlaunched_different_release(stale):
+@pytest.mark.parametrize('initial_sequence', [None, 0])
+def test_explicit_install_rediscovers_unlaunched_different_release(stale, initial_sequence):
     (app, client, headers, calls, _, _, _), prior, root = stale
+    if initial_sequence is not None:
+        with closing(sqlite3.connect(root / 'state/setup.sqlite3')) as db:
+            db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('events', ?)", (initial_sequence,))
+            db.commit()
     pointer = (root / 'config/deployment.json').read_bytes()
     old_plan = (root / 'bootstrap' / prior.document()['plan_digest'] / 'plan.json').read_bytes()
     with pytest.raises(ControllerError, match='matching_release_required'):
@@ -83,6 +88,28 @@ def test_unsafe_stale_records_never_stage_or_execute_old_release(stale, evidence
     result = finished(app)
     assert result['state'] == 'failed' and result['error'] == 'stale_discovery_unproven', result
     assert not calls
+    assert before == {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('corruption', ['missing-replay-metadata', 'historical-event-sequence', 'duplicate-event-sequence'])
+def test_malformed_empty_database_replay_metadata_never_replaces_stale_release(stale, corruption):
+    (app, client, headers, calls, _, _, _), _, root = stale
+    with closing(sqlite3.connect(root / 'state/setup.sqlite3')) as db:
+        assert db.execute('SELECT singleton,last_id,minimum_cursor FROM event_state').fetchall() == [(1, 0, 0)]
+        assert db.execute('SELECT * FROM events').fetchall() == []
+        if corruption == 'missing-replay-metadata':
+            db.execute('DELETE FROM event_state')
+        elif corruption == 'historical-event-sequence':
+            db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('events', 1)")
+        else:
+            db.executemany('INSERT INTO sqlite_sequence(name,seq) VALUES (?, ?)', [('events', 0), ('events', 0)])
+        db.commit()
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    selected = get_artifact_set('h3-convrot-int8')
+    assert start(client, headers, profile=selected.profile_name, artifact_set_digest=selected.digest).status_code == 202
+    result = finished(app)
+    assert result['state'] == 'failed' and result['error'] == 'stale_discovery_unproven', result
+    assert not calls  # No recovery/service-plan/prepare, including old-release code.
     assert before == {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
