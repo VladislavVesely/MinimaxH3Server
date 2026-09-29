@@ -36,13 +36,26 @@ class TargetIO:
     def __init__(self, paths):
         self.paths = paths
 
-    def service(self, command):
+    def service(self, command, *, allow_absent=False):
         uid = os.getuid()
         env = {**os.environ, **self.paths.cache_environment(), 'XDG_RUNTIME_DIR': f'/run/user/{uid}',
                'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'}
         result = subprocess.run(['systemctl', '--user', *command], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, timeout=150)
         if result.returncode:
+            if allow_absent and command in (['stop', 'h3server.service'], ['disable', 'h3server.service']):
+                # Disabling our externally linked unit removes its registration.
+                # Only an authoritative, successful inactive/not-found query may
+                # turn a failed cleanup into a no-op; never parse error prose or
+                # suppress bus/auth/loaded-unit failures as "already stopped".
+                state = subprocess.run(
+                    ['systemctl', '--user', 'show', '--property=LoadState',
+                     '--property=ActiveState', 'h3server.service'],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, env=env, timeout=30)
+                lines = state.stdout.splitlines()
+                if state.returncode == 0 and len(lines) == 2 and set(lines) == {'LoadState=not-found', 'ActiveState=inactive'}:
+                    return
             raise RuntimeError('user service operation failed')
 
     def api(self, method, path, data=None):
@@ -165,7 +178,7 @@ class Activation:
                     self.wait(.25)
             journal['phase'] = 'stopping'
             atomic_json(paths, 'state/activation.json', journal)
-            self.io.service(['stop', 'h3server.service'])
+            self.io.service(['stop', 'h3server.service'], allow_absent=previous is None)
             stopped = True
             if not gated:
                 atomic_json(paths, 'state/maintenance.json', {'operation': operation, 'active': True})
@@ -238,7 +251,7 @@ class Activation:
             journal['phase'] = 'aborted'
             atomic_json(paths, 'state/activation.json', journal)
             return
-        self.io.service(['stop', 'h3server.service'])
+        self.io.service(['stop', 'h3server.service'], allow_absent=previous is None)
         backup_name = journal.get('backup')
         if backup_name:
             if not re.fullmatch(r'remote-[a-f0-9]{32}\.backup\.sqlite', backup_name):
@@ -263,7 +276,7 @@ class Activation:
             # Recovery registered this environment directly, not via current.
             # Removing the pointer alone cannot prevent autostart at next boot.
             # Keep the journal/gate unresolved if disabling registration fails.
-            self.io.service(['disable', 'h3server.service'])
+            self.io.service(['disable', 'h3server.service'], allow_absent=True)
             paths.current.unlink(missing_ok=True)
             (paths.state / 'active-release.json').unlink(missing_ok=True)
             # No previous service to authenticate to; we hold the operation lock

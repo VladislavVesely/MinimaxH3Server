@@ -174,7 +174,7 @@ class RuntimeIO:
             return {'active':True}
         if path == 'maintenance': return {'idle':not self.busy, 'active':self.gated, 'operation':self.operation}
         if path == 'maintenance/end': self.gated = False; return {'active':False}
-    def service(self, command): self.calls.append(('service', *command))
+    def service(self, command, *, allow_absent=False): self.calls.append(('service', *command))
     def health(self):
         self.health_calls += 1
         if self.fail_health and self.health_calls == 1: raise RuntimeError('TEST health failed')
@@ -502,24 +502,29 @@ def test_first_activation_rollback_disables_autostart_and_approved_retry_enables
     class UserManagerIO(RuntimeIO):
         enabled = True  # Recovery.prepare registered the candidate for boot.
         running = False
+        loaded = True
         disable_interrupted = False
 
-        def service(self, command):
-            super().service(command)
+        def service(self, command, *, allow_absent=False):
+            super().service(command, allow_absent=allow_absent)
             if command == ['disable', 'h3server.service']:
                 if interrupt_disable and not self.disable_interrupted:
                     self.disable_interrupted = True
                     raise RuntimeError('TEST disable interrupted')
-                self.enabled = False
+                if not self.loaded and not allow_absent:
+                    raise RuntimeError('TEST unit registration absent')
+                self.enabled = self.loaded = False
             elif command == ['enable', str(paths.config / 'systemd/h3server.service')]:
-                self.enabled = True
+                self.enabled = self.loaded = True
             elif command == ['stop', 'h3server.service']:
+                if not self.loaded and not allow_absent:
+                    raise RuntimeError('TEST unit not loaded')
                 self.running = False
             elif command == ['restart', 'h3server.service']:
                 self.running = True
 
         def restart_user_manager(self):
-            self.running = self.enabled
+            self.loaded = self.running = self.enabled
 
     io = UserManagerIO(paths, previous=False, fail_health=True)
     with pytest.raises(RuntimeError):
@@ -579,3 +584,129 @@ def test_active_release_blocks_privileged_prerequisite_update_before_any_install
     with pytest.raises(ControllerError, match='update_prerequisite_maintenance_required'):
         deploy.install(approval, service_digest=None)
     assert not sftp.path(root + '/bootstrap').exists()  # Rejection precedes even approval staging.
+
+
+@pytest.mark.parametrize('interrupt_after_disable', [False, True])
+def test_first_activation_retry_and_repair_after_external_unit_registration_removed(tmp_path, monkeypatch, interrupt_after_disable):
+    """Exercise real TargetIO status verification against a simulated systemd bus."""
+    from types import SimpleNamespace
+    from h3server.controller.target import Activation, TargetIO
+    from h3server.backends.base import read_json
+    paths, plan = staged_target(tmp_path)
+
+    class UserManager:
+        registered = True  # Recovery's externally linked unit initially exists.
+        loaded = True
+        running = False
+        interrupted = False
+        calls = []
+
+        def run(self, argv, **kwargs):
+            assert argv[:2] == ['systemctl', '--user']
+            command = argv[2:]
+            self.calls.append(command)
+            code, output = 0, ''
+            if command == ['stop', 'h3server.service']:
+                if not self.loaded:
+                    code = 5  # Unit not loaded after registration disappeared.
+                else:
+                    self.running = False
+            elif command == ['disable', 'h3server.service']:
+                if not self.registered:
+                    code = 1
+                else:
+                    self.registered = self.loaded = False
+                    if interrupt_after_disable and not self.interrupted:
+                        self.interrupted = True
+                        raise SystemExit('TEST ONLY interruption after successful disable')
+            elif command == ['show', '--property=LoadState', '--property=ActiveState', 'h3server.service']:
+                output = ('LoadState=loaded\nActiveState=inactive\n' if self.loaded else
+                          'LoadState=not-found\nActiveState=inactive\n')
+            elif command == ['enable', str(paths.config / 'systemd/h3server.service')]:
+                self.registered = self.loaded = True
+            elif command == ['restart', 'h3server.service']:
+                if not self.loaded:
+                    code = 5
+                else:
+                    self.running = True
+            else:
+                assert command == ['daemon-reload']
+            return SimpleNamespace(returncode=code, stdout=output)
+
+        def restart_manager(self):
+            self.loaded = self.registered
+            self.running = self.registered
+
+    manager = UserManager()
+    monkeypatch.setattr('h3server.controller.target.subprocess.run', manager.run)
+
+    class IO(RuntimeIO):
+        def service(self, command, *, allow_absent=False):
+            TargetIO(paths).service(command, **({'allow_absent': True} if allow_absent else {}))
+
+    io = IO(paths, previous=False, fail_health=True)
+    with pytest.raises(SystemExit if interrupt_after_disable else RuntimeError):
+        Activation(paths, io=io).run(plan, 'a'*32, policy='reject')
+    assert not manager.registered
+    manager.restart_manager()
+    assert not manager.loaded and not manager.running
+    if interrupt_after_disable:
+        journal = read_json(paths, 'state/activation.json')
+        assert journal['phase'] == 'switching'
+        assert read_json(paths, 'state/maintenance.json')['active']
+        Activation(paths, io=io).rollback(journal)
+    assert read_json(paths, 'state/activation.json')['phase'] == 'rolled_back'
+    Activation(paths, io=io).run(plan, 'b'*32, policy='reject')
+    assert manager.registered and manager.running
+    assert ['show', '--property=LoadState', '--property=ActiveState', 'h3server.service'] in manager.calls
+    assert read_json(paths, 'state/activation.json')['phase'] == 'complete'
+
+
+@pytest.mark.parametrize('command', [['stop', 'h3server.service'], ['disable', 'h3server.service']])
+@pytest.mark.parametrize('status,output,accepted', [
+    (0, 'LoadState=not-found\nActiveState=inactive\n', True),
+    (1, 'LoadState=not-found\nActiveState=inactive\n', False),
+    (0, 'LoadState=loaded\nActiveState=inactive\n', False),
+    (0, 'LoadState=not-found\nActiveState=active\n', False),
+    (0, 'LoadState=error\nActiveState=inactive\n', False),
+    (0, '', False),
+])
+def test_service_absence_exception_requires_successful_exact_inactive_absence_probe(tmp_path, monkeypatch, command, status, output, accepted):
+    from types import SimpleNamespace
+    from h3server.controller.target import TargetIO
+    from h3server.paths import AppPaths
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs['timeout'] <= 150
+        if len(calls) == 1:
+            return SimpleNamespace(returncode=1)
+        assert argv == ['systemctl', '--user', 'show', '--property=LoadState', '--property=ActiveState', 'h3server.service']
+        return SimpleNamespace(returncode=status, stdout=output)
+    monkeypatch.setattr('h3server.controller.target.subprocess.run', run)
+    io = TargetIO(AppPaths(tmp_path))
+    if accepted:
+        io.service(command, allow_absent=True)
+    else:
+        with pytest.raises(RuntimeError, match='user service operation failed'):
+            io.service(command, allow_absent=True)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('command,allow_absent', [
+    (['stop', 'h3server.service'], False),
+    (['restart', 'h3server.service'], True),
+    (['daemon-reload'], True),
+])
+def test_service_errors_remain_strict_without_no_previous_release_exception(tmp_path, monkeypatch, command, allow_absent):
+    from types import SimpleNamespace
+    from h3server.controller.target import TargetIO
+    from h3server.paths import AppPaths
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr('h3server.controller.target.subprocess.run', run)
+    with pytest.raises(RuntimeError):
+        TargetIO(AppPaths(tmp_path)).service(command, allow_absent=allow_absent)
+    assert len(calls) == 1  # Never weaken updates/previous-release recovery or other commands.

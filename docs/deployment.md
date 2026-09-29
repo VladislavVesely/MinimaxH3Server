@@ -100,8 +100,12 @@ restores the previous release, environment-specific unit and compatible database
 backup; models are untouched. When there is no previous release, rollback disables
 the candidate's user-service autostart before declaring rollback complete. A newly
 approved activation restores registration; removing `current` alone is insufficient
-because the daemon unit references its environment directly. A lost activation
-process does not mean completion.
+because the daemon unit references its environment directly. Disabling an externally
+linked unit also removes its registration: no-previous-release retry/repair treats
+failed stop/disable as a no-op only after a successful user-manager query confirms
+`LoadState=not-found` and `ActiveState=inactive`. Bus, authorization, loaded-unit
+and unknown-status failures remain errors. A lost activation process does not
+mean completion.
 Use **Approve interrupted activation recovery**: before switching it releases only
 its own gate (never kills draining jobs); during switching it rolls back; after a
 durable healthy commit it finalizes the gate without restoring backups over newly
