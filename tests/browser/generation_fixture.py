@@ -47,6 +47,36 @@ class ControlledIO(FakeIO):
         return super().run(*args, **kwargs)
 
 
+class PackageIO(SystemIO):
+    """Real child output/exit diagnostics; never executes pip or native setup."""
+    def __init__(self, connection, paths):
+        super().__init__()
+        self.connection, self.paths = connection, paths
+        self.success = False
+
+    def run(self, argv, **kw):
+        if argv[:2] == ('loginctl', 'show-user'):
+            return 'yes\n'
+        if 'pip' in argv and 'install' in argv and 'help' not in argv:
+            from h3server.installer.steps import ProcessIO
+            self.connection.calls.append('pip-attempt')
+            if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'pip-fresh-success' and self.connection.calls.count('pip-attempt') > 1:
+                self.success = True
+            if '--no-cache-dir' in argv:
+                self.connection.calls.append('pip-fresh-index')
+            message = ('Installed av==18.1.0' if self.success else
+                'ResolutionImpossible: conflicting dependencies for av==18.1.0' if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'pip-permanent'
+                else 'No matching distribution found for av==18.1.0')
+            script = ("from pathlib import Path; import time; "
+                      "print('Collecting av==18.1.0', flush=True); "
+                      "print('Authorization: Bearer TEST-ONLY-secret', flush=True)\n"
+                      "while not Path(" + repr(str(self.paths.root/'fixture-package-finish')) + ").exists(): time.sleep(.02)\n"
+                      "print(" + repr(message) + ", flush=True)\n"
+                      "raise SystemExit(" + str(0 if self.success else 1) + ")")
+            return ProcessIO(command_timeout=30).run((sys.executable, '-u', '-c', script), **kw)
+        return super().run(argv, **kw)
+
+
 class DirectTransport(BrowserTransport):
     def open_channel(self, kind, destination, source, timeout):
         assert kind == 'direct-tcpip' and destination == ('127.0.0.1', 8765)
@@ -106,7 +136,8 @@ class FixtureSSH(SSHConnection):
         paths = AppPaths(root)
         plan = json.loads((paths.bootstrap/digest/'plan.json').read_text())
         if action == 'service-plan':
-            return CommandResult(json.dumps(service_plan(paths, plan, uid=1000)), returncode=0)
+            uid = os.getuid() if os.environ.get('H3_TEST_CONTROLLED_SETUP', '').startswith('pip-') else 1000
+            return CommandResult(json.dumps(service_plan(paths, plan, uid=uid)), returncode=0)
         store = Store(paths.state/'setup.sqlite3')
         runner = Installer(paths, store, io=FakeIO())
         if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'reboot':
@@ -134,6 +165,9 @@ class FixtureSSH(SSHConnection):
             else:
                 raise AssertionError('TEST ONLY unsupported reboot fixture action')
             return CommandResult(returncode=0)
+        if action == 'prepare' and os.environ.get('H3_TEST_CONTROLLED_SETUP', '').startswith('pip-'):
+            self.prepare_package_failure(paths, plan, wait=False)
+            return CommandResult(returncode=0)
         if action == 'prepare':
             approval = Approval(**json.loads((paths.bootstrap/digest/'approval.json').read_text()))
             assert kwargs['service_digest'] == canonical_plan_digest(service_plan(paths, plan, uid=1000))
@@ -158,11 +192,34 @@ class FixtureSSH(SSHConnection):
                 (paths.config/'remote-token').chmod(0o600)
             return CommandResult(returncode=0)
         raise AssertionError('TEST ONLY unsupported SSH action')
+    def prepare_package_failure(self, paths, plan, *, wait):
+        from h3server.installer.steps import CommandFailure
+        from test_install_plan import approval
+        store = Store(paths.state/'setup.sqlite3')
+        self.package_io = PackageIO(self, paths)
+        self.package_recovery = Recovery(paths, store, io=self.package_io, uid=os.getuid())
+        self.package_setup = Installer(paths, store, io=self.package_io).create(plan)
+        self.package_recovery.prepare(self.package_setup.setup_id, approval(plan, privileged=True),
+            service_digest=canonical_plan_digest(service_plan(paths, plan, uid=os.getuid())))
+        def run():
+            try:
+                with patch('h3server.backends.comfy_runtime.verify_sources'):
+                    self.package_recovery.resume(self.package_setup.setup_id, self.package_setup.plan_digest)
+            except CommandFailure:
+                pass  # Actual durable failed checkpoint/diagnostics, not a fake HTTP response.
+        if wait: run()
+        else: threading.Thread(target=run, daemon=True).start()
+
     def deployment_action(self, *, root, artifact, digest, action, data):
         self._require_authentication()
         from h3server.controller.target import snapshot
         paths = AppPaths(root)
-        if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'])
+        if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'], digest)
+        if action == 'retry-stage':
+            self.calls.append(action)
+            with patch('h3server.backends.comfy_runtime.verify_sources'):
+                self.package_recovery.retry_stage(self.package_setup.setup_id, digest)
+            return {'state': 'accepted', 'operation': 'b' * 32}
         if action in {'activate', 'download', 'cancel-download'}:
             self.calls.append(action)
             if action == 'activate': assert data['policy'] == 'reject' and not data['cancel_confirmed']
@@ -281,6 +338,32 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                         'current_release':app.state.deployment.release.artifact.sha256,
                         'staged_history_count':len(list(paths.bootstrap.iterdir()))}), flush=True)
                     continue
+                elif command['action'] == 'stage-trusted-failure':
+                    from h3server.controller.deploy import Deployment, ReleaseBundle
+                    from h3server.installer.compatibility import PREVIOUS_ARTIFACT, PREVIOUS_SHA256, previous_payload
+                    old_dir = Path(temporary)/'trusted-predecessor'; old_dir.mkdir()
+                    wheel = old_dir/PREVIOUS_ARTIFACT.filename; wheel.write_bytes(previous_payload())
+                    prior = Deployment(connection, ReleaseBundle(wheel, PREVIOUS_SHA256))
+                    prior.make_plan('h3-convrot-int8')
+                    from test_install_plan import approval
+                    prior._stage(approval(prior.plan, privileged=True))
+                    (paths.root/'fixture-package-finish').touch()
+                    connection.prepare_package_failure(paths, prior.plan, wait=True)
+                    # Previous release persisted a plain installer log, not the
+                    # new diagnostic schema. Retain actual child output as legacy.
+                    diagnostic = paths.logs/f'installer-{connection.package_setup.setup_id}.diagnostics.json'
+                    legacy = paths.logs/f'installer-{connection.package_setup.setup_id}.log'
+                    legacy.write_text(json.loads(diagnostic.read_text())['tail']); legacy.chmod(0o600)
+                    diagnostic.unlink()
+                    # Simulate loss of controller memory, preserving real target state.
+                    app.state.setup.reset(); app.state.deployment.reset()
+                    connection.calls.clear()
+                    print(json.dumps({'plan_digest':canonical_plan_digest(prior.plan)}), flush=True)
+                    continue
+                elif command['action'] == 'invalidate-service-receipt':
+                    (paths.config/'systemd/h3-bootstrap.service').write_text('TEST ONLY changed service unit')
+                elif command['action'] == 'finish-package': (paths.root/'fixture-package-finish').touch()
+                elif command['action'] == 'allow-package-success': connection.package_io.success = True
                 elif command['action'] == 'finish-download': (paths.root/'fixture-download-finish').touch()
                 elif command['action'] == 'start-setup': connection.start_setup.set()
                 elif command['action'] == 'finish-setup': connection.finish_setup.set()

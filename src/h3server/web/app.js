@@ -15,6 +15,8 @@
   let scanned = false;
   let setup = { state: 'idle', busy: false };
   let pendingInstall = null;
+  let pendingRetry = null;
+  let inspectedSetup = null;
   let pageActive = true;
   let jobCursor = 0;
   let runtimeReady = false;
@@ -39,6 +41,14 @@
   }
 
   const messages = {
+    invalid_checkpoint: 'The saved setup record is incomplete or inconsistent. Keep the checkpoint files and inspect the original plan and deployment record; nothing was started or retried.',
+    setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
+    matching_release_required: 'This saved setup belongs to an unsupported release. Recovery is blocked; keep its checkpoints and use its matching trusted controller. Nothing was retried.',
+    compatible_retry_contract_changed: 'Saved setup cannot be safely recovered: its approved contract or target binding changed. Keep the checkpoints and inspect the original trusted release; nothing was retried.',
+    compatible_retry_not_safe: 'Saved setup recovery is blocked: completed-stage receipts, service units, active release or worker locks do not permit safe retry. Stop other controllers, wait for running work and inspect the saved records; nothing was retried.',
+    setup_retry_not_safe: 'The failed stage is no longer eligible for safe retry. Inspect saved setup to refresh its checkpoint and specific next action.',
+    setup_install_failed: 'Installation stopped. The failed command and latest output are retained below; no readiness is assumed.',
+    setup_reauthentication_required: 'SSH is no longer authenticated. Disconnect, reconnect and authenticate, then inspect saved setup. Do not start a new installation to recover a failed stage.',
     setup_sudo_password_rejected: 'The SSH password was not accepted for sudo, or this account’s sudo policy requires administrator attention. No repeated password attempt was made.',
     setup_credential_required: 'Setup needs the SSH password in controller memory. Disconnect, reconnect and authenticate again before Install.',
     setup_in_progress: 'Setup still owns the target. Cancellation has been requested by a connection change; wait until setup stops, then retry that connection action.',
@@ -148,7 +158,7 @@
     if (data.state !== connection.state || data.fingerprint !== connection.fingerprint) $('trust-check').checked = false;
     connection = data;
     $('forget-recovery').hidden = !data.recovery?.credential_retained;
-    if (data.setup) showSetup(data.setup);
+    if (data.setup) showSetup(!data.setup.busy && inspectedSetup ? inspectedSetup : data.setup);
     if (data.state !== 'authenticated') {
       runtimeReady = false;
       resetDashboardPolling();
@@ -195,8 +205,23 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall;
-    $('install').disabled = !available || !authenticated || !connection.recovery?.setup_credential_retained || (!scanned && !pendingInstall) || !$('install-profile').value || $('install-profile').selectedOptions[0]?.disabled;
+    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || setup.state === 'failed';
+    const installReason = !ready ? 'Open a valid local controller session to enable Install.'
+      : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
+      : busy ? 'An operation is in progress. Wait for it to finish.'
+      : !authenticated ? 'Authenticate to automatically scan hardware and enable Install.'
+      : setup.state === 'failed' ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
+      : !connection.recovery?.setup_credential_retained ? 'Install needs memory-only setup authorization. Disconnect, reconnect and authenticate. Saved unprivileged retries do not need a sudo password.'
+      : !scanned && !pendingInstall ? 'Hardware has not been scanned. Click Scan hardware; if it failed, resolve the scan error first.'
+      : !$('install-profile').value ? 'Wait for the model catalog, then choose a profile.'
+      : $('install-profile').selectedOptions[0]?.disabled ? 'This profile is not eligible for the observed hardware. Choose an available profile.' : '';
+    $('install').disabled = !!installReason;
+    $('install-disabled-reason').textContent = installReason;
+    $('install-disabled-reason').hidden = !installReason;
+    $('inspect-setup').disabled = !available || !authenticated || capabilities.release_available !== true;
+    $('retry-setup').hidden = setup.retry?.eligible !== true;
+    $('retry-setup').disabled = !available || !authenticated;
+    $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
     $('install').textContent = pendingInstall ? 'Retry Install request' : 'Install';
     $('cancel-setup').hidden = !setup.busy;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
@@ -361,7 +386,7 @@
   async function connect(target) {
     $('password').value = '';
     clearScan();
-    pendingInstall = null;
+    pendingInstall = null; pendingRetry = null; inspectedSetup = null;
     resetSetupPolling();
     showSetup({ state: 'idle', busy: false });
     lastTarget = target;
@@ -391,9 +416,8 @@
     $('password').value = '';
     perform('Authenticating with SSH…', async () => {
       setConnection(await pending);
-      log('SSH authentication succeeded. Hardware has not been scanned yet.');
-      $('scan-heading').tabIndex = -1;
-      $('scan-heading').focus();
+      log('SSH authentication succeeded. Scanning hardware with read-only commands; no installation starts.');
+      if (capabilities.scan === true && !setup.busy) await scanHardware();
     });
   });
   $('forget-recovery').addEventListener('click', () => perform('Clearing retained SSH credential…', async () => {
@@ -404,7 +428,7 @@
   $('disconnect').addEventListener('click', () => perform('Disconnecting SSH…', async () => {
     $('password').value = '';
     const result = await request('/disconnect', {});
-    pendingInstall = null; resetSetupPolling();
+    pendingInstall = null; pendingRetry = null; inspectedSetup = null; resetSetupPolling();
     showSetup({ state: 'idle', busy: false });
     setConnection(result);
     log('SSH disconnected. Reconnection requires password entry.');
@@ -414,7 +438,8 @@
     await refresh();
     log('Connection state refreshed from the controller.');
   }));
-  $('scan').addEventListener('click', () => perform('Scanning hardware with read-only commands…', async () => {
+  async function scanHardware() {
+    $('operation').textContent = 'Scanning hardware with read-only commands…';
     clearScan();
     const data = await request('/scan', {});
     // A probe may return unknown observations after transport loss; verify state.
@@ -423,7 +448,8 @@
     renderScan(data);
     log('Read-only scan returned. Review unknown observations and experimental profiles; no generation readiness is proven.');
     $('hardware-heading').focus();
-  }));
+  }
+  $('scan').addEventListener('click', () => perform('Scanning hardware with read-only commands…', scanHardware));
   function eventLine(record) {
     const event = record.event;
     let text = `${event.stage}: ${event.status}`;
@@ -433,12 +459,42 @@
   }
   const phases = { idle: 'Not started', planning: 'Inspecting and staging', prerequisites: 'Installing prerequisites',
     replanning: 'Rechecking prerequisites', installing: 'Installing environment', rebooting: 'Rebooting',
-    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'Downloading selected model', completed: 'Completed' };
+    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', completed: 'Completed' };
+  const substages = { 'runtime-source': 'Acquiring runtime source', 'python-packages': 'Installing Python packages', 'runtime-checks': 'Checking runtime' };
+  function seconds(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))}s` : 'not reported';
+  }
+  function replaceOutput(element, text) {
+    if (element.textContent === text) return;
+    const follow = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+    element.textContent = text;
+    if (follow) element.scrollTop = element.scrollHeight;
+  }
+  function showDiagnostics(diagnostic) {
+    $('setup-diagnostics').hidden = !diagnostic;
+    if (!diagnostic) return;
+    const command = diagnostic.command;
+    const downloading = setup.phase === 'downloading';
+    $('setup-command').textContent = downloading ? 'MODEL WEIGHTS: selected artifacts (not Python packages).'
+      : command?.label || (diagnostic.legacy ? 'Saved installer log · command metadata was not recorded by the previous release.' : 'Waiting for command details.');
+    $('setup-timing').textContent = downloading ? 'Model download timing: not reported. Measured file progress appears below when available.'
+      : `Command elapsed: ${seconds(command?.elapsed_seconds)} · Last output: ${command?.last_output_age_seconds == null ? 'not reported' : seconds(command.last_output_age_seconds) + ' ago'}.`;
+    const failure = command?.error || diagnostic.failure;
+    $('setup-failure').hidden = !failure && !(command?.exit_code != null && command.exit_code !== 0);
+    $('setup-failure').textContent = `Exit: ${command?.exit_code ?? 'not recorded'}${failure ? ' · ' + failure : ''}`;
+    $('setup-auto-retry').hidden = !diagnostic.retry || downloading;
+    $('setup-auto-retry').textContent = diagnostic.retry ? `Acquisition retry ${diagnostic.retry.attempt}: ${diagnostic.retry.reason}; backoff ${diagnostic.retry.delay_seconds}s. Pins unchanged.` : '';
+    const measured = (setup.snapshot?.events || []).filter(r => r.event.progress).slice(-1)[0];
+    replaceOutput($('setup-output'), downloading ? (measured ? eventLine(measured) : 'Waiting for measured model download output.') : diagnostic.tail || 'No command output reported yet.');
+    replaceOutput($('setup-log'), diagnostic.tail || 'No output recorded.');
+    $('setup-log-reference').textContent = `Target log: ${diagnostic.log_reference || 'not reported'} · sanitized bytes ${diagnostic.start_offset ?? 0}–${diagnostic.offset ?? 0}.`;
+  }
   function showSetup(data) {
     setup = data;
-    if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see phase and checkpoints.' : 'Idle · no operation running.';
+    if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see current phase and live output.' : 'Idle · no operation running.';
     if (setup.request_id === pendingInstall?.request_id) pendingInstall = null;
-    if (setup.profile && profileCatalog.length && (setup.busy || !scanned)) {
+    if (setup.request_id === pendingRetry?.request_id) pendingRetry = null;
+    if (setup.profile && profileCatalog.length && (setup.busy || setup.state === 'failed' || inspectedSetup || !scanned)) {
       $('install-profile').value = setup.profile;
       showSelection();
     }
@@ -446,20 +502,70 @@
     $('setup-events').replaceChildren();
     for (const record of setup.snapshot?.events || []) $('setup-events').append(node('li', eventLine(record)));
     const checkpoint = setup.snapshot?.setups?.find(item => item.plan_digest === setup.plan_digest);
+    $('setup-checkpoint').textContent = `Environment checkpoint: ${checkpoint?.state || 'not started'}. Plan: ${setup.plan_digest || 'not selected'}.`;
+    const diagnostic = setup.diagnostics;
+    const phase = setup.phase === 'installing' ? substages[diagnostic?.substage] || phases.installing : phases[setup.phase] || setup.phase;
     $('setup-status').textContent = setup.state === 'idle'
       ? 'Installation, model and generation readiness have not been verified.'
-      : `${phases[setup.phase] || setup.phase} · ${setup.state}. Environment checkpoint: ${checkpoint?.state || 'not started'}. Installation ready: ${setup.installation_ready === true}. Model files ready: ${setup.model_ready === true}. Generation tested: not proven.`;
+      : `${phase} · ${setup.state}. Installation ready: ${setup.installation_ready === true}. Model files ready: ${setup.model_ready === true}. Generation tested: not proven.`;
+    $('setup-phase-time').hidden = setup.state === 'idle';
+    $('setup-phase-time').textContent = `Phase elapsed (controller observation): ${seconds(setup.phase_elapsed_seconds)}. No percentage or ETA is assumed.`;
+    showDiagnostics(diagnostic);
     const recovery = $('setup-recovery');
     recovery.hidden = !setup.error && !['cancelled', 'cancelling', 'completed'].includes(setup.state);
     recovery.textContent = setup.error
-      ? (messages[setup.error] || `Setup stopped (${setup.error}). No completion is assumed. Inspect the saved checkpoint with your administrator before retrying.`)
+      ? (messages[setup.error] || `Setup stopped (${setup.error}). No completion is assumed. Inspect saved setup before another action.`)
       : 'Cancellation stops further automatic actions, not rollback. Already-started OS/package or detached work may continue, especially offline. Wait for setup to stop before disconnecting and authenticating again.';
-    if (setup.state === 'completed') recovery.textContent = 'Setup completed; the password was cleared from controller memory. Generation is still untested. To install another selection, disconnect, reconnect and authenticate again, then scan and click Install.';
+    if (setup.state === 'completed') recovery.textContent = 'Setup completed; the password was cleared from controller memory. Generation is still untested. To install another selection, disconnect, reconnect and authenticate again, then click Install.';
     if (setup.blockers?.length) recovery.textContent += ' ' + setup.blockers.join(' ');
-    if (setup.error || setup.state === 'cancelled') recovery.textContent += ' To retry after resolving the cause, disconnect, reconnect and authenticate again; then scan and click Install. Unknown operation outcomes require administrator inspection, not repeated installation.';
+    if (setup.state === 'failed' && setup.retry) recovery.textContent += ` ${setup.retry.eligible ? 'Safe stage retry available.' : 'Retry unavailable: ' + setup.retry.reason + '.'} ${setup.retry.next_action || ''}`;
+    if (setup.state === 'failed' && connection.state !== 'authenticated') recovery.textContent += ' Reconnect and authenticate, then inspect saved setup.';
+    if (setup.error === 'setup_sudo_password_rejected') recovery.textContent += ' After resolving sudo policy, disconnect, reconnect and authenticate before a new Install.';
     if (setup.busy) { runtimeReady = false; resetDashboardPolling(); }
     render();
   }
+  async function inspectSetup() {
+    let document;
+    try {
+      document = await request('/setup/restore', {});
+    } catch (error) {
+      if (error.code !== 'matching_release_required') throw error;
+      // Only the backend's audited predecessor proof may cross a release boundary.
+      document = await request('/setup/restore-compatible', {});
+    }
+    const snapshot = document.snapshot || await request('/setup/events?after=0');
+    const checkpoint = snapshot.setups.find(item => item.plan_digest === document.plan_digest);
+    inspectedSetup = { state: checkpoint?.state === 'failed' ? 'failed' : 'observed', busy: false,
+      phase: 'installing', profile: document.plan.profile, artifact_set_digest: document.selection.artifact_set_digest,
+      plan_digest: document.plan_digest, snapshot, diagnostics: snapshot.diagnostics, retry: snapshot.retry,
+      error: checkpoint?.state === 'failed' ? 'setup_install_failed' : null };
+    showSetup(inspectedSetup);
+  }
+  $('inspect-setup').addEventListener('click', () => perform('Inspecting saved setup without starting installation…', inspectSetup));
+  $('retry-setup').addEventListener('click', () => perform('Retrying the eligible failed stage; completed work is preserved…', async () => {
+    if (!setup.retry?.eligible) return;
+    pendingRetry ||= {profile: setup.profile, artifact_set_digest: setup.artifact_set_digest,
+      plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
+    try {
+      const result = await request('/setup/retry', pendingRetry);
+      inspectedSetup = null;
+      showSetup(result);
+    } catch (error) {
+      if (!['network_unavailable', 'invalid_response'].includes(error.code)) pendingRetry = null;
+      throw error;
+    }
+    await setupProgress();
+  }));
+  function diagnosticText() { return JSON.stringify(setup.diagnostics, null, 2) + '\n'; }
+  $('copy-setup-log').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(diagnosticText()); $('setup-copy-status').textContent = 'Diagnostics copied.'; }
+    catch { $('setup-copy-status').textContent = 'Clipboard unavailable. Use Download diagnostics or select the log text.'; }
+  });
+  $('download-setup-log').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([diagnosticText()], {type: 'application/json'}));
+    const link = node('a'); link.href = url; link.download = 'h3-setup-diagnostics.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   async function setupProgress() {
     clearTimeout(setupTimer);
     const epoch = setupEpoch;
@@ -482,7 +588,9 @@
     // Retain only the public intent ID across an ambiguous response, never secrets.
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest, request_id: crypto.randomUUID() };
     try {
-      showSetup(await request('/setup/start', pendingInstall));
+      const result = await request('/setup/start', pendingInstall);
+      inspectedSetup = null;
+      showSetup(result);
     } catch (error) {
       if (!['network_unavailable', 'invalid_response'].includes(error.code)) pendingInstall = null;
       throw error;
@@ -493,7 +601,10 @@
     showSetup(await request('/setup/cancel', {}));
     await setupProgress();
   }));
-  $('setup-refresh').addEventListener('click', () => perform('Checking automatic setup progress…', setupProgress));
+  $('setup-refresh').addEventListener('click', () => perform('Checking automatic setup progress…', async () => {
+    if (inspectedSetup && !setup.busy) await inspectSetup();
+    else await setupProgress();
+  }));
 
   async function jobEvents(current) {
     const response = await fetch(API + '/remote/events?after=' + jobCursor, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });

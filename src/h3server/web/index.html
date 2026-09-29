@@ -74,13 +74,34 @@
             <p id="license-pin" class="field-hint"></p><div id="artifact-details"></div>
           </details>
           <p id="install-scope" class="notice">Install stages the verified release, installs required packages, drivers and user services, may reboot/reconnect, activates the environment and downloads the selected artifacts above. By clicking Install, you acknowledge the pinned license, Exhibit A and auxiliary provenance terms and confirm eligibility, including any necessary written authorization. MiniMax H3 has territorial and commercial restrictions; this action does not grant eligibility. Existing busy jobs are never cancelled automatically.</p>
-          <button id="install" class="primary" type="button" disabled>Install</button>
+          <button id="install" class="primary" type="button" aria-describedby="install-disabled-reason" disabled>Install</button>
+          <p id="install-disabled-reason" class="field-hint">Authenticate, then scan hardware to enable Install.</p>
+          <button id="retry-setup" class="primary" type="button" hidden>Retry failed stage</button>
+          <button id="inspect-setup" class="text-button" type="button" disabled>Inspect saved setup</button>
+          <p class="field-hint">After a controller restart, inspect saved setup to recover its original selection and diagnostics. Inspection never starts installation.</p>
           <button id="cancel-setup" class="secondary" type="button" hidden>Cancel setup</button>
           <button id="setup-refresh" class="text-button" type="button" disabled>Refresh setup progress</button>
           <p id="setup-status" role="status">Installation, model and generation readiness have not been verified.</p>
+          <p id="setup-phase-time" class="field-hint" hidden></p>
           <progress id="setup-progress" aria-label="Setup progress; completion is not measurable" hidden></progress>
           <p id="setup-recovery" class="notice" hidden></p>
-          <ol id="setup-events" aria-label="Durable setup events"></ol>
+          <section id="setup-diagnostics" aria-label="Setup diagnostics" hidden>
+            <p id="setup-command"></p><p id="setup-timing" class="field-hint"></p>
+            <p id="setup-failure" class="error-box" hidden></p>
+            <p id="setup-auto-retry" class="notice" hidden></p>
+            <pre id="setup-output" tabindex="0" aria-label="Live bounded setup output"></pre>
+            <details id="setup-log-details"><summary>Expand diagnostic log &amp; export</summary>
+              <p>Latest sanitized output only (up to 32 KiB), not a complete archive.</p>
+              <p id="setup-log-reference" class="field-hint"></p>
+              <pre id="setup-log" tabindex="0"></pre>
+              <button id="copy-setup-log" type="button" class="secondary">Copy diagnostics</button>
+              <button id="download-setup-log" type="button" class="secondary">Download diagnostics</button>
+              <p id="setup-copy-status" role="status"></p>
+            </details>
+          </section>
+          <details id="setup-technical"><summary>Technical checkpoint details</summary>
+            <p id="setup-checkpoint"></p><ol id="setup-events" aria-label="Durable setup events"></ol>
+          </details>
         </section>
         <section class="panel" id="generation" aria-labelledby="generation-heading">
           <p class="eyebrow">MINIMAX H3 · LOCAL GENERATION</p><h2 id="generation-heading">Generate video and audio</h2>

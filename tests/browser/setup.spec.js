@@ -201,3 +201,16 @@ test('selected details and one Install replace comparison and approval wizard', 
   await expect(page.locator('#install-scope')).toContainText('reboot');
   await expect(page.locator('#install-scope')).toContainText('eligibility');
 });
+
+test('authentication automatically scans read-only and explains every disabled Install', async ({page, controller}) => {
+  const posts = [];
+  page.on('request', r => { if (r.method() === 'POST') posts.push(r.url()); });
+  await open(page, controller);
+  await expect(page.locator('#install-disabled-reason')).toContainText('Authenticate');
+  await connect(page); await approve(page); await authenticate(page);
+  await expect(page.locator('#hardware')).toContainText('Unknown');
+  await expect(page.locator('#install')).toBeEnabled();
+  expect(posts.filter(p => p.endsWith('/scan'))).toHaveLength(1);
+  expect(posts.some(p => /\/setup\//.test(p))).toBe(false);
+  await expect(page.locator('#install-disabled-reason')).toBeHidden();
+});

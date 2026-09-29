@@ -139,3 +139,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 .job-card video { display: block; width: 100%; max-height: 28rem; margin: .75rem 0; }
 #readiness, #setup-status, #selected-profile, #plan-selection, #download-selection, #license-disclosures, #unavailable-variants { overflow-wrap: anywhere; }
 #selected-profile ul, #download-selection ul { padding-left: 1.25rem; }
+
+#setup-output, #setup-log { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; background: #191c30; color: #f5f5ff; padding: 12px; border-radius: 6px; font-size: 12px; }
+#setup-output { max-height: 12em; }
+#setup-log { max-height: 36em; }
+#setup-command, #setup-failure, #setup-log-reference { overflow-wrap: anywhere; }
+#install-disabled-reason { margin-top: 8px; }

@@ -94,8 +94,12 @@ Status fields:
 
 Page reload can recover this in-memory status. Target disconnect/replacement
 resets visible status to idle. Controller restart loses browser session,
-credentials and composite progress; after fresh authentication, a new explicit
-Install can inspect durable target checkpoints without replaying privileged work.
+credentials and composite progress. After fresh authentication, use **Inspect saved
+setup** to recover the original selection and durable diagnostics. A failed setup
+is never implicitly resumed by Install: only backend-eligible unprivileged failures
+expose **Retry failed stage**, preserving completed privileged work and caches.
+See [diagnostics/retry contract](setup-diagnostics-api.md) for exact bindings and the
+narrow audited predecessor recovery path across a launcher rebuild.
 
 ## Cancel and connection changes
 
@@ -176,12 +180,37 @@ page memory until reconciliation or a same-ID retry. No browser storage is used.
 Selection and duplicate Install are disabled while setup owns the target. The page
 polls `/status` for the setup document even during SSH recovery. Reload restores
 that progress and exact selection without a plan/install/restore mutation.
-Completed/failed/cancelled workflows explain credential clearing and reauthentication;
-sudo rejection has a specific policy/password message, not a normal second field.
+Authentication automatically performs the read-only hardware scan (never Install).
+Every disabled Install has an adjacent reason/action, including scan errors and
+missing memory-only setup authorization. Sudo rejection has a specific policy/password
+message, not a normal second field. Safe unprivileged retry does not require a new
+sudo password; reconnect/authenticate is requested only when SSH is actually lost.
+
+The primary progress view shows one human phase, active command/package/source,
+controller-observed phase elapsed time and target-computed command elapsed/last-output
+age. MODEL WEIGHTS takes precedence over the last dependency command. Measured model
+file events remain separate; no percentage/ETA is inferred. Internal lifecycle and
+checkpoint events are collapsed under Technical checkpoint details.
+
+Live output is a replacement-friendly bounded sanitized tail with follow-at-bottom
+scrolling, an expanded log, and JSON copy/download. Failures retain command label,
+exit/error and output rather than replacing them with a generic recovery message.
+Historical logs explicitly report unavailable command/timing metadata. The export
+is not a full audit archive. **Inspect saved setup** is optional recovery, not a
+new install approval wall: ordinary restore reads only saved state, and the narrow
+compatible fallback may stage the trusted observer/payload but never starts work.
+Unknown releases, changed contracts/units and active locks fail closed with reasons.
 
 `tests/browser/generation_fixture.py` and `target_fixture.py` compose real controller,
 installer, target authorization/activation and durable store logic while controlling
 SSH, native process/service and model-download boundaries. Browser tests preserve
 host verification/CSRF, low-level digest rejection and generation/video regressions.
 Native smoke additionally checks that obsolete approval fields are absent and the
-embedded application source/resources equal the current checkout.
+embedded application source/resources equal the current checkout. Browser diagnostics
+regressions use real authenticated controller routes, installer/Recovery/store and
+real local child output/nonzero exits at controlled process IO boundaries (no HTTP
+fakes). They cover av==18.1.0 failure, finite fresh-index recovery, permanent stop,
+explicit retry, reload/export, cancellation, unsafe receipt rejection and original
+trusted predecessor recovery with a legacy log. They do not run pip, CUDA, codecs,
+model downloads or real server installation, and do not establish the original
+transient PyAV lookup cause.

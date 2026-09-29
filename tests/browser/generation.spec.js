@@ -200,16 +200,16 @@ for (const checkpoint of ['planned', 'awaiting_approval']) {
       let starts = 0;
       page.on('request', r => { if (r.url().endsWith('/setup/start')) starts++; });
       await install(page,controller);
-      await expect(page.locator('#setup-status')).toContainText(`Environment checkpoint: ${checkpoint}.`);
+      await expect(page.locator('#setup-checkpoint')).toContainText(`Environment checkpoint: ${checkpoint}.`);
       await expect(page.locator('#setup-progress')).toBeVisible();
       await expect(page.locator('#setup-progress')).not.toHaveAttribute('value', /.+/);
       await expect(page.locator('#install-profile')).toBeDisabled();
       await expect(page.locator('#install')).toBeDisabled();
       await page.reload();
-      await expect(page.locator('#setup-status')).toContainText(`Environment checkpoint: ${checkpoint}.`);
+      await expect(page.locator('#setup-checkpoint')).toContainText(`Environment checkpoint: ${checkpoint}.`);
       await expect(page.locator('#install-profile')).toHaveValue('h3-bf16-cpu-offload-experimental');
       await controller.control({action:'start-setup'});
-      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.');
+      await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: running.');
       await controller.control({action:'finish-setup'});
       await completed(page);
       expect(starts).toBe(1);
@@ -258,9 +258,10 @@ test.describe('controlled download cancellation', () => {
   test.use({controlledSetup:'download'});
   test('cancel after reload stops owned download, clears memory and never promises rollback', async ({page,controller}) => {
     await install(page,controller);
-    await expect(page.locator('#setup-status')).toContainText('Downloading selected model', {timeout:15000});
+    await expect(page.locator('#setup-status')).toContainText('MODEL WEIGHTS', {timeout:15000});
     await page.reload();
-    await expect(page.locator('#setup-status')).toContainText('Downloading selected model');
+    await expect(page.locator('#setup-status')).toContainText('MODEL WEIGHTS');
+    await expect(page.locator('#setup-command')).toContainText('not Python packages');
     await page.getByRole('button',{name:'Cancel setup',exact:true}).click();
     await expect(page.locator('#setup-status')).toContainText('cancelled');
     await expect(page.locator('#setup-recovery')).toContainText('not rollback');
@@ -281,7 +282,7 @@ test.describe('transport recovery and interruption', () => {
   test('connection loss resumes same digest without resubmitting installation', async ({page,controller}) => {
     await install(page,controller);
     await controller.control({action:'start-setup'});
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.');
+    await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: running.');
     const original = (await controllerStatus(page)).setup;
     await controller.control({action:'lose-setup-connection'});
     await expect(page.locator('#setup-status')).toContainText('Reconnecting securely', {timeout:10000});
@@ -294,7 +295,7 @@ test.describe('transport recovery and interruption', () => {
   });
   test('page exit discards stale status response and stops browser polling without cancelling controller', async ({page,controller}) => {
     await install(page,controller);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: planned.');
     // Delay an actual response only; no fabricated HTTP fixture or coordinator.
     let received, release, delivered;
     const arrived = new Promise(r=>received=r), held = new Promise(r=>release=r), done = new Promise(r=>delivered=r);
@@ -312,7 +313,7 @@ test.describe('transport recovery and interruption', () => {
   });
   test('low-level unauthorized mutation remains denied and does not stop automatic observation', async ({page,controller}) => {
     await install(page,controller);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: planned.');
     const denied = await page.evaluate(async () => {
       const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
       return (await fetch('/api/v1/controller/setup/install', {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
@@ -384,7 +385,7 @@ test.describe('ambiguous start and connection cancellation', () => {
       await route.abort('failed');
     });
     await install(page,controller);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: planned.');
     await expect(page.locator('#install')).toBeDisabled();
     await controller.control({action:'start-setup'}); await controller.control({action:'finish-setup'});
     await completed(page);
@@ -393,7 +394,7 @@ test.describe('ambiguous start and connection cancellation', () => {
   });
   test('disconnect cancels busy setup, then reconnect resets visible progress without bypassing host trust', async ({page,controller}) => {
     await install(page,controller);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await expect(page.locator('#setup-checkpoint')).toContainText('Environment checkpoint: planned.');
     await page.locator('#disconnect').click();
     await expect(page.locator('#setup-status')).toContainText('cancelled');
     await expect(page.locator('#setup-progress')).toBeHidden();
@@ -445,5 +446,118 @@ test.describe('stale unlaunched release discovery', () => {
     expect(status.model_ready).toBe(true);
     expect(status.generation_tested).toBe(false);
     expect(status.error).toBeNull();
+  });
+});
+
+for (const mode of ['pip-failure', 'pip-permanent']) {
+  test.describe(`native command diagnostics ${mode}`, () => {
+    test.use({controlledSetup: mode, prunedProfile: 'h3-convrot-int8'});
+    test('shows live package output, failure, bounded retries, reload and explicit safe recovery', async ({page, controller}) => {
+      const posts = [];
+      page.on('request', r => { if (r.method() === 'POST') posts.push(r.url()); });
+      await install(page, controller, 'h3-convrot-int8');
+      await expect(page.locator('#setup-status')).toContainText('Installing Python packages');
+      await expect(page.locator('#setup-command')).toContainText('av==18.1.0');
+      await expect(page.locator('#setup-output')).toContainText('Collecting av==18.1.0');
+      await expect(page.locator('#setup-timing')).toContainText('Last output:');
+      await expect(page.locator('#setup-technical')).not.toHaveAttribute('open', '');
+      await controller.control({action:'finish-package'});
+      const error = mode === 'pip-failure' ? 'No matching distribution found for av==18.1.0' : 'ResolutionImpossible: conflicting dependencies for av==18.1.0';
+      await expect(page.locator('#setup-output')).toContainText(error, {timeout:15000});
+      await expect(page.locator('#setup-status')).toContainText('failed');
+      await expect(page.locator('#setup-failure')).toContainText('Exit: 1');
+      await expect(page.locator('#retry-setup')).toBeEnabled();
+      await expect(page.locator('#install-disabled-reason')).toContainText('saved setup failed');
+      await expect(page.locator('#setup-recovery')).not.toContainText('disconnect, reconnect');
+      const firstCalls = (await controller.control({action:'calls'})).calls;
+      expect(firstCalls.filter(c => c === 'pip-attempt')).toHaveLength(mode === 'pip-failure' ? 2 : 1);
+      expect(firstCalls.filter(c => c === 'pip-fresh-index')).toHaveLength(mode === 'pip-failure' ? 1 : 0);
+      await page.reload();
+      await expect(page.locator('#setup-output')).toContainText(error);
+      await page.locator('#setup-log-details summary').click();
+      const download = page.waitForEvent('download');
+      await page.locator('#download-setup-log').click();
+      const fs = require('node:fs');
+      const exported = fs.readFileSync(await (await download).path(), 'utf8');
+      expect(exported).toContain(error);
+      expect(exported).not.toContain('TEST-ONLY-secret');
+      if (mode === 'pip-failure') {
+        await controller.control({action:'allow-package-success'});
+        await page.locator('#retry-setup').click();
+        await completed(page);
+        const calls = (await controller.control({action:'calls'})).calls;
+        expect(calls.filter(c => c === 'prepare')).toHaveLength(1);
+        expect(calls.filter(c => c === 'retry-stage')).toHaveLength(1);
+        expect(calls.filter(c => c === 'sudo-check')).toHaveLength(1);
+        expect(posts.filter(p => p.endsWith('/setup/start'))).toHaveLength(1);
+        expect(posts.filter(p => p.endsWith('/setup/retry'))).toHaveLength(1);
+      } else {
+        await page.waitForTimeout(1500);
+        expect((await controller.control({action:'calls'})).calls.filter(c => c === 'pip-attempt')).toHaveLength(1);
+        await controller.control({action:'invalidate-service-receipt'});
+        await page.locator('#inspect-setup').click();
+        await expect(page.locator('#retry-setup')).toBeHidden();
+        await expect(page.locator('#setup-recovery')).toContainText('recovery_receipt_invalid');
+        await expect(page.locator('#setup-output')).toContainText(error);
+      }
+      await expect(page.locator('body')).not.toContainText('TEST-ONLY-secret');
+    });
+  });
+}
+
+test.describe('saved predecessor dependency failure', () => {
+  test.use({controlledSetup:'pip-failure', prunedProfile:'h3-convrot-int8'});
+  test('fresh controller observation restores original trusted selection and retries without privilege', async ({page,controller}) => {
+    await login(page,controller);
+    await expect(page.locator('#install')).toBeEnabled();
+    const saved = await controller.control({action:'stage-trusted-failure'});
+    await page.reload();
+    await page.locator('#inspect-setup').click();
+    await expect(page.locator('#setup-output')).toContainText('No matching distribution found for av==18.1.0');
+    await expect(page.locator('#install-profile')).toHaveValue('h3-convrot-int8');
+    await expect(page.locator('#retry-setup')).toBeEnabled();
+    await expect(page.locator('#setup-checkpoint')).toContainText(saved.plan_digest);
+    await expect(page.locator('#setup-command')).toContainText('command metadata was not recorded');
+    await expect(page.locator('#setup-timing')).toContainText('not reported');
+    await expect(page.locator('#setup-phase-time')).toContainText('not reported');
+    const before = (await controller.control({action:'calls'})).calls;
+    expect(before).not.toContain('prepare');
+    await controller.control({action:'allow-package-success'});
+    await page.locator('#retry-setup').click();
+    await completed(page);
+    const calls = (await controller.control({action:'calls'})).calls;
+    expect(calls).not.toContain('sudo-check');
+    expect(calls).not.toContain('prepare');
+    expect(calls.filter(c=>c==='retry-stage')).toHaveLength(1);
+  });
+});
+
+test.describe('bounded fresh-index recovery', () => {
+  test.use({controlledSetup:'pip-fresh-success', prunedProfile:'h3-convrot-int8'});
+  test('one no-distribution response recovers with unchanged av pin and no user retry', async ({page,controller}) => {
+    await install(page,controller,'h3-convrot-int8');
+    await expect(page.locator('#setup-output')).toContainText('Collecting av==18.1.0');
+    await controller.control({action:'finish-package'});
+    await completed(page);
+    const calls = (await controller.control({action:'calls'})).calls;
+    expect(calls.filter(c=>c==='pip-attempt')).toHaveLength(2);
+    expect(calls.filter(c=>c==='pip-fresh-index')).toHaveLength(1);
+    expect(calls).not.toContain('retry-stage');
+    await expect(page.locator('#setup-log')).toContainText('Installed av==18.1.0');
+    await expect(page.locator('#retry-setup')).toBeHidden();
+  });
+});
+
+test.describe('live package cancellation', () => {
+  test.use({controlledSetup:'pip-failure', prunedProfile:'h3-convrot-int8'});
+  test('cancellation retains observed output and does not promise to kill detached commands', async ({page,controller}) => {
+    await install(page,controller,'h3-convrot-int8');
+    await expect(page.locator('#setup-output')).toContainText('Collecting av==18.1.0');
+    await page.locator('#cancel-setup').click();
+    await expect(page.locator('#setup-status')).toContainText('cancelled');
+    await expect(page.locator('#setup-output')).toContainText('Collecting av==18.1.0');
+    await expect(page.locator('#setup-recovery')).toContainText('detached work may continue');
+    await expect(page.locator('#retry-setup')).toBeHidden();
+    await controller.control({action:'finish-package'});
   });
 });
