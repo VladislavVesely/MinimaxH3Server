@@ -208,7 +208,10 @@
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
     $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || setup.state === 'failed';
+    const alreadyInstalled = setup.installation_ready === true && setup.model_ready === true
+      && setup.profile === $('install-profile').value;
     const installReason = !ready ? 'Open a valid local controller session to enable Install.'
+      : alreadyInstalled ? 'This environment and its model files are already installed and verified. No installation is needed.'
       : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
       : busy ? 'An operation is in progress. Wait for it to finish.'
       : !authenticated ? 'Authenticate to automatically scan hardware and enable Install.'
@@ -224,7 +227,7 @@
     $('retry-setup').hidden = setup.retry?.eligible !== true;
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
-    $('install').textContent = pendingInstall ? 'Retry Install request' : 'Install';
+    $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request' : 'Install';
     $('cancel-setup').hidden = !setup.busy || setup.observing === true;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
     $('setup-refresh').disabled = !usable;
@@ -628,6 +631,17 @@
   $('generation-profile').addEventListener('change', render);
   $('install').addEventListener('click', () => perform('Starting selected automatic setup…', async () => {
     const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
+    // Reattach before entering install/recovery. A completed or running saved
+    // download is not a failed environment and must never be reinstalled.
+    try {
+      await observeSavedSetup();
+      if (setup.busy || (setup.profile === selected.profile_name && setup.model_ready)) {
+        pendingInstall = null;
+        return;
+      }
+    } catch (error) {
+      if (!['setup_not_found', 'matching_release_required'].includes(error.code)) throw error;
+    }
     // Retain only the public intent ID across an ambiguous response, never secrets.
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest, request_id: crypto.randomUUID() };
     try {
