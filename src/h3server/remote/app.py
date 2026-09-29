@@ -29,6 +29,13 @@ from h3server.remote.worker import BackendUnavailable, QueueFull, Worker, _direc
 from h3server.store import Store
 
 
+class MaintenanceInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    operation: str = Field(pattern=r'^[a-f0-9]{32}$')
+    policy: Literal['reject', 'drain', 'cancel'] = 'reject'
+    cancel_confirmed: StrictBool = False
+
+
 class GenerationInput(BaseModel):
     """Canvas area<=1,032,192 is service policy, not an upstream hard maximum.
 
@@ -159,6 +166,24 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     @app.exception_handler(Exception)
     async def internal_error(request, error):
         return JSONResponse({"error": "internal_error"}, status_code=500)
+
+    @app.get('/api/v1/maintenance')
+    def maintenance_status():
+        return worker.maintenance_status()
+
+    @app.post('/api/v1/maintenance/begin')
+    def maintenance_begin(payload: MaintenanceInput):
+        try:
+            return worker.begin_maintenance(payload.operation, policy=payload.policy, cancel_confirmed=payload.cancel_confirmed)
+        except ValueError:
+            raise HTTPException(409, 'maintenance_busy_or_consent_required') from None
+
+    @app.post('/api/v1/maintenance/end')
+    def maintenance_end(payload: MaintenanceInput):
+        try:
+            return worker.end_maintenance(payload.operation)
+        except ValueError:
+            raise HTTPException(409, 'maintenance_owner_mismatch') from None
 
     @app.get("/api/v1/health")
     def health():

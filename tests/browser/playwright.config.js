@@ -4,7 +4,7 @@ const path = require('node:path');
 
 module.exports = defineConfig({
   testDir: '.',
-  testMatch: 'setup.spec.js',
+  testMatch: ['setup.spec.js', 'generation.spec.js'],
   outputDir: path.join(os.tmpdir(), 'h3-setup-browser-results'),
   fullyParallel: false,
   workers: 1,

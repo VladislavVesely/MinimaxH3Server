@@ -12,20 +12,20 @@
   <aside class="sidebar" aria-label="Setup navigation">
     <a class="brand" href="#main" aria-label="H3 Server home"><span class="brand-mark">H3</span><span>H3 Server<small>SELF-HOSTED STUDIO</small></span></a>
     <p class="nav-label">WORKSPACE</p>
-    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">Soon</span></a></nav>
+    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">02</span></a></nav>
     <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
       <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
       <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
       <li id="step-review"><span class="step-number">3</span><span>Review profiles<small>Experimental, not certified</small></span></li>
-      <li class="muted-step"><span class="step-number">4</span><span>Install &amp; validate<small>Not available in this build</small></span></li>
+      <li class="muted-step"><span class="step-number">4</span><span>Install &amp; validate<small>Approve changes &amp; verify</small></span></li>
     </ol></div>
     <div class="sidebar-note"><span class="tiny-dot" aria-hidden="true"></span> Local controller<p>Your infrastructure. No hosted generation fallback.</p></div>
   </aside>
   <div class="workspace">
     <header class="topbar"><span>Workspace <span aria-hidden="true">/</span> <strong>Server setup</strong></span><span class="session-badge" id="session" role="status">Establishing local session…</span></header>
     <main id="main" tabindex="-1">
-      <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Your server. Your studio.</h1><p>Start with a secure connection. Understand your hardware before making a single change.</p></div><span class="pill">READ-ONLY PREVIEW</span></section>
-      <div class="assurances"><span><b aria-hidden="true">↗</b> SSH transport</span><span><b aria-hidden="true">◇</b> Explicit fingerprint trust</span><span><b aria-hidden="true">○</b> No remote changes</span></div>
+      <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Your server. Your studio.</h1><p>Start with a secure connection. Understand your hardware before making a single change.</p></div><span class="pill">EXPERIMENTAL LOCAL RUNTIME</span></section>
+      <div class="assurances"><span><b aria-hidden="true">↗</b> SSH transport</span><span><b aria-hidden="true">◇</b> Explicit fingerprint trust</span><span><b aria-hidden="true">○</b> Consent before changes</span></div>
       <noscript><p class="notice">JavaScript is required for the local setup UI. No connection or installation has been started.</p></noscript>
       <div id="error" class="error-box" role="alert" tabindex="-1" hidden></div>
       <div class="work-grid"><div class="setup-panels">
@@ -65,12 +65,50 @@
         <section class="panel" id="review-panel" aria-labelledby="review-heading" hidden>
           <p class="eyebrow">03 / COMPARE</p><h2 id="review-heading">Experimental profile comparison</h2><p id="compatibility" class="notice"></p><p class="field-hint">Statuses compare observed hardware with research criteria. They do not certify compatibility, a memory fit, or a working generation backend.</p><div id="profiles" class="profile-grid"></div>
         </section>
-        <section class="panel unavailable" id="installation" aria-labelledby="installation-heading">
-          <div class="panel-heading"><div><p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Review before you install</h2></div><span class="outline-pill">Unavailable</span></div>
-          <p>No installer endpoint is implemented in this controller. No installation plan can be approved or executed here, and nothing has been installed.</p><p class="field-hint">A future plan must describe proposed changes, disk estimates and model/license prerequisites, with explicit installation and sudo approval. Reboot permission must be separate.</p>
-          <button type="button" disabled aria-describedby="install-note">Approve installation</button><p class="field-hint" id="install-note">Disabled until a real installer and approval API are available.</p>
+        <section class="panel" id="installation" aria-labelledby="installation-heading">
+          <p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Review before you install</h2>
+          <p id="install-note">Choose a profile after scanning. Staging transfers only the verified application wheel and plan, not model weights. No system mutation occurs until approval.</p>
+          <label for="install-profile">Installation profile</label><select id="install-profile"><option value="h3-bf16-cpu-offload-experimental">BF16 CPU offload · experimental</option><option value="h3-int8-group-offload-experimental">INT8 group offload · experimental</option></select>
+          <label class="check-label"><input id="sudo-available" type="checkbox"> I can supply a sudo password for approved operations</label>
+          <button id="plan" class="primary" type="button" disabled>Stage release &amp; review plan</button>
+          <button id="restore-setup" class="secondary" type="button" disabled>Restore saved setup</button>
+          <div id="plan-review" hidden>
+            <h3>Exact proposed changes</h3><pre id="plan-document"></pre>
+            <details><summary>Full pinned MiniMax H3 license and Exhibit A</summary><pre id="license-document"></pre></details>
+            <p class="notice">MiniMax H3 has territorial and commercial restrictions. Acknowledgement does not grant eligibility or override required written authorization. These profiles and native runtime remain experimental.</p>
+            <label class="check-label"><input id="license-check" type="checkbox"> I read and acknowledge the complete pinned license and Exhibit A</label>
+            <label class="check-label"><input id="eligibility-check" type="checkbox"> I confirm eligibility, including any necessary separate written authorization</label>
+            <label class="check-label"><input id="system-check" type="checkbox"> I approve the listed system changes, user services and privileged lingering registration</label>
+            <div class="field"><label for="sudo-password">Sudo password (optional, memory only)</label><input id="sudo-password" type="password" autocomplete="off" maxlength="4096"></div>
+            <button id="install" class="primary" type="button" disabled>Approve installation</button>
+            <button id="resume-setup" class="secondary" type="button">Resume approved installation</button>
+            <label class="check-label"><input id="reboot-check" type="checkbox"> Separately approve reboot of this server for this plan</label>
+            <button id="reboot" class="secondary" type="button" disabled>Request approved reboot</button>
+            <h3>Activate or update release</h3><p>Activation requires a verified environment. Updates preserve models and back up compatible databases. A failed health check rolls back. System/driver prerequisites during an update need a separate administrator maintenance window.</p>
+            <label for="busy-policy">Existing job policy</label><select id="busy-policy"><option value="reject">Reject update if any job is busy</option><option value="drain">Reject new jobs and drain accepted jobs (5 minute deadline)</option><option value="cancel">Cancel accepted jobs (requires separate confirmation)</option></select>
+            <label class="check-label"><input id="cancel-check" type="checkbox"> I explicitly approve cancellation of all accepted jobs</label>
+            <button id="activate" class="primary" type="button">Approve activation / update</button>
+            <button id="repair" class="secondary" type="button">Approve interrupted activation recovery</button><p class="field-hint">Recovery rolls back before commit; after a durable healthy commit it releases the maintenance gate without discarding newly accepted jobs.</p>
+            <h3>Model acquisition · 144,051,160,615 bytes</h3><p>Model download consent is separate. Files are pinned, resumable and verified; model files being ready does not prove a generated video.</p>
+            <label class="check-label"><input id="download-check" type="checkbox"> I approve this model download under the license and eligibility attestations above</label>
+            <button id="download-model" class="primary" type="button" disabled>Download / resume model</button><button id="cancel-download" class="secondary" type="button">Cancel model download</button>
+          </div>
+          <button id="setup-refresh" class="text-button" type="button" disabled>Replay setup progress</button><p id="setup-status" role="status">Installation, daemon, model and generation readiness have not been verified.</p><ol id="setup-events" aria-label="Durable setup events"></ol>
         </section>
-        <section class="generation-note" id="generation" aria-labelledby="generation-heading"><h2 id="generation-heading">Generation comes after validation.</h2><p>This build has no generation backend. Environment readiness and a real video smoke test must be verified separately. No generation actions are available.</p></section>
+        <section class="panel" id="generation" aria-labelledby="generation-heading">
+          <p class="eyebrow">MINIMAX H3 · LOCAL GENERATION</p><h2 id="generation-heading">Generate video and audio</h2>
+          <button id="dashboard-refresh" class="secondary" type="button" disabled>Refresh dashboard</button><p id="readiness" role="status">Daemon disconnected. No readiness assumed.</p>
+          <form id="generation-form"><fieldset id="generation-fields" disabled><legend>Text-to-video settings</legend>
+            <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" required maxlength="15000" rows="3"></textarea></div>
+            <label for="generation-profile">Generation profile</label><select id="generation-profile"><option value="h3-bf16-cpu-offload-experimental">BF16 CPU offload</option><option value="h3-int8-group-offload-experimental">INT8 group offload</option></select>
+            <div class="form-row"><div class="field"><label for="width">Width</label><input id="width" type="number" min="32" max="1344" step="32" value="1344" required></div><div class="field"><label for="height">Height</label><input id="height" type="number" min="32" max="1344" step="32" value="768" required></div></div>
+            <p class="field-hint">Canvas area at most 1,032,192 pixels; axes must be multiples of 32. 24 fps, video plus audio.</p>
+            <div class="form-row"><div class="field"><label for="frames">Frames</label><input id="frames" type="number" min="124" max="345" step="17" value="124" required></div><div class="field"><label for="steps">Sigma-grid steps</label><input id="steps" type="number" min="2" max="1000" value="50" required></div><div class="field"><label for="seed">Seed</label><input id="seed" type="number" min="0" max="9007199254740991" value="42" required></div></div>
+            <div id="lora-field" class="field" hidden><label for="lora">Managed LoRA ID (optional, BF16 only)</label><input id="lora" pattern="[A-Za-z0-9_-]{1,128}" maxlength="128" autocomplete="off"></div><p id="sparse-note" class="field-hint">Sparse attention is unsupported by the pinned backend and is not submitted.</p>
+            <button id="generate" class="primary" type="submit">Queue generation</button>
+          </fieldset></form>
+          <h3>Jobs &amp; outputs</h3><div id="jobs"></div><ol id="job-events" aria-label="Durable job events"></ol>
+        </section>
       </div>
       <aside class="activity panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Session activity</h2><span class="tiny-dot" aria-hidden="true"></span></div><p class="field-hint">Local operation summaries, not a remote log stream. No credentials are recorded.</p><div class="operation-status"><p id="operation" role="status">Waiting for a local session.</p><progress id="progress" aria-label="Current operation; completion is not measurable" hidden></progress><p id="progress-note" class="field-hint" hidden>Working… duration and percentage are not reported by the controller.</p></div><ol id="activity-log" role="log" aria-label="Session activity log" aria-live="polite" aria-relevant="additions"></ol><div class="activity-footer">SAFE BY DESIGN<p>Scanning does not install packages, download models, or modify the server.</p></div></aside>
       </div>

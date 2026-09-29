@@ -126,7 +126,7 @@ def test_full_readonly_workflow_and_experimental_recommendations(controller):
     assert data["recommendations"]
     assert all(item["status"] != "verified" for item in data["recommendations"])
     assert "unverified" in data["compatibility"].lower()
-    assert data["capabilities"] == {"scan": True, "installer": False, "generation": False}
+    assert data["capabilities"] == {"scan": True, "installer": True, "generation": True}
     assert "commands" not in data["probe"]  # no raw remote stderr/output leaked
     assert client.post(API + "/disconnect", headers=headers).json()["state"] == "disconnected"
     assert network.sockets[-1].closed

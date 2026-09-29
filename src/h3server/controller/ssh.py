@@ -579,6 +579,69 @@ class SSHConnection:
         data = json.dumps({'sudo_password': sudo_password}).encode() if action in {'prepare', 'reboot'} else b''
         return self._execute(command, 30, stdin=data, suppress_output=action not in {'snapshot', 'service-plan'})
 
+    @contextmanager
+    def deployment_deadline(self, timeout=180):
+        """Bound staging including Paramiko writes/rekey/cleanup, not only reads."""
+        with self.lock:
+            self._require_authentication()
+            with _TransportDeadline(self._socket, self._transport, timeout) as deadline:
+                yield deadline
+            if deadline.expired.is_set():
+                self.close()
+                raise ControllerError('deployment_timeout', 504)
+
+    @contextmanager
+    def private_sftp(self):
+        with self.deployment_deadline():
+            client = self.open_sftp()
+            try:
+                yield client
+            finally:
+                _close_quietly(client)
+                if client in self._sftp_clients:
+                    self._sftp_clients.remove(client)
+
+    @_locked
+    def inspect_install(self, *, sudo_password_available=False):
+        """Fixed read-only prerequisite inspector, not an arbitrary HTTP argv API."""
+        from h3server.installer.planner import inspect_prerequisites
+        return inspect_prerequisites(lambda argv, timeout: self._execute('LC_ALL=C ' + shlex.join(argv), timeout),
+                                     sudo_password_available=sudo_password_available)
+
+    @_locked
+    def open_api_channel(self):
+        self._require_authentication()
+        with _TransportDeadline(self._socket, self._transport, 10) as deadline:
+            try:
+                channel = self._transport.open_channel('direct-tcpip', ('127.0.0.1', 8765), ('127.0.0.1', 0), timeout=deadline.remaining())
+                channel.settimeout(30)
+            except Exception:
+                raise ControllerError('remote_unavailable', 502) from None
+        if deadline.expired.is_set():
+            self.close()
+            raise ControllerError('remote_unavailable', 502)
+        return channel
+
+    @_locked
+    def deployment_action(self, *, root, artifact, digest, action, data):
+        import json
+        from h3server.installer.planner import ReleaseArtifact
+        if (not isinstance(artifact, ReleaseArtifact) or not _absolute_path(root) or '..' in root.split('/')
+                or not re.fullmatch('[a-f0-9]{64}', digest)
+                or action not in {'snapshot', 'activate', 'download', 'cancel-download', 'repair', 'install-update'}):
+            raise ValueError('invalid deployment operation')
+        wheel = root + '/releases/' + artifact.release_id + '/' + artifact.filename
+        argv = ['env', '-u', 'PYTHONHOME', '-u', 'PYTHONSTARTUP', 'PYTHONNOUSERSITE=1', 'PYTHONPATH=' + wheel,
+                'python3', '-m', 'h3server.controller.target', '--root', root, '--digest', digest, action]
+        command = "printf '%s  %s\\n' " + shlex.join((artifact.sha256, wheel)) + ' | sha256sum -c - >/dev/null && ' + shlex.join(argv)
+        result = self._execute(command, 30, stdin=json.dumps(data).encode())
+        if not result.succeeded:
+            raise ControllerError('deployment_operation_failed', 502)
+        try:
+            return json.loads(result.stdout)
+        except ValueError:
+            raise ControllerError('invalid_remote_response', 502) from None
+
     @_locked
     def remote_home(self) -> str:
         # Fixed shell syntax: expand exactly HOME once, quote it, and never

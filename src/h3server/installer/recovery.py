@@ -69,7 +69,7 @@ ConditionPathExists=@READINESS@
 
 [Service]
 Type=simple
-ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@
+ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
 Environment=@ENVIRONMENT@
 WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure
@@ -170,7 +170,15 @@ def render_units(paths, plan):
         return re.sub(r'@([A-Z]+)@', lambda match: values[match[1]], template)
     bootstrap = substitute(BOOTSTRAP_UNIT, {'ROOT': _quote(paths.root, exec_value=True),
                                           'DIGEST': digest, 'ENVIRONMENT': env(bootstrap_env)})
-    daemon = substitute(DAEMON_UNIT, {'ROOT': _quote(paths.root, exec_value=True),
+    # Controller-managed releases stage an immutable, versioned daemon config.
+    # Legacy callable installer users retain the root-only command contract.
+    config = ''
+    if plan.get('deployment_config') is not None:
+        expected = {'port': 8765, 'root': str(paths.root)}
+        if plan['deployment_config'] != expected:
+            raise ValueError('deployment config must use the approved root and loopback API port')
+        config = ' --config ' + _quote(wheel.parent / 'daemon.json', exec_value=True)
+    daemon = substitute(DAEMON_UNIT, {'ROOT': _quote(paths.root, exec_value=True), 'CONFIG': config,
                                      'PYTHON': _quote(python, exec_value=True),
                                      'READINESS': _scalar_path(python.parent.parent / 'readiness.json'),
                                      'WORKINGDIRECTORY': _scalar_path(paths.root),

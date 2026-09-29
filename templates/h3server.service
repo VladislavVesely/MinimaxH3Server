@@ -6,7 +6,7 @@ ConditionPathExists=@READINESS@
 
 [Service]
 Type=simple
-ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@
+ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
 Environment=@ENVIRONMENT@
 WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure

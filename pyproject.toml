@@ -22,7 +22,7 @@ test = ["pytest>=8,<10", "httpx>=0.28,<1"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"h3server.backends" = ["manifest.json"]
+"h3server.backends" = ["manifest.json", "LICENSE.h3.txt"]
 "h3server" = ["web/*.html", "web/*.js", "web/*.css"]
 
 [tool.pytest.ini_options]

@@ -74,7 +74,7 @@ test('bootstrap is single-use, cookie is HttpOnly, writes require CSRF and reloa
   await expect(page.getByRole('alert')).toContainText('invalid or expired');
 });
 
-test('trust before authentication, read-only scan, unknowns, safe text and unavailable installation', async ({ page, controller }) => {
+test('trust before authentication, read-only scan, unknowns, safe text and explicit installation staging', async ({ page, controller }) => {
   const posts = [];
   const logs = [];
   page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
@@ -95,8 +95,9 @@ test('trust before authentication, read-only scan, unknowns, safe text and unava
   await expect(page.locator('#hardware img')).toHaveCount(0);
   await expect(page.locator('#profiles article')).not.toHaveCount(0);
   await expect(page.locator('#profiles')).toContainText('Required free disk');
-  await expect(page.getByRole('button', { name: 'Approve installation' })).toBeDisabled();
-  await expect(page.locator('#installation')).toContainText('No installer endpoint');
+  await expect(page.locator('#install')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Stage release & review plan' })).toBeEnabled();
+  await expect(page.locator('#installation')).toContainText('No system mutation occurs until approval');
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
   expect(logs.join(' ')).not.toContain('browser-secret');
   await expect(page.locator('body')).not.toContainText('browser-secret');
@@ -153,7 +154,7 @@ test('scan failure is explicit, stops progress and never shows readiness', async
   await expect(page.getByRole('alert')).toContainText('home directory could not be read');
   await expect(page.getByRole('progressbar')).toBeHidden();
   await expect(page.locator('#scan-results')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Approve installation' })).toBeDisabled();
+  await expect(page.locator('#install')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Scan hardware', exact: true })).toBeEnabled();
 });
 

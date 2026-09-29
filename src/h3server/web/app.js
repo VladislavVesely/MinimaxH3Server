@@ -13,6 +13,13 @@
   let capabilities = {};
   let lastTarget = null;
   let scanned = false;
+  let planReview = null;
+  let setupCursor = 0;
+  let jobCursor = 0;
+  let runtimeReady = false;
+  let backendCapabilities = {};
+  let setupTimer = null;
+  let jobTimer = null;
 
   const messages = {
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
@@ -35,6 +42,18 @@
     invalid_credentials: 'The password is invalid. Enter a nonempty password without null characters.',
     already_connected: 'A connection already exists. Refresh its state, or disconnect before changing servers.',
     invalid_remote_home: 'The server’s home directory could not be read. Check the SSH account and retry the scan.',
+    fresh_prerequisite_approval_required: 'Prerequisite recovery requires fresh approval. Review the restored plan and re-enter a sudo password if required; no password was retained.',
+    release_unavailable: 'Launch deployment with a verified release wheel and trusted SHA256 pin. No artifact is bundled in this source-only session.',
+    approval_required: 'Fresh, exact plan, license, eligibility and service approvals are required. Review the plan again.',
+    remote_unavailable: 'Remote daemon unavailable. Reauthenticate after disconnect or reboot, then restore setup and replay progress. No readiness assumed.',
+    deployment_operation_failed: 'The target rejected or could not execute this operation. Replay progress; restore the matching release and reauthenticate if needed.',
+    update_prerequisite_maintenance_required: 'Update requires OS/driver changes. Complete these with your administrator in a separate maintenance window, then rescan.',
+    operation_failed: 'Operation failed. Check target permissions, exact approvals and the saved checkpoint; no completion is assumed.',
+    backend_not_ready: 'The local runtime or verified model is not ready. Review diagnostics before submitting.',
+    insufficient_storage: 'Insufficient server disk space. Free space or adjust retention before retrying.',
+    queue_full: 'The server job queue is full. Wait for existing jobs or cancel one explicitly.',
+    output_unavailable_or_expired: 'This output expired or is unavailable. It cannot be previewed or downloaded.',
+    unsupported_request: 'The requested settings or managed LoRA are unsupported by this runtime.',
     network_unavailable: 'The local controller could not be reached. No success is assumed. Restore it, then refresh the connection; restart and use a new launch URL if needed.',
   };
 
@@ -79,7 +98,7 @@
     let data;
     try { data = await response.json(); } catch { throw { code: 'invalid_response' }; }
     if (!response.ok) {
-      const code = data.error?.code;
+      const code = data.error?.code || data.detail || (typeof data.error === 'string' ? data.error : null);
       if (code === 'session_required' || code === 'csrf_forbidden') {
         ready = false;
         csrf = null;
@@ -101,7 +120,15 @@
   function setConnection(data) {
     if (data.state !== connection.state || data.fingerprint !== connection.fingerprint) $('trust-check').checked = false;
     connection = data;
-    if (data.state !== 'authenticated') clearScan();
+    if (data.state !== 'authenticated') {
+      clearScan();
+      runtimeReady = false;
+      clearTimeout(setupTimer); clearTimeout(jobTimer);
+      planReview = null; setupCursor = 0; jobCursor = 0;
+      $('plan-review').hidden = true;
+      $('sudo-password').value = '';
+      $('readiness').textContent = 'SSH disconnected. Reauthenticate and restore saved setup; credentials were not retained.';
+    }
     if (data.state !== 'awaiting_authentication') $('password').value = '';
     render();
   }
@@ -139,6 +166,16 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
+    $('plan').disabled = !usable || !authenticated || !scanned;
+    for (const id of ['restore-setup', 'setup-refresh', 'dashboard-refresh']) $(id).disabled = !usable || !authenticated;
+    const consent = $('license-check').checked && $('eligibility-check').checked;
+    $('install').disabled = !usable || !authenticated || !planReview || !consent || !$('system-check').checked || !!planReview?.plan.blockers.length;
+    $('reboot').disabled = !usable || !authenticated || !planReview || !$('reboot-check').checked || !consent;
+    $('download-model').disabled = !usable || !authenticated || !planReview || !consent || !$('download-check').checked;
+    for (const id of ['activate', 'repair', 'resume-setup', 'cancel-download']) $(id).disabled = !usable || !authenticated || !planReview;
+    $('generation-fields').disabled = !usable || !authenticated || !runtimeReady;
+    for (const button of $('jobs').querySelectorAll('button')) button.disabled = !usable || !authenticated;
+    $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
 
   async function refresh() {
@@ -292,7 +329,133 @@
     log('Read-only scan returned. Review unknown observations and experimental profiles; no generation readiness is proven.');
     $('hardware-heading').focus();
   }));
-  window.addEventListener('pagehide', () => { $('password').value = ''; });
+  function showPlan(data) {
+    planReview = data;
+    $('plan-review').hidden = false;
+    $('plan-document').textContent = JSON.stringify({ plan: data.plan, service: data.service }, null, 2);
+    $('license-document').textContent = data.license_text;
+    for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'cancel-check']) $(id).checked = false;
+    $('sudo-password').value = '';
+    render();
+  }
+  function approval() {
+    const data = { plan_digest: planReview.plan_digest, license_acknowledged: $('license-check').checked,
+      eligibility_confirmed: $('eligibility-check').checked, privileged: $('system-check').checked,
+      reboot: false, service_digest: planReview.service_digest };
+    if ($('sudo-password').value) data.sudo_password = $('sudo-password').value;
+    $('sudo-password').value = '';
+    return data;
+  }
+  function eventLine(record) {
+    const event = record.event;
+    let text = `${event.stage}: ${event.status}`;
+    if (event.message) text += ` — ${event.message}`;
+    if (event.progress) text += ` · ${event.progress.completed}${event.progress.total === null ? '' : '/' + event.progress.total} ${event.progress.unit}`;
+    return text;
+  }
+  async function setupProgress() {
+    const data = await request('/setup/events?after=' + setupCursor);
+    if (data.reset) { setupCursor = 0; $('setup-events').replaceChildren(); }
+    for (const record of data.events) $('setup-events').append(node('li', eventLine(record)));
+    setupCursor = data.cursor;
+    while ($('setup-events').children.length > 100) $('setup-events').firstElementChild.remove();
+    const setup = data.setups.find(item => item.plan_digest === planReview?.plan_digest);
+    $('setup-status').textContent = `Environment checkpoint: ${setup?.state || 'not started'}. Operation: ${data.operation?.action || 'none'} ${data.operation?.state || ''}. Active release: ${data.active_release?.release || 'none'}. Model and real generation are checked separately in the dashboard.`;
+    clearTimeout(setupTimer);
+    const pending = ['running', 'reconnecting', 'waiting_for_reboot'].includes(setup?.state) || data.operation?.state === 'running';
+    if (data.has_more || pending) setupTimer = setTimeout(() => {
+      if (connection.state === 'authenticated') setupProgress().catch(error => { clearTimeout(setupTimer); showError(error, false); });
+    }, data.has_more ? 100 : 2000);
+  }
+  async function setupAction(action, data) {
+    const result = await request('/setup/' + action, data);
+    if (result.review) showPlan(result.review);
+    $('setup-status').textContent = `Request ${result.state}. This is not completion; replaying durable target progress.`;
+    await setupProgress();
+  }
+  for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'generation-profile']) $(id).addEventListener('change', render);
+  $('plan').addEventListener('click', () => perform('Staging verified release and inspecting exact changes…', async () => {
+    showPlan(await request('/setup/plan', { profile: $('install-profile').value, sudo_password_available: $('sudo-available').checked }));
+    setupCursor = 0; $('setup-events').replaceChildren();
+  }));
+  $('restore-setup').addEventListener('click', () => perform('Restoring durable setup after authentication…', async () => {
+    showPlan(await request('/setup/restore', {})); await setupProgress();
+  }));
+  $('install').addEventListener('click', () => perform('Launching explicitly approved installation…', () => setupAction('install', approval())));
+  $('reboot').addEventListener('click', () => perform('Requesting separately approved reboot…', async () => {
+    const data = approval(); data.reboot = $('reboot-check').checked;
+    await request('/setup/reboot', data);
+    $('setup-status').textContent = 'Reboot request accepted, not completion. Reconnect, authenticate and restore saved setup after the server returns.';
+  }));
+  $('resume-setup').addEventListener('click', () => perform('Resuming previously approved stages…', () => setupAction('resume', { plan_digest: planReview.plan_digest })));
+  $('activate').addEventListener('click', () => perform('Requesting release activation with rollback…', () => setupAction('activate', {
+    plan_digest: planReview.plan_digest, activation_approved: true, policy: $('busy-policy').value, cancel_confirmed: $('cancel-check').checked,
+  })));
+  $('repair').addEventListener('click', () => perform('Recovering interrupted activation from its durable commit state…', () => setupAction('repair', { plan_digest: planReview.plan_digest, rollback_approved: true })));
+  $('download-model').addEventListener('click', () => perform('Starting approved pinned model acquisition…', () => setupAction('download', {
+    plan_digest: planReview.plan_digest, license_sha256: planReview.license_sha256, license_acknowledged: $('license-check').checked,
+    eligibility_confirmed: $('eligibility-check').checked, download_approved: $('download-check').checked,
+  })));
+  $('cancel-download').addEventListener('click', () => perform('Requesting model download cancellation…', () => setupAction('cancel-download', { plan_digest: planReview.plan_digest })));
+  $('setup-refresh').addEventListener('click', () => perform('Replaying durable setup events…', setupProgress));
+
+  async function jobEvents() {
+    const response = await fetch(API + '/remote/events?after=' + jobCursor, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+    if (!response.ok) throw { code: 'remote_unavailable' };
+    for (const block of (await response.text()).split('\n\n')) {
+      const fields = Object.fromEntries(block.split('\n').filter(line => line.includes(':')).map(line => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
+      if (fields.event === 'reset') { jobCursor = Number(JSON.parse(fields.data).minimum_cursor); $('job-events').replaceChildren(); }
+      if (fields.event === 'job') {
+        const record = JSON.parse(fields.data); jobCursor = Number(fields.id);
+        $('job-events').append(node('li', eventLine(record)));
+      }
+    }
+    while ($('job-events').children.length > 100) $('job-events').firstElementChild.remove();
+  }
+  async function dashboard() {
+    runtimeReady = false; render();
+    const capability = await request('/remote/capabilities');
+    backendCapabilities = capability.adapter_capabilities;
+    runtimeReady = capability.runtime_ready;
+    const diagnostic = capability.diagnostic || {};
+    const data = await request('/remote/jobs');
+    const generated = data.jobs.some(job => job.status === 'completed' && job.output && !job.output.expired);
+    $('readiness').textContent = `Daemon connected. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
+    $('jobs').replaceChildren();
+    for (const job of data.jobs) {
+      const item = node('article', undefined, 'job-card');
+      item.append(node('h4', job.job_id), node('p', job.status));
+      if (['queued', 'running'].includes(job.status)) {
+        const cancel = node('button', 'Cancel job', 'secondary'); cancel.type = 'button'; cancel.disabled = busy;
+        cancel.addEventListener('click', () => perform('Cancelling selected job…', async () => { await request('/remote/jobs/' + job.job_id + '/cancel', {}); await dashboard(); }));
+        item.append(cancel);
+      }
+      if (job.status === 'completed' && job.output && !job.output.expired) {
+        const url = API + '/remote/jobs/' + job.job_id + '/video';
+        const video = node('video'); video.controls = true; video.preload = 'metadata'; video.src = url;
+        video.addEventListener('error', () => { item.append(node('p', 'Preview unavailable or output expired. Refresh the dashboard.')); });
+        const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
+        item.append(video, link);
+      } else if (job.output?.expired) item.append(node('p', 'Output expired by retention policy.'));
+      $('jobs').append(item);
+    }
+    await jobEvents(); render();
+    clearTimeout(jobTimer);
+    if (data.jobs.some(job => ['queued', 'running'].includes(job.status))) jobTimer = setTimeout(() => {
+      if (connection.state === 'authenticated') dashboard().catch(error => { runtimeReady = false; render(); showError(error, false); });
+    }, 2000);
+  }
+  $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
+  $('generation-form').addEventListener('submit', event => {
+    event.preventDefault();
+    perform('Submitting local generation job…', async () => {
+      const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
+        width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value) };
+      if (!$('lora-field').hidden && $('lora').value) body.loras = [$('lora').value];
+      await request('/remote/jobs', body); await dashboard();
+    });
+  });
+  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; clearTimeout(setupTimer); clearTimeout(jobTimer); });
 
   async function start() {
     busy = true;
@@ -305,7 +468,7 @@
       }
       await refresh();
       $('operation').textContent = 'Ready for a secure SSH connection.';
-      log('Local browser session secured. Only read-only setup is available.');
+      log('Local browser session secured. Authenticate, scan and explicitly approve changes before installation.');
     } catch (error) {
       ready = false;
       $('session').textContent = 'Local session unavailable';

@@ -3,7 +3,8 @@
 Supply the exact listener origin (including its port). Launch the browser at
 ``origin + '/#token=' + app.state.session.bootstrap_token``; the fragment never
 enters HTTP access logs, and the bundled UI removes it before consumption.
-No installer, generation service, or credential persistence is exposed here.
+Deployment uses digest-bound approvals; the remote API travels over SSH only.
+Credentials remain request-scoped and never enter URLs or stored setup records.
 """
 
 import asyncio
@@ -16,7 +17,7 @@ import re
 import socket
 from urllib.parse import urlsplit
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -25,6 +26,9 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from h3server.backends import load_profiles
+from h3server.controller.deploy import Deployment
+from h3server.controller.proxy import RemoteProxy
+from h3server.installer.planner import Approval
 from h3server.controller.session import BrowserSession
 from h3server.controller.ssh import ControllerError, SSHConnection
 from h3server.probe import probe_hardware
@@ -32,7 +36,7 @@ from h3server.profiles import recommend_profiles
 
 API = "/api/v1/controller"
 BODY_LIMIT = 16384
-CAPABILITIES = {"scan": True, "installer": False, "generation": False}
+CAPABILITIES = {"scan": True, "installer": True, "generation": True}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/styles.css": ("styles.css", "text/css")}
@@ -41,7 +45,7 @@ SECURITY_HEADERS = {
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
-    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 }
 
 
@@ -180,9 +184,39 @@ class EmptyRequest(StrictRequest):
     pass
 
 
+class PlanRequest(StrictRequest):
+    profile: str = Field(min_length=1, max_length=100)
+    sudo_password_available: bool = False
+
+
+class InstallRequest(StrictRequest):
+    plan_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    license_acknowledged: bool = False
+    eligibility_confirmed: bool = False
+    privileged: bool = False
+    reboot: bool = False
+    service_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    sudo_password: SecretStr | None = Field(default=None, min_length=1, max_length=4096)
+
+    def approval(self):
+        return Approval(**{k: getattr(self, k) for k in Approval.__dataclass_fields__})
+
+
+class ActionRequest(StrictRequest):
+    plan_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    activation_approved: bool = False
+    rollback_approved: bool = False
+    policy: str = Field(default='reject', pattern=r'^(reject|drain|cancel)$')
+    cancel_confirmed: bool = False
+    license_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    license_acknowledged: bool = False
+    eligibility_confirmed: bool = False
+    download_approved: bool = False
+
+
 def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None = None,
                connection: SSHConnection | None = None, socket_factory=socket.create_connection,
-               transport_factory=paramiko.Transport) -> FastAPI:
+               transport_factory=paramiko.Transport, release=None) -> FastAPI:
     """No network/FS actions at construction; all SSH/scan IO runs in workers.
 
     A supplied connection/session supports embedding and tests. Credentials are
@@ -203,10 +237,13 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             session.invalidate()
             await run_in_threadpool(connection.close)
 
-    app = FastAPI(title="H3 local read-only controller", lifespan=lifespan,
+    deployment = Deployment(connection, release)
+    proxy = RemoteProxy(connection)
+    app = FastAPI(title="H3 local controller", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=API + "/openapi.json")
     app.state.session = session
     app.state.connection = connection
+    app.state.deployment = deployment
     app.add_middleware(LocalSecurity, origin=origin, session=session)
 
     @app.exception_handler(ControllerError)
@@ -217,6 +254,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     async def validation_error(request, exc):
         # Pydantic's default HTTP detail includes raw input, including passwords.
         return _error("invalid_request", 422)
+
+    @app.exception_handler(OSError)
+    @app.exception_handler(ValueError)
+    async def operation_error(request, exc):
+        return _error('operation_failed', 409)
 
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
@@ -247,7 +289,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.get(API + "/status")
     def status():
-        return {**connection.status(), "csrf_token": session.csrf_token, "capabilities": CAPABILITIES}
+        return {**connection.status(), "csrf_token": session.csrf_token, "capabilities": {**CAPABILITIES, 'release_available': release is not None}}
 
     @app.get(API + "/fingerprint")
     def fingerprint():
@@ -255,6 +297,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + "/connect")
     def connect(body: ConnectRequest):
+        deployment.reset()
         return connection.connect(body.host, body.port, body.username)
 
     @app.post(API + "/approve")
@@ -267,6 +310,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + "/disconnect")
     def disconnect(body: EmptyRequest | None = Body(default=None)):
+        deployment.reset()
         return connection.close()
 
     @app.post(API + "/scan")
@@ -280,5 +324,63 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 "recommendations": [asdict(item) for item in recommendations],
                 "compatibility": "Unverified compatibility: experimental pinned-source budgets are not proof of H3 fit or generation readiness.",
                 "capabilities": CAPABILITIES}
+
+    @app.post(API + '/setup/plan')
+    def setup_plan(body: PlanRequest):
+        return deployment.make_plan(body.profile, sudo_password_available=body.sudo_password_available)
+
+    @app.post(API + '/setup/install')
+    def setup_install(body: InstallRequest):
+        return deployment.install(body.approval(), service_digest=body.service_digest,
+            sudo_password=body.sudo_password.get_secret_value() if body.sudo_password else None)
+
+    @app.post(API + '/setup/restore')
+    def setup_restore(body: EmptyRequest):
+        return deployment.restore()
+
+    @app.get(API + '/setup/events')
+    def setup_events(after: int = Query(default=0, ge=0, le=2**63-1)):
+        return deployment.snapshot(after)
+
+    @app.post(API + '/setup/reboot')
+    def setup_reboot(body: InstallRequest):
+        data = body.model_dump(exclude={'service_digest', 'sudo_password'})
+        data['sudo_password'] = body.sudo_password.get_secret_value() if body.sudo_password else None
+        return deployment.action('reboot', data)
+
+    @app.post(API + '/setup/{action}')
+    def setup_action(action: str, body: ActionRequest):
+        if action not in {'activate', 'download', 'cancel-download', 'repair', 'resume'}:
+            raise ControllerError('unknown_action', 404)
+        return deployment.action(action, body.model_dump())
+
+    @app.get(API + '/remote/health')
+    def remote_health():
+        return proxy.request('GET', '/api/v1/health')
+
+    @app.get(API + '/remote/capabilities')
+    def remote_capabilities():
+        return proxy.request('GET', '/api/v1/capabilities')
+
+    @app.get(API + '/remote/jobs')
+    def remote_jobs():
+        return proxy.request('GET', '/api/v1/jobs?limit=1000')
+
+    @app.get(API + '/remote/events')
+    def remote_events(after: int = Query(default=0, ge=0, le=2**63-1)):
+        return proxy.request('GET', f'/api/v1/events?after={after}&follow=false')
+
+    @app.post(API + '/remote/jobs')
+    def remote_submit(body: dict = Body()):
+        # Remote GenerationInput is authoritative; never forward auth/origin headers.
+        return proxy.request('POST', '/api/v1/jobs', body=body)
+
+    @app.post(API + '/remote/jobs/{job_id}/cancel')
+    def remote_cancel(job_id: str, body: EmptyRequest):
+        return proxy.request('POST', f'/api/v1/jobs/{job_id}/cancel', body={})
+
+    @app.get(API + '/remote/jobs/{job_id}/video')
+    def remote_video(job_id: str, request: Request, download: bool = False):
+        return proxy.request('GET', f'/api/v1/jobs/{job_id}/video' + ('?download=true' if download else ''), range_header=request.headers.get('range'))
 
     return app

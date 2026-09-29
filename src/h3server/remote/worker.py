@@ -165,13 +165,63 @@ class Worker:
         if shutil.disk_usage(self.paths.root).free < self.min_free_bytes + self.max_output_bytes:
             raise OSError("insufficient output disk reserve")
 
+    def _pending_jobs(self):
+        offset = 0
+        pending = []
+        while rows := self.store.list_jobs(limit=1000, offset=offset):
+            pending.extend(job for job in rows if job.status in {JobStatus.QUEUED, JobStatus.RUNNING})
+            offset += len(rows)
+        return pending
+
+    def maintenance_status(self):
+        """Durable fail-closed gate. Only its deployment owner can release it.
+
+        Drain keeps scheduling accepted work; begin and submit share _lock. No
+        expiry or daemon restart can reopen submissions during a release switch.
+        """
+        from h3server.backends.base import read_json
+        with self._lock:
+            try:
+                record = read_json(self.paths, 'state/maintenance.json')
+            except FileNotFoundError:
+                record = {'operation': None, 'active': False}
+            pending = len(self._pending_jobs())
+            return {**record, 'pending': pending, 'idle': pending == 0 and self._active is None}
+
+    def begin_maintenance(self, operation, *, policy, cancel_confirmed=False):
+        from h3server.backends.base import atomic_json
+        if not re.fullmatch('[a-f0-9]{32}', operation) or policy not in {'reject', 'drain', 'cancel'}:
+            raise ValueError('invalid maintenance request')
+        if policy == 'cancel' and cancel_confirmed is not True:
+            raise ValueError('separate cancellation consent required')
+        with self._lock:
+            state = self.maintenance_status()
+            if state['active'] and state['operation'] != operation:
+                raise ValueError('maintenance owned by another deployment')
+            if policy == 'reject' and not state['idle']:
+                raise ValueError('jobs are busy')
+            atomic_json(self.paths, 'state/maintenance.json', {'operation': operation, 'active': True})
+            if policy == 'cancel':
+                for job in self._pending_jobs():
+                    self.cancel(job.job_id)
+            return self.maintenance_status()
+
+    def end_maintenance(self, operation):
+        from h3server.backends.base import atomic_json
+        with self._lock:
+            state = self.maintenance_status()
+            if state['operation'] not in (None, operation):
+                raise ValueError('maintenance owner mismatch')
+            atomic_json(self.paths, 'state/maintenance.json', {'operation': operation, 'active': False})
+            return self.maintenance_status()
+
     def submit(self, request: JobRequest):
         request.validate_capabilities(self.backend.capabilities)
         self.backend.validate_request(request)
         if request.settings is None:
             raise ValueError("normalized generation settings are required")
         with self._lock:
-            if self._stopping.is_set() or self.readiness():
+            if self.maintenance_status()['active'] or self._stopping.is_set() or self.readiness():
                 raise BackendUnavailable("backend is not ready")
             self.cleanup_outputs()
             self._disk_check()

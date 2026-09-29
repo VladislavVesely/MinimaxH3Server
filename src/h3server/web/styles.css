@@ -128,3 +128,13 @@ progress { display: block; width: 100%; height: 5px; margin-top: 12px; accent-co
 @media (max-width: 1200px) { .work-grid { grid-template-columns: minmax(0, 1fr); } .activity { position: static; } main { padding: 32px; } .intro { flex-wrap: wrap; } .sidebar { width: 220px; } .workspace { margin-left: 220px; } }
 @media (max-width: 760px) { .sidebar { position: static; width: auto; padding: 16px 20px; flex-direction: row; align-items: center; gap: 16px; overflow: visible; } .brand { margin: 0; padding: 0; font-size: 15px; gap: 8px; } .brand small { font-size: 7px; letter-spacing: 1px; } .brand-mark { width: 32px; height: 34px; font-size: 16px; } .sidebar > .nav-label, .steps-wrap, .sidebar-note { display: none; } .sidebar nav { display: flex; margin-left: auto; } .nav-item { margin: 0; padding: 8px 10px; font-size: 11px; } .nav-item:not(.selected), .nav-tag, .nav-item > span:first-child { display: none; } .workspace { margin: 0; } .topbar { padding: 12px 20px; min-height: 56px; gap: 8px; font-size: 10px; } main { padding: 28px 20px; } h1 { letter-spacing: -1px; } .intro { gap: 14px; } .intro p:not(.eyebrow) { font-size: 13px; } .assurances { gap: 9px 18px; font-size: 10px; padding: 20px 0; } .panel { padding: 20px; } .panel-heading { flex-wrap: wrap; } .panel-heading h2 { font-size: 18px; } .panel-heading .eyebrow { font-size: 8px; } .challenge { padding: 15px; } .connection-tools { gap: 0; } .connection-tools .text-button { font-size: 11px; } .form-row { gap: 12px; } .port-field { flex-basis: 75px; } .hardware-grid { gap: 8px; } .hardware-card { padding: 12px; } .state-badge { font-size: 9px; } .page-footer { margin-top: 28px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+
+/* Setup plans and authenticated media stay within the responsive workspace. */
+select, textarea { width: 100%; max-width: 100%; padding: .75rem; border: 1px solid #d9ddd8; border-radius: .5rem; background: white; color: inherit; font: inherit; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow-y: auto; font-size: .78rem; padding: .75rem; background: #f4f5f1; }
+#installation button { margin-top: .6rem; }
+#installation label { margin-top: .8rem; }
+#setup-events, #job-events { max-height: 18rem; overflow: auto; padding-left: 1.25rem; font-size: .8rem; overflow-wrap: anywhere; }
+.job-card { border-top: 1px solid #d9ddd8; padding: 1rem 0; overflow-wrap: anywhere; }
+.job-card video { display: block; width: 100%; max-height: 28rem; margin: .75rem 0; }
+#readiness, #setup-status { overflow-wrap: anywhere; }
