@@ -2,7 +2,7 @@
 
 ## One-click integration — current main source
 
-Application source revision: `fd2cb3ab4719caaf076f4f178d49d94f6b116113` on **main**
+Application source revision: `eeb7839e084fa59a6d4515167f1f06a22de45435` on **main**
 (includes backend `a5d4c6f6679f7863b4fbbbb5af50483b15313ad1`). No new branch or
 worktree was created. This section supersedes the historical approval UI and
 request-scoped-sudo description below; historical results are not new acceptance.
@@ -11,16 +11,16 @@ Executed locally on macOS arm64, Python 3.14.5:
 
 | Check | Result |
 | --- | --- |
-| `.venv/bin/python -m pytest -q -Werror` | **842 passed, 10 skipped** |
+| `.venv/bin/python -m pytest -q -Werror` | **858 passed, 10 skipped** |
 | `cd tests/browser && npx playwright test --reporter=line` | **31 passed** (Chromium) |
 | `.venv/bin/python -m pip check` | No broken requirements |
 | `.venv/bin/python scripts/build_controller.py` | Native root `dist/h3-controller` rebuilt |
 | `.venv/bin/python scripts/smoke_controller.py dist/h3-controller` | Both ordinary and `deploy` launch modes passed |
 
 Native executable SHA256:
-`b165c9dc01f78170ad86d89b2e466a49fb7c6a661c4971b59043bee1c6aeb228`.
+`4a2e05efe0bccbf25624134f54a8b10f35a8d557ec619b80c7264ff70c83981c`.
 Embedded wheel SHA256:
-`602bf560c49169eb26f19e2cf0503d2dc3b1ffa3f6afe3ef3f66dd631ef4a198`.
+`efa0093091c27af00032983dd788bbc9fd2b4f3a8679f6b3951b9b7902cf2a53`.
 Smoke verifies the embedded wheel equals every current application source/resource,
 including the one-click coordinator, catalog and UI; actual loopback bootstrap,
 Host/Origin/CSRF, catalog/license, idle setup, assets and shutdown all pass.
@@ -39,7 +39,15 @@ remote packages, drivers, reboot, model download or GPU execution occurred.
 TDD failures preceded fixes: obsolete retention checkbox; missing pre-Install
 catalog license fields; lost accepted response failing to resume polling. The last
 was corrected by scheduling observation after status reconciliation. Independent
-read-only review of the integrated committed diff is **pending**, not claimed here.
+review then identified a blocked-plan retry defect: repaired prerequisites were
+not inspected again after reauthentication. Four failing two-attempt route tests
+reproduced it across legacy/pruned selections and environment/prerequisite plans.
+The correction permits one fresh discovery on a new explicit Install only when
+the blocked plan has no durable launch evidence. Twelve guard cases preserve
+checkpoints, matching operation/active-environment records and even partial
+bootstrap launch/approval/status records. Focused coordinator/deployment tests:
+**89 passed**. All full-suite and native results above were rerun after correction.
+Independent re-review of this correction is **pending**, not claimed here.
 Ten platform/opt-in Python tests remain skipped. Live Linux setup/reboot/GPU,
 Windows native acceptance and Python physical-memory zeroization remain unproven;
 offline cancellation cannot guarantee detached remote work stopped.
