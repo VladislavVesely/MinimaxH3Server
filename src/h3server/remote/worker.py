@@ -13,7 +13,8 @@ the bounded regular output and independently validates its MP4 video stream.
 Backend injection is a Python composition seam for the next adapter and explicit
 subprocess tests, never a CLI/environment fake-production switch. Readiness must
 check the actual environment, consent and artifact integrity, not source support.
-The default is intentionally unavailable until that adapter supplies these checks.
+The default H3 adapter supplies asynchronous diagnostics and strict profile/LoRA
+validation; injected backends may supply the same validate_request contract.
 
 The daemon's POSIX ownership lock is inherited by the child. A crashed daemon
 cannot reconcile/start another worker while an orphan retains ownership; the
@@ -94,6 +95,8 @@ class Backend:
     readiness: Callable[[], tuple[str, ...]] = unavailable
     capabilities: Capabilities = field(default_factory=Capabilities)
     validate_video: Callable[[int], bool] = validate_mp4
+    validate_request: Callable[[JobRequest], None] = lambda request: None
+    diagnostics: Callable[[], dict] = lambda: {}
 
 
 def _job_id(value: str) -> str:
@@ -131,7 +134,10 @@ class Worker:
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError("worker durations must be positive and finite")
         self.store, self.paths = store, paths
-        self.backend = backend or Backend()
+        if backend is None:
+            from h3server.backends.h3 import backend as h3_backend
+            backend = h3_backend(paths)
+        self.backend = backend
         self.queue_limit, self.max_output_bytes = queue_limit, max_output_bytes
         self.min_free_bytes, self.retention_seconds = min_free_bytes, retention_seconds
         self.retained_bytes, self.max_runtime_seconds = retained_bytes, max_runtime_seconds
@@ -161,6 +167,7 @@ class Worker:
 
     def submit(self, request: JobRequest):
         request.validate_capabilities(self.backend.capabilities)
+        self.backend.validate_request(request)
         if request.settings is None:
             raise ValueError("normalized generation settings are required")
         with self._lock:
@@ -331,6 +338,7 @@ class Worker:
                     return
                 # A queued request may outlive the adapter that accepted it.
                 job.request.validate_capabilities(self.backend.capabilities)
+                self.backend.validate_request(job.request)
                 self._disk_check()
                 request_path = self._prepare(job)
                 process = subprocess.Popen(

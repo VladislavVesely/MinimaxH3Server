@@ -164,7 +164,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     def health():
         reasons = worker.readiness()
         return {"service": "ok", "api_version": "1", "runtime_ready": not reasons,
-                "not_ready_reasons": reasons, "generation_tested": False}
+                "not_ready_reasons": reasons, "generation_tested": False,
+                "diagnostic": worker.backend.diagnostics()}
 
     @app.get("/api/v1/capabilities")
     def capabilities():
@@ -173,6 +174,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                 "not_ready_reasons": reasons, "generation_tested": False,
                 "source_support": {"lora": "supported", "sparse_attention": "unsupported"},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
+                "diagnostic": worker.backend.diagnostics(),
                 "profiles": H3_PROFILES, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
                                    "canvas_pixels": 1344 * 768, "steps_min": 2, "steps_max": 1000,
