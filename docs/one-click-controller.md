@@ -15,14 +15,23 @@ apply unchanged. Never put credentials in browser storage, URLs or logs.
 `POST /authenticate` accepts:
 
 ```json
-{"password":"<SSH password>","reuse_for_setup":true}
+{"password":"<SSH password>","reuse_for_setup":true,"remember_connection":true}
 ```
 
-The UI must disclose memory-only reuse for setup/sudo and reconnect next to the
-normal SSH authentication action; no second normal password prompt or checkbox
-wizard. Example: “Your SSH password is kept only in this controller's memory for
-setup, sudo and reconnection. It is cleared when setup ends, you cancel/disconnect,
-your session expires, or the controller closes.”
+The UI distinguishes operation-scoped memory reuse from explicit persistent
+remembering. `remember_connection` defaults false at the API. When selected, the
+successfully authenticated host/port/user/password are atomically saved in the
+controller state directory's owner-only `preferences.json`. This is plaintext,
+not Keychain storage or encryption, as requested by the operator. The browser
+receives only public connection fields and a `password_saved` boolean.
+`POST /connection/forget` removes the saved connection. Session expiry and setup
+completion still clear temporary in-memory reuse, but not the opted-in disk copy.
+
+`GET/POST /preferences` reads public preferences/updates `install_sage` and
+`use_sage`. `POST /connection/restore` reconnects and authenticates the remembered
+target only after stored host-key verification. A new fingerprint pauses for
+approval; a changed fingerprint blocks. `POST /connection/authenticate-saved`
+requires an exact current host/port/user match. Startup never installs or generates.
 
 Both `reuse_for_setup` and the legacy `retain_for_setup_recovery` default to false.
 The legacy flag alone never authorizes sudo reuse. Authentication still requires
@@ -35,6 +44,18 @@ Authentication and general status include `recovery.credential_retained` and
 bound to the authenticated target and browser session. Setup keeps no independent
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
+
+## Optional SageAttention
+
+`POST /setup/start` accepts `sage_attention: true` to add the pinned optional
+component after the ordinary environment/model setup, before reporting completion.
+The choice participates in request-id binding. Existing ready environments use
+`GET/POST /remote/features/sageattention`; POST is explicit consent to install and
+GPU-probe the pinned pure-Triton 1.0.6 wheel. It uses daemon-owned maintenance with
+reject-if-busy policy, never cancelling jobs or changing model downloads/units.
+Live bounded output and installation state survive controller restarts. Generation
+uses an independent strict boolean and fails validation if selected but unavailable.
+Both UI choices persist. Sage is not the unsupported sparse-attention feature.
 
 ## Start
 
@@ -93,9 +114,10 @@ Status fields:
   prerequisite explanations when `error` is `setup_plan_blocked`.
 
 Page reload can recover this in-memory status. Target disconnect/replacement
-resets visible status to idle. Controller restart loses browser session,
-credentials and composite progress. After fresh authentication, use **Inspect saved
-setup** to recover the original selection and durable diagnostics. A failed setup
+resets visible status to idle. Controller restart loses the browser session and
+in-memory composite progress. A remembered connection authenticates after host-key
+verification and automatically observes saved work; otherwise authenticate manually.
+**Inspect saved setup** also recovers the original selection and durable diagnostics. A failed setup
 is never implicitly resumed by Install: only backend-eligible unprivileged failures
 expose **Retry failed stage**, preserving completed privileged work and caches.
 See [diagnostics/retry contract](setup-diagnostics-api.md) for exact bindings and the
@@ -174,7 +196,7 @@ auxiliary components; pinned license/provenance/technical details are collapsed.
 `GET /profiles` and `/scan` now include verified `license_text` and `license_sha256`
 for disclosure before Install, without staging or any target mutation.
 
-Authentication sends `reuse_for_setup:true` next to the memory-only inline notice.
+Authentication sends `reuse_for_setup:true` and the explicit `remember_connection` choice next to the plaintext-storage disclosure.
 Only Install sends `/setup/start`; an ambiguous request keeps its public ID in
 page memory until reconciliation or a same-ID retry. No browser storage is used.
 Selection and duplicate Install are disabled while setup owns the target. The page

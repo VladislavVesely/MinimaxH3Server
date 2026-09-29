@@ -181,9 +181,15 @@ class ApprovalRequest(StrictRequest):
 
 
 class AuthenticationRequest(StrictRequest):
+    remember_connection: bool = False
     retain_for_setup_recovery: bool = False
     reuse_for_setup: bool = False
     password: SecretStr = Field(min_length=1, max_length=4096)
+
+
+class PreferencesRequest(StrictRequest):
+    install_sage: bool
+    use_sage: bool
 
 
 class EmptyRequest(StrictRequest):
@@ -191,6 +197,7 @@ class EmptyRequest(StrictRequest):
 
 
 class SetupStartRequest(StrictRequest):
+    sage_attention: bool = False
     profile: str = Field(min_length=1, max_length=100)
     artifact_set_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,64}$')
@@ -266,10 +273,13 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             await run_in_threadpool(recovery.close)
             await run_in_threadpool(connection.close)
 
+    from h3server.controller.preferences import Preferences
+    preferences = Preferences(state_dir)
     deployment = Deployment(connection, release)
     recovery = SetupRecovery(connection, deployment, lambda: session.active)
     setup = SetupCoordinator(deployment, recovery, lambda: session.active)
     proxy = RemoteProxy(connection)
+    setup.sage_request = lambda method: proxy.request_json(method, '/api/v1/features/sageattention')
 
     def setup_idle(*, cancel=False):
         if setup.active():
@@ -393,7 +403,43 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 recovery.remember(body.password.get_secret_value(),
                                   enabled=body.retain_for_setup_recovery or body.reuse_for_setup,
                                   reuse_for_setup=body.reuse_for_setup)
+                if body.remember_connection:
+                    preferences.remember(recovery.target(), body.password.get_secret_value())
                 return {**result, 'recovery': recovery.status()}
+
+    @app.get(API + '/preferences')
+    def get_preferences():
+        return preferences.public()
+
+    @app.post(API + '/preferences')
+    def save_preferences(body: PreferencesRequest):
+        return preferences.settings(body.install_sage, body.use_sage)
+
+    @app.post(API + '/connection/forget')
+    def forget_connection(body: EmptyRequest):
+        return preferences.forget()
+
+    @app.post(API + '/connection/authenticate-saved')
+    def authenticate_saved(body: EmptyRequest):
+        with recovery.operations:
+            saved = preferences.saved()
+            if saved is None:
+                raise ControllerError('saved_connection_missing')
+            if recovery.target() != (saved['host'], saved['port'], saved['username']):
+                raise ControllerError('saved_connection_mismatch')
+            return authenticate(AuthenticationRequest(password=saved['password'], reuse_for_setup=True, remember_connection=True))
+
+    @app.post(API + '/connection/restore')
+    def restore_connection(body: EmptyRequest):
+        with recovery.operations:
+            saved = preferences.saved()
+            if saved is None:
+                raise ControllerError('saved_connection_missing')
+            result = connect(ConnectRequest(**{k: saved[k] for k in ('host', 'port', 'username')}))
+            # Never send the saved password until the stored host key matched.
+            if result['state'] == 'awaiting_authentication':
+                return authenticate_saved(body)
+            return result
 
     @app.post(API + "/disconnect")
     def disconnect(body: EmptyRequest | None = Body(default=None)):
@@ -431,11 +477,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/setup/start', status_code=202)
     def setup_start(body: SetupStartRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention)
 
     @app.post(API + '/setup/retry', status_code=202)
     def retry_setup(body: SetupRetryRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention)
 
     @app.post(API + '/setup/observe')
     @observed
@@ -495,6 +541,16 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         if action not in {'activate', 'download', 'cancel-download', 'repair', 'resume'}:
             raise ControllerError('unknown_action', 404)
         return deployment.action(action, body.model_dump())
+
+    @app.get(API + '/remote/features/sageattention')
+    @observed
+    def sage_status():
+        return proxy.request('GET', '/api/v1/features/sageattention')
+
+    @app.post(API + '/remote/features/sageattention')
+    @observed
+    def install_sage(body: EmptyRequest):
+        return proxy.request('POST', '/api/v1/features/sageattention', body={})
 
     @app.get(API + '/remote/health')
     @observed

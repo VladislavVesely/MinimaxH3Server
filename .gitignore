@@ -1,5 +1,7 @@
 # Local credentials and runtime state
 server.txt
+preferences.json
+preferences.*.tmp
 .env
 .env.*
 !.env.example

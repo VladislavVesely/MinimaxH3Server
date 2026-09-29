@@ -155,8 +155,11 @@ class GenerationSettings:
     steps: int = 50
     seed: int = 42
     profile: str = H3_PROFILES[0]
+    sage_attention: bool = False
 
     def __post_init__(self):
+        if type(self.sage_attention) is not bool:
+            raise ValueError('sage_attention must be bool')
         for name in ("num_frames", "width", "height", "steps", "seed"):
             if type(getattr(self, name)) is not int:
                 raise ValueError(f"{name} must be an integer")
@@ -176,6 +179,14 @@ class GenerationSettings:
     @property
     def duration(self) -> float:
         return self.num_frames / 24
+
+
+def aligned_frames(frames):
+    """Nearest supported 17*n+5 frame count, clamped to the service range."""
+    import math
+    if type(frames) not in (int, float) or not math.isfinite(frames) or frames <= 0:
+        raise ValueError('invalid frame count')
+    return 5 + 17 * min(20, max(7, math.floor((frames - 5) / 17 + .5)))
 
 
 @dataclass(frozen=True)

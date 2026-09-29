@@ -59,6 +59,8 @@ def parse_request(value):
     if type(value["settings"]) is not dict or set(value["settings"]) != set(asdict(GenerationSettings())):
         raise ValueError("unknown or missing settings")
     settings = GenerationSettings(**value["settings"])
+    if settings.sage_attention:
+        raise ValueError('SageAttention is not supported by the legacy Diffusers adapter')
     if settings.profile not in H3_PROFILES:
         raise ValueError("legacy adapter requires a legacy profile")
     request = JobRequest(value["prompt"], tuple(loras), value["sparse_attention"], settings)

@@ -61,14 +61,16 @@ class SetupCoordinator:
                 self._phase_ended = time.monotonic()
             self._status.update(values)
 
-    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None):
+    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False):
         # Serialized with explicit controller operations, but never with worker IO.
         with self.recovery.operations, self._lock:
             selection = profile_document(profile)
+            if sage_attention and not selection['runtime_id'].startswith('comfyui-h3-'):
+                raise ControllerError('optional_install_busy_or_unsupported')
             if selection['artifact_set_digest'] != artifact_set_digest:
                 raise ControllerError('selection_changed')
             binding = (profile, artifact_set_digest)
-            request_binding = (self.recovery.target(), binding, retry_digest)
+            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention)
             if request_id in self._requests:
                 prior_binding, prior_status = self._requests[request_id]
                 if request_binding != prior_binding:
@@ -80,6 +82,7 @@ class SetupCoordinator:
                 raise ControllerError('setup_session_limit')
             target = self.recovery.setup_target() if retry_digest is None else self.recovery.target()
             self._retry_digest = retry_digest
+            self._sage_requested = sage_attention
             if self._observe_connection()['state'] != 'authenticated':
                 raise ControllerError('authentication_required')
             if self.deployment.release is None:
@@ -88,6 +91,7 @@ class SetupCoordinator:
             self._phase_started, self._phase_ended = time.monotonic(), None
             self._status = {'state': 'running', 'phase': 'planning', 'operation_id': uuid.uuid4().hex,
                             'request_id': request_id, 'profile': profile, 'artifact_set_digest': artifact_set_digest,
+                            'sage_attention': sage_attention,
                             'plan_digest': None, 'error': None, 'snapshot': None,
                             'installation_ready': False, 'model_ready': False, 'generation_tested': False}
             self._requests[request_id] = (request_binding, self._status)
@@ -359,6 +363,18 @@ class SetupCoordinator:
                     self._download_operation = result.get('operation')
                 self._await_operation('download', digest, self._download_operation)
             self._check()
+            self._publish(model_ready=True)
+            if self._sage_requested:
+                self._publish(phase='sage_attention')
+                feature = self._call(lambda: self.sage_request('POST'), mutation=True)
+                while True:
+                    self._publish(sage_install=feature)
+                    if feature.get('installed') and not feature.get('busy'):
+                        break
+                    if feature.get('state') == 'failed':
+                        raise ControllerError('sage_install_failed')
+                    self._wait()
+                    feature = self._call(lambda: self.sage_request('GET'))
             self._publish(state='completed', phase='completed', model_ready=True)
         except Exception as error:
             safe = {'selection_changed', 'invalid_checkpoint', 'setup_remote_busy', 'setup_replan_limit', 'setup_plan_blocked',
@@ -369,7 +385,8 @@ class SetupCoordinator:
                     'authentication_failed', 'host_key_changed', 'trust_required', 'reconnect_timeout',
                     'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
                     'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost',
-                    'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe'}
+                    'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe',
+                    'sage_install_failed', 'optional_install_busy_or_unsupported'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)

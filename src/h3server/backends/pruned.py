@@ -46,7 +46,7 @@ def parse_request(value):
     return request
 
 
-def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, prepare_weights=False):
+def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, prepare_weights=False, sage_attention=False):
     """Explicit imports from verified pinned sources; no plugin discovery/main.py.
 
     cpu_smoke is a Python-only test seam, not a daemon/generation CLI mode. It
@@ -60,6 +60,10 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     comfy.options.enable_args_parsing(False)
     from comfy.cli_args import args, LatentPreviewMethod
     args.cpu = cpu_smoke
+    args.use_sage_attention = sage_attention
+    if sage_attention:
+        from h3server.backends.sage_attention import require
+        require(paths)
     args.base_directory = str(paths.tmp/'comfy')
     args.preview_method = LatentPreviewMethod.NoPreviews
     args.disable_all_custom_nodes = True
@@ -94,6 +98,18 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     import nodes
     import comfy.utils
     import comfy.model_management
+    if sage_attention:
+        import logging
+        from comfy.ldm.modules import attention
+        sage_kernel = attention.sageattn
+        announced = [False]
+        def traced_sage(*args, **kwargs):
+            result = sage_kernel(*args, **kwargs)
+            if not announced[0]:
+                logging.info('SageAttention 1.0.6 kernel executed successfully for this generation')
+                announced[0] = True
+            return result
+        attention.sageattn = traced_sage
     from comfy_extras.nodes_minimax_h3 import MiniMaxH3ImageToVideo, MiniMaxH3SigmaShift
     from comfy_extras.nodes_lt import LTXVSeparateAVLatent
     from comfy_extras.nodes_audio import VAEDecodeAudio
@@ -247,7 +263,10 @@ def execute_document(request_path, *, emit, profile=None):
     snapshot = verify_snapshot(paths, profile_name=profile)
     emit(Event('loading', StageStatus.RUNNING, 'Model checksums verified; checking runtime and preparing model components.'))
     environment = verify_provisioned(paths, profile)
-    rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile), prepare_weights=True)
+    if request.settings.sage_attention:
+        emit(Event('loading', StageStatus.RUNNING, 'SageAttention 1.0.6 enabled for supported attention; masked/full-precision layers retain PyTorch attention.'))
+    rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile), prepare_weights=True,
+                      sage_attention=request.settings.sage_attention)
     check_gpu(rt, get_artifact_set(profile))
     cancelled = threading.Event()
     old_signal = signal.signal(signal.SIGTERM, lambda *args: cancelled.set())
@@ -280,6 +299,9 @@ def backend(paths, profile):
     def validate(request):
         if parse_request(asdict(request)).settings.profile != profile:
             raise ValueError('request differs from active profile')
+        if request.settings.sage_attention:
+            from h3server.backends.sage_attention import require
+            require(paths)
     return Backend(command=command, readiness=readiness, capabilities=CAPABILITIES,
         validate_video=validate_media_fd, validate_request=validate, diagnostics=readiness.diagnostics,
         runtime_id=selected.runtime_id, profiles=(profile,))

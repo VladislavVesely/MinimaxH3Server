@@ -56,6 +56,7 @@ class GenerationInput(BaseModel):
                      "h3-gguf-q4-k-m", "h3-gguf-q5-k-m", "h3-convrot-mixed", "h3-convrot-int8", "h3-nvfp4"] = H3_PROFILES[0]
     loras: Annotated[list[StrictStr], Field(max_length=8)] = Field(default_factory=list)
     sparse_attention: StrictBool | None = None
+    sage_attention: StrictBool = False
 
     @model_validator(mode="after")
     def normalized(self):
@@ -73,11 +74,10 @@ class GenerationInput(BaseModel):
 
     def to_request(self) -> JobRequest:
         frames = self.num_frames if self.num_frames is not None else (self.duration * 24 if self.duration is not None else 124)
-        if self.profile in PRUNED_PROFILE_NAMES:
-            frames = max(5, round(frames))
-        aligned = math.ceil((frames - 5) / 17) * 17 + 5
+        from h3server.domain import aligned_frames
+        aligned = aligned_frames(frames)
         steps = 20 if self.profile in PRUNED_PROFILE_NAMES and 'steps' not in self.model_fields_set else self.steps
-        settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile)
+        settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile, self.sage_attention)
         return JobRequest(self.prompt, tuple(self.loras), self.sparse_attention, settings)
 
 
@@ -142,12 +142,17 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     if not 0 < heartbeat_seconds <= 60:
         raise ValueError("invalid heartbeat interval")
 
+    from h3server.remote.features import SageInstaller
+    features = SageInstaller(worker)
+
     @asynccontextmanager
     async def lifespan(app):
         worker.start()
+        features.recover()
         try:
             yield
         finally:
+            await asyncio.to_thread(features.close)
             await asyncio.to_thread(worker.stop)
 
     app = FastAPI(title="MiniMax H3 remote API", version="1.0.0", lifespan=lifespan,
@@ -175,6 +180,17 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     @app.exception_handler(Exception)
     async def internal_error(request, error):
         return JSONResponse({"error": "internal_error"}, status_code=500)
+
+    @app.get('/api/v1/features/sageattention')
+    def sage_status():
+        return features.status()
+
+    @app.post('/api/v1/features/sageattention', status_code=202)
+    def install_sage():
+        try:
+            return features.start()
+        except ValueError:
+            raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
 
     @app.get('/api/v1/maintenance')
     def maintenance_status():
@@ -210,6 +226,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                                    for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
+                "optional_features": {"sage_attention": features.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
                                    "canvas_pixels": 1344 * 768, "steps_min": 2, "steps_max": 1000,

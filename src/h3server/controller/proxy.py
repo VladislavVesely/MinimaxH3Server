@@ -30,12 +30,16 @@ class _ChannelSocket:
         class ResponseFile:
             closed = False
             def __getattr__(self, name):
+                if stream is None:
+                    raise ValueError('I/O operation on closed response')
                 return getattr(stream, name)
             def close(self):
+                nonlocal stream
                 if not self.closed:
                     self.closed = True
+                    owned, stream = stream, None
                     try:
-                        stream.close()
+                        owned.close()
                     finally:
                         parent.files -= 1
                         parent._close_if_unused()
@@ -54,9 +58,29 @@ class RemoteProxy:
     def __init__(self, connection):
         self.connection = connection
 
+    def request_json(self, method, path):
+        """Bounded internal JSON use by the setup worker, never a browser token."""
+        import asyncio
+        response = self.request(method, path, body={} if method == 'POST' else None)
+        async def collect():
+            data = bytearray()
+            try:
+                async for chunk in response.body_iterator:
+                    data.extend(chunk)
+                    if len(data) > 65536:
+                        raise ControllerError('invalid_remote_response')
+            finally:
+                if response.background is not None:
+                    await response.background()
+            return bytes(data)
+        data = asyncio.run(collect())
+        if response.status_code >= 400:
+            raise ControllerError('optional_install_busy_or_unsupported')
+        return json.loads(data)
+
     def request(self, method, path, *, body=None, range_header=None):
-        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:health|capabilities|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
-                or method == 'POST' and re.fullmatch(r'/api/v1/jobs(?:/[a-f0-9]{32}/cancel)?', path)):
+        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:health|capabilities|features/sageattention|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
+                or method == 'POST' and re.fullmatch(r'/api/v1/(?:features/sageattention|jobs(?:/[a-f0-9]{32}/cancel)?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
         if range_header is not None and not re.fullmatch(r'bytes=(?:[0-9]{1,20}-[0-9]{0,20}|-[0-9]{1,20})', range_header):
             raise ControllerError('invalid_range', 416)

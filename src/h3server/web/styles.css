@@ -66,6 +66,8 @@ main { max-width: 1540px; padding: 40px; margin: auto; }
 .section-copy, .unavailable p { color: var(--muted); font-size: 12px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .form-row { display: flex; gap: 16px; }
+.generation-lengths { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 760px) { .generation-lengths { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .field { min-width: 0; flex: 1; margin-bottom: 18px; }
 .port-field { flex: 0 0 95px; }
 label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 7px; }

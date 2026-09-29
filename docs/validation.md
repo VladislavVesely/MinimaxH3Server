@@ -1,5 +1,35 @@
 # Validation and acceptance status
 
+## Remembered connection, SageAttention and duration — 2026-09-29
+
+Direct work on main; no subagents or full test-suite run for this update.
+
+- **9 focused checks passed** in `tests/test_preferences_sage_duration.py`: private
+  credential round-trip/forget, unsafe files, strict Sage flag, duration alignment,
+  exact optional-dependency allowance, and failed-probe rollback.
+- Native launcher rebuilt. Real authenticated browser checks confirmed connection
+  restoration after process restart, both Sage choices restored, no startup install
+  or generation requests, empty password field, linked controls, no page errors,
+  and a 375px mobile layout without horizontal overflow.
+- Installed the wheel-hash-pinned SageAttention **1.0.6** on the real RTX 4090 target.
+  Both FP16/BF16 kernels passed; the actual pinned ComfyUI optimized-attention path
+  selected Sage and produced GPU output matching the PyTorch probe tolerance.
+- A cold native check caught the additive package violating the base freeze.
+  Fixed without changing `resolved.txt` or its record: only the exact extra Sage
+  line with its environment/Torch-bound GPU receipt is accepted. Other changes
+  still fail closed. Installer failures attempt removal of only the new add-on.
+  Fresh real-target readiness and native auto-reconnection then passed.
+- Password settings are plaintext, mode 0600 inside a private macOS controller
+  directory; never projected back through the preferences API. The saved connection
+  remains available. Sage selection defaults were restored to off after the checks;
+  the installed package is available when explicitly selected.
+
+No complete Sage-enabled video, quality/speed comparison, native Windows acceptance
+or fresh whole-suite result is claimed. Existing model files and generation history
+were preserved. Target application files were hash-guarded updates with backups,
+not a claim that the active historical application wheel remains byte-identical.
+
+
 ## One-click integration — current main source
 
 Application source revision: `eeb7839e084fa59a6d4515167f1f06a22de45435` on **main**

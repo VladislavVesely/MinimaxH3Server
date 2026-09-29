@@ -35,13 +35,14 @@ executable on PATH. To deploy a separately authenticated wheel:
 
 1. Enter SSH host/port/user. Verify and approve its SHA256 host fingerprint using
    a separate trusted channel; a changed key **blocks**, not silently re-enrolls.
-2. Authenticate, then scan hardware. The inline authentication notice explains
-   that your SSH password is reused for setup, sudo and reconnection on this
-   target/session in **controller memory only**. No second normal sudo field or
-   retention checkbox. Nothing is saved to disk/browser storage. Completion,
-   failure, cancellation, disconnect, expiry and shutdown clear the credential.
-   SSH agents/private-key login are not implemented; no account SSH configuration
-   or credential file is imported. Never paste a private key into the password field.
+2. Authenticate; hardware is scanned automatically. **Remember this connection**
+   saves host/port/user/password in owner-only local `preferences.json`. The password
+   is **plaintext**, not encrypted: account access or backups can expose it. It is
+   never returned to browser storage or logs. Next launch verifies the saved host
+   key, authenticates, and reloads setup/dashboard automatically. **Forget saved
+   connection** removes it. Temporary setup/sudo credentials are still cleared from
+   memory on completion, failure, disconnect or expiry; remembering is separate.
+   No account SSH configuration or credential file is imported by the application.
 3. Select a model in **04 / Install & validate**. The old 03 comparison is removed.
    Review selected bytes, GPU guidance, unknown host-memory fit, auxiliary files,
    and collapsed pinned license/provenance details. Smaller pruned GGUF Q4_K_M is
@@ -56,13 +57,28 @@ executable on PATH. To deploy a separately authenticated wheel:
    stops further automatic actions, not rollback: remote package/detached work
    may continue, especially offline. Wait until setup stops before changing target.
    Sudo rejection shows a specific administrator/password-policy explanation.
-   To retry after resolving a failure, disconnect, reconnect, authenticate, scan
-   and Install again. Unknown remote outcomes require inspection, not repeated
-   installation. Controller restart requires fresh authentication. Unknown/changed
-   host keys always stop recovery; no automatic trust approval occurs.
+   Use **Retry failed stage** for an eligible failed environment; do not reinstall
+   a completed setup. Restarts attach to saved work, and remembered connections
+   authenticate automatically. Unknown/changed host keys always stop recovery;
+   no automatic trust approval occurs.
 6. Refresh the dashboard, inspect diagnostics, then submit a real job when ready.
    Environment ready, daemon healthy, verified weights, model loaded and a real
    playable video are distinct milestones. A successful scan proves none of them.
+
+### Optional SageAttention and duration
+
+- Separate remembered switches control **install SageAttention** and **use it for
+  generation**. Existing pruned environments can add it without reinstalling models.
+  Version **1.0.6 (pure Triton)** is wheel-hash pinned and GPU-probed; it does not
+  upgrade Torch or require a CUDA SDK download. Installation requires an idle queue.
+- Sage is distinct from sparse attention. It applies to supported attention in the
+  pruned ComfyUI backend; masked/full-precision layers retain PyTorch. Upstream kernel
+  fallbacks are logged. Legacy Diffusers profiles do not advertise Sage support.
+- Seconds and frames update each other at 24fps. Seconds snap to the nearest valid
+  H3 length (`17*n+5`, 124–345 frames); the effective duration is shown explicitly.
+- macOS saved settings: `~/Library/Application Support/H3Server/preferences.json`.
+  Linux/Windows use the launcher's normal state directory (or `--state-dir`).
+  Sage choices persist there too; no installation or generation starts on launch.
 
 When replacing a rebuilt controller, **quit other controller versions first**.
 On the next explicit Install, an older release's staging-only discovery can be

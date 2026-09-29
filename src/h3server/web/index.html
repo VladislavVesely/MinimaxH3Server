@@ -48,11 +48,12 @@
             <button id="approve" class="primary" type="button" disabled>Trust this fingerprint</button>
           </section>
           <form id="auth-form" class="auth-panel" hidden>
-            <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication, never saved to disk or browser storage, and cleared from this form on submission.</p>
+            <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication and cleared from this form on submission.</p>
             <div class="field"><label for="password">SSH password</label><input id="password" name="password" type="password" required maxlength="4096" autocomplete="off" aria-describedby="password-note"></div>
-            <p class="field-hint" id="password-note">Your SSH password is kept only in this controller’s memory for setup, sudo and reconnection on this target/session. It is never saved to disk or browser storage. Setup completion/failure, cancellation, disconnect, session expiry or controller shutdown clears it. A restarted controller requires authentication again.</p>
+            <label class="check-label"><input id="remember-connection" type="checkbox" checked> <span>Remember this connection and reconnect on launch</span></label><p class="field-hint" id="password-note">When remembered, the password is saved in plaintext in owner-only local controller settings—not browser storage. Anyone with access to your account or backups may read it. Saved passwords are sent only after SSH host-key verification.</p>
             <button class="primary" id="authenticate" type="submit">Authenticate</button>
           </form>
+          <button id="forget-connection" class="text-button" type="button" hidden>Forget saved connection and password</button><p id="saved-connection-note" class="field-hint"></p>
           <button id="forget-recovery" class="text-button" type="button" hidden>Forget setup password / stop automatic setup</button>
            <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>
         </section>
@@ -74,11 +75,12 @@
             <p id="license-pin" class="field-hint"></p><div id="artifact-details"></div>
           </details>
           <p id="install-scope" class="notice">Install stages the verified release, installs required packages, drivers and user services, may reboot/reconnect, activates the environment and downloads the selected artifacts above. By clicking Install, you acknowledge the pinned license, Exhibit A and auxiliary provenance terms and confirm eligibility, including any necessary written authorization. MiniMax H3 has territorial and commercial restrictions; this action does not grant eligibility. Existing busy jobs are never cancelled automatically.</p>
+          <label class="check-label"><input id="install-sage" type="checkbox"> <span>Install optional SageAttention 1.0.6 (Triton)</span></label><p class="field-hint">Remembered choice. Available for pruned ComfyUI profiles; does not upgrade Torch or download a CUDA SDK. Install while the generation queue is idle; running jobs are never cancelled.</p><p id="sage-install-state" class="field-hint"></p><pre id="sage-install-output" hidden></pre>
           <button id="install" class="primary" type="button" aria-describedby="install-disabled-reason" disabled>Install</button>
           <p id="install-disabled-reason" class="field-hint">Authenticate, then scan hardware to enable Install.</p>
           <button id="retry-setup" class="primary" type="button" hidden>Retry failed stage</button>
           <button id="inspect-setup" class="text-button" type="button" disabled>Inspect saved setup</button>
-          <p class="field-hint">After a controller restart, inspect saved setup to recover its original selection and diagnostics. Inspection never starts installation.</p>
+          <p class="field-hint">Saved setup is observed automatically after reconnection. Inspect again at any time to recover its original selection and diagnostics; inspection never starts installation.</p>
           <button id="cancel-setup" class="secondary" type="button" hidden>Cancel setup</button>
           <button id="setup-refresh" class="text-button" type="button" disabled>Refresh setup progress</button>
           <p id="setup-status" role="status">Installation, model and generation readiness have not been verified.</p>
@@ -111,8 +113,9 @@
             <label for="generation-profile">Generation profile</label><select id="generation-profile"></select>
             <div class="form-row"><div class="field"><label for="width">Width</label><input id="width" type="number" min="32" max="1344" step="32" value="1344" required></div><div class="field"><label for="height">Height</label><input id="height" type="number" min="32" max="1344" step="32" value="768" required></div></div>
             <p class="field-hint">Canvas area at most 1,032,192 pixels; axes must be multiples of 32. 24 fps, video plus audio.</p>
-            <div class="form-row"><div class="field"><label for="frames">Frames</label><input id="frames" type="number" min="124" max="345" step="17" value="124" required></div><div class="field"><label for="steps">Sigma-grid steps</label><input id="steps" type="number" min="2" max="1000" value="50" required></div><div class="field"><label for="seed">Seed</label><input id="seed" type="number" min="0" max="9007199254740991" value="42" required></div></div>
+            <div class="form-row generation-lengths"><div class="field"><label for="duration">Seconds</label><input id="duration" type="number" min="5" max="15" step="any" value="5.166667" required></div><div class="field"><label for="frames">Frames</label><input id="frames" type="number" min="124" max="345" step="17" value="124" required></div><div class="field"><label for="steps">Sigma-grid steps</label><input id="steps" type="number" min="2" max="1000" value="50" required></div><div class="field"><label for="seed">Seed</label><input id="seed" type="number" min="0" max="9007199254740991" value="42" required></div></div>
             <div id="lora-field" class="field" hidden><label for="lora">Managed LoRA ID (optional, BF16 only)</label><input id="lora" pattern="[A-Za-z0-9_-]{1,128}" maxlength="128" autocomplete="off"></div><p id="sparse-note" class="field-hint">Sparse attention is unsupported by the pinned backend and is not submitted.</p>
+            <p id="duration-note" class="field-hint">124 frames = 5.167 seconds at 24 fps. Length rounds to supported H3 frame counts.</p><label class="check-label"><input id="use-sage" type="checkbox"> <span>Use SageAttention for generation (remembered)</span></label><p id="sage-generation-note" class="field-hint">Optional. Supported unmasked attention uses SageAttention; masked/full-precision layers retain PyTorch.</p>
             <button id="generate" class="primary" type="submit">Queue generation</button>
           </fieldset></form>
           <div class="queue-heading"><h3>Generation queue</h3><p id="queue-summary" role="status">No jobs loaded</p></div><div id="jobs"></div><section class="job-terminal" aria-label="Generation terminal"><div class="terminal-heading"><h3>Terminal</h3><span id="terminal-job">Select a job to view its output</span></div><pre id="job-events" tabindex="0" aria-label="Selected job terminal output">Waiting for a job.</pre></section>

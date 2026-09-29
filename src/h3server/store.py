@@ -170,7 +170,10 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
         request["settings"] = None
     request = _keys(request, {"prompt", "loras", "sparse_attention", "settings"})
     if request["settings"] is not None:
-        settings = _keys(request["settings"], {"num_frames", "width", "height", "steps", "seed", "profile"})
+        values = request['settings']
+        if type(values) is dict:
+            values = {'sage_attention': False, **values}
+        settings = _keys(values, {"num_frames", "width", "height", "steps", "seed", "profile", "sage_attention"})
         request["settings"] = GenerationSettings(**settings)
     _text(request["prompt"])
     if type(request["loras"]) is not list:

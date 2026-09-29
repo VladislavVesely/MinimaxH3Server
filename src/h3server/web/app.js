@@ -34,6 +34,65 @@
   const jobPhases = new Map();
   let selectedJob = null;
   let currentJobs = [];
+  let preferences = { connection: null, install_sage: false, use_sage: false };
+  let preferencesSave = Promise.resolve();
+  let sageState = { installed: false, busy: false, supported: false };
+
+  function savedTargetMatches() {
+    const saved = preferences.connection;
+    return saved && lastTarget && saved.host === lastTarget.host && saved.port === lastTarget.port && saved.username === lastTarget.username;
+  }
+  function showPreferences(value) {
+    preferences = value;
+    $('install-sage').checked = value.install_sage;
+    $('use-sage').checked = value.use_sage;
+    if (value.connection) {
+      for (const key of ['host', 'port', 'username']) $(key).value = value.connection[key];
+    }
+    $('forget-connection').hidden = !value.connection;
+    $('saved-connection-note').textContent = value.connection ? 'Connection remembered locally in plaintext. Host-key verification is still required.' : '';
+  }
+  function savePreferences() {
+    preferencesSave = preferencesSave.catch(() => {}).then(async () => {
+      preferences = await request('/preferences', { install_sage: $('install-sage').checked, use_sage: $('use-sage').checked });
+    });
+    return preferencesSave;
+  }
+  function showSage(value) {
+    if (value) sageState = value;
+    $('sage-install-state').textContent = sageState.busy ? 'Installing and GPU-checking SageAttention…'
+      : sageState.installed ? 'SageAttention 1.0.6 installed and GPU-verified.'
+      : sageState.error || 'SageAttention is optional and is not installed.';
+    $('sage-install-output').hidden = !sageState.log;
+    replaceOutput($('sage-install-output'), sageState.log || '');
+    $('sage-generation-note').textContent = sageState.installed
+      ? 'SageAttention 1.0.6 is available. Supported unmasked attention uses Sage; masked/full-precision layers retain PyTorch.'
+      : 'To use SageAttention, select its installation option above and click Install. You can leave it off to use normal attention.';
+  }
+  async function installSageNow() {
+    showSage(await request('/remote/features/sageattention', {}));
+    await dashboard();
+  }
+  async function afterAuthentication() {
+    preferences = await request('/preferences');
+    $('forget-connection').hidden = !preferences.connection;
+    if (capabilities.scan === true && !setup.busy) await scanHardware();
+    if (!setup.busy && capabilities.release_available === true) {
+      try { await observeSavedSetup(); }
+      catch (error) { if (error.code !== 'setup_not_found') throw error; }
+    }
+    if (setup.installation_ready && !setup.busy) await dashboard();
+    if (!setup.busy) $('operation').textContent = 'Connected · saved state refreshed.';
+  }
+  function syncDuration(source) {
+    const frames = $('frames'); const seconds = $('duration');
+    if (source === 'seconds' && Number.isFinite(seconds.valueAsNumber) && seconds.valueAsNumber > 0) {
+      frames.value = 5 + 17 * Math.min(20, Math.max(7, Math.floor((seconds.valueAsNumber * 24 - 5) / 17 + .5)));
+    } else if (source === 'frames' && Number.isFinite(frames.valueAsNumber)) {
+      seconds.value = Number((frames.valueAsNumber / 24).toFixed(6));
+    }
+    $('duration-note').textContent = `${frames.value} frames = ${(Number(frames.value) / 24).toFixed(3)} seconds at 24 fps. H3 supports 124–345 frames in steps of 17; seconds round to the nearest supported length.`;
+  }
 
   function resetSetupPolling() {
     clearTimeout(setupTimer);
@@ -47,6 +106,10 @@
   const messages = {
     invalid_checkpoint: 'The saved setup record is incomplete or inconsistent. Keep the checkpoint files and inspect the original plan and deployment record; nothing was started or retried.',
     setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
+    saved_connection_missing: 'No saved connection is available. Enter the SSH details and authenticate once.',
+    saved_connection_mismatch: 'Saved credentials belong to a different SSH target. Enter the password for this connection.',
+    sage_install_failed: 'Optional SageAttention installation or its GPU check failed. See the component output; model files have not been changed.',
+    optional_install_busy_or_unsupported: 'SageAttention requires an idle pruned-profile environment. Wait for jobs to finish before installing it.',
     saved_operation_interrupted: 'The server operation stopped unexpectedly (for example after a reboot). Downloaded partial files are preserved. No new installation or retry was started.',
     saved_operation_failed: 'The saved server operation failed. Its latest measured progress and recorded diagnostics are shown below; downloaded partial files are preserved.',
     matching_release_required: 'This saved setup belongs to an unsupported release. Recovery is blocked; keep its checkpoints and use its matching trusted controller. Nothing was retried.',
@@ -83,7 +146,7 @@
     reconnect_timeout: 'Automatic reconnection timed out after 120 seconds. Disconnect, reconnect and authenticate again. Inspect the saved checkpoint before another Install.',
     recovery_failed: 'Setup recovery failed. Disconnect, reconnect and authenticate again. Inspect the saved checkpoint before another Install.',
     recovery_binding_changed: 'The saved target or setup digest changed. Automatic recovery stopped. Review the target and restore manually.',
-    authentication_failed: 'Authentication failed. The password was cleared. Reconnect and enter your credentials again.',
+    authentication_failed: 'Authentication failed. The password field was cleared; saved credentials are unchanged. Reconnect and enter updated credentials if needed.',
     authentication_required: 'SSH authentication is required. Reconnect and sign in again.',
     authentication_not_pending: 'Authentication is not pending. Refresh the connection state.',
     invalid_credentials: 'The password is invalid. Enter a nonempty password without null characters.',
@@ -197,6 +260,10 @@
     $('trust-check').disabled = !usable || !trustPending;
     $('approve').disabled = !usable || !trustPending || !$('trust-check').checked;
     $('authenticate').disabled = !available || !authPending;
+    $('remember-connection').disabled = busy;
+    $('forget-connection').disabled = busy;
+    $('password').required = !savedTargetMatches();
+    $('password').placeholder = savedTargetMatches() ? 'Saved locally — leave blank to reuse' : '';
     $('password').disabled = !available || !authPending;
     $('disconnect').disabled = !usable || disconnected;
     $('reconnect').disabled = !available || !disconnected || lastTarget === null;
@@ -212,15 +279,22 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || setup.state === 'failed';
+    const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
+    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || (setup.state === 'failed' && !optionalOnlyFailure);
+    $('install-sage').disabled = !available || sageState.busy || !!pendingInstall || !!pendingRetry;
+    const needsSage = $('install-sage').checked && !sageState.installed;
+    const selectedInstall = profileCatalog.find(p => p.profile_name === $('install-profile').value);
     const alreadyInstalled = setup.installation_ready === true && setup.model_ready === true
-      && setup.profile === $('install-profile').value;
+      && setup.profile === $('install-profile').value && !needsSage;
     const installReason = !ready ? 'Open a valid local controller session to enable Install.'
       : alreadyInstalled ? 'This environment and its model files are already installed and verified. No installation is needed.'
+      : sageState.busy ? 'Optional SageAttention installation is running; progress is shown below.'
+      : needsSage && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing SageAttention. Running jobs will not be cancelled.'
+      : $('install-sage').checked && selectedInstall && !selectedInstall.runtime_id.startsWith('comfyui-h3-') ? 'SageAttention is available for pruned profiles only. Uncheck it to install a legacy profile.'
       : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
       : busy ? 'An operation is in progress. Wait for it to finish.'
       : !authenticated ? 'Authenticate to automatically scan hardware and enable Install.'
-      : setup.state === 'failed' ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
+      : setup.state === 'failed' && !optionalOnlyFailure ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
       : !connection.recovery?.setup_credential_retained ? 'Install needs memory-only setup authorization. Disconnect, reconnect and authenticate. Saved unprivileged retries do not need a sudo password.'
       : !scanned && !pendingInstall ? 'Hardware has not been scanned. Click Scan hardware; if it failed, resolve the scan error first.'
       : !$('install-profile').value ? 'Wait for the model catalog, then choose a profile.'
@@ -232,12 +306,14 @@
     $('retry-setup').hidden = setup.retry?.eligible !== true;
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
-    $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request' : 'Install';
+    $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request'
+      : setup.model_ready && needsSage ? 'Install SageAttention' : 'Install';
     $('cancel-setup').hidden = !setup.busy || setup.observing === true;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
     $('setup-refresh').disabled = !usable;
     $('dashboard-refresh').disabled = !available || !authenticated;
     $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
+    $('generate').disabled = sageState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported));
     for (const button of $('jobs').querySelectorAll('button')) button.disabled = !available || !authenticated;
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
@@ -414,30 +490,53 @@
     if (!$('trust-check').checked) return;
     perform('Saving explicit host-key approval…', async () => {
       setConnection(await request('/approve', { fingerprint: connection.fingerprint }));
-      log('Host fingerprint approved and saved. No password has been sent yet.');
-      $('auth-heading').focus();
+      log('Host fingerprint approved and saved.');
+      if (savedTargetMatches()) {
+        setConnection(await request('/connection/authenticate-saved', {}));
+        await afterAuthentication();
+      } else $('auth-heading').focus();
     });
   });
   $('auth-form').addEventListener('submit', event => {
     event.preventDefault();
     if (busy || !ready) return;
     // Do not retain credentials in state. Clear even if authentication fails.
-    const pending = request('/authenticate', { password: $('password').value, reuse_for_setup: true });
+    const pending = !$('password').value && savedTargetMatches()
+      ? request('/connection/authenticate-saved', {})
+      : request('/authenticate', { password: $('password').value, reuse_for_setup: true, remember_connection: $('remember-connection').checked });
     $('password').value = '';
     perform('Authenticating with SSH…', async () => {
       setConnection(await pending);
       log('SSH authentication succeeded. Scanning hardware with read-only commands; no installation starts.');
-      if (capabilities.scan === true && !setup.busy) await scanHardware();
-      if (!setup.busy && capabilities.release_available === true) {
-        try { await observeSavedSetup(); }
-        catch (error) { if (error.code !== 'setup_not_found') throw error; }
-      }
+      await afterAuthentication();
     });
+  });
+  $('forget-connection').addEventListener('click', () => perform('Forgetting saved connection…', async () => {
+    showPreferences(await request('/connection/forget', {}));
+    $('remember-connection').checked = false;
+  }));
+  $('remember-connection').addEventListener('change', async () => {
+    if (!$('remember-connection').checked) {
+      preferences = { ...preferences, connection: null };
+      render();
+      try { preferences = await request('/connection/forget', {}); $('forget-connection').hidden = true; $('saved-connection-note').textContent = ''; render(); }
+      catch (error) { showError(error, false); }
+    }
+  });
+  for (const id of ['install-sage', 'use-sage']) $(id).addEventListener('change', () => {
+    render(); savePreferences().catch(error => showError(error, false));
+  });
+  $('duration').addEventListener('input', () => syncDuration('seconds'));
+  $('duration').addEventListener('change', () => syncDuration('frames'));
+  $('frames').addEventListener('input', () => syncDuration('frames'));
+  $('frames').addEventListener('change', () => {
+    $('frames').value = 5 + 17 * Math.min(20, Math.max(7, Math.floor((Number($('frames').value) - 5) / 17 + .5)));
+    syncDuration('frames');
   });
   $('forget-recovery').addEventListener('click', () => perform('Clearing retained SSH credential…', async () => {
     await request('/recovery/forget', {});
     await refresh();
-    log('Setup recovery credential cleared. Reconnection now requires manual authentication.');
+    log('Temporary setup credential cleared. Saved connection preferences are unchanged.');
   }));
   $('disconnect').addEventListener('click', () => perform('Disconnecting SSH…', async () => {
     $('password').value = '';
@@ -473,7 +572,7 @@
   }
   const phases = { idle: 'Not started', planning: 'Inspecting and staging', prerequisites: 'Installing prerequisites',
     replanning: 'Rechecking prerequisites', installing: 'Installing environment', rebooting: 'Rebooting',
-    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', completed: 'Completed' };
+    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', sage_attention: 'Installing optional SageAttention', completed: 'Completed' };
   const substages = { 'runtime-source': 'Acquiring runtime source', 'python-packages': 'Installing Python packages', 'runtime-checks': 'Checking runtime' };
   function seconds(value) {
     return typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))}s` : 'not reported';
@@ -505,6 +604,7 @@
   }
   function showSetup(data) {
     setup = data;
+    if (data.sage_install) showSage(data.sage_install);
     if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see current phase and live output.' : 'Idle · no operation running.';
     if (setup.request_id === pendingInstall?.request_id) pendingInstall = null;
     if (setup.request_id === pendingRetry?.request_id) pendingRetry = null;
@@ -592,7 +692,7 @@
   $('retry-setup').addEventListener('click', () => perform('Retrying the eligible failed stage; completed work is preserved…', async () => {
     if (!setup.retry?.eligible) return;
     pendingRetry ||= {profile: setup.profile, artifact_set_digest: setup.artifact_set_digest,
-      plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
+      sage_attention: $('install-sage').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
     try {
       const result = await request('/setup/retry', pendingRetry);
       inspectedSetup = null;
@@ -642,13 +742,19 @@
       await observeSavedSetup();
       if (setup.busy || (setup.profile === selected.profile_name && setup.model_ready)) {
         pendingInstall = null;
+        if (!setup.busy && $('install-sage').checked && !sageState.installed) {
+          await savePreferences();
+          await installSageNow();
+        }
         return;
       }
     } catch (error) {
       if (!['setup_not_found', 'matching_release_required'].includes(error.code)) throw error;
     }
     // Retain only the public intent ID across an ambiguous response, never secrets.
-    pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest, request_id: crypto.randomUUID() };
+    await savePreferences();
+    pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest,
+      sage_attention: $('install-sage').checked, request_id: crypto.randomUUID() };
     try {
       const result = await request('/setup/start', pendingInstall);
       inspectedSetup = null;
@@ -734,7 +840,7 @@
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
-        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps` : '', 'field-hint');
+        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}` : '', 'field-hint');
         item.append(heading, caption, status, meter, detail, output);
         card = { item, status, meter, detail, output, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
@@ -800,6 +906,7 @@
     const data = await request('/remote/jobs');
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
+    showSage(capability.optional_features?.sage_attention);
     const profiles = capability.profiles || [];
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
@@ -821,20 +928,21 @@
     await jobEvents(current);
     if (!current()) return;
     render();
-    if (data.jobs.some(job => ['queued', 'running'].includes(job.status))) jobTimer = setTimeout(() => {
+    jobTimer = setTimeout(() => {
       if (!current()) return;
       const nextSequence = dashboardRequest + 1;
       dashboard().catch(error => {
         if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
       });
-    }, 2000);
+    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy ? 2000 : 5000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
   $('generation-form').addEventListener('submit', event => {
     event.preventDefault();
     perform('Submitting local generation job…', async () => {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
-        width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value) };
+        width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
+        sage_attention: $('use-sage').checked };
       if (!$('lora-field').hidden && $('lora').value) body.loras = [$('lora').value];
       const accepted = await request('/remote/jobs', body);
       selectedJob = accepted.job_id || accepted.job?.job_id || null;
@@ -854,13 +962,30 @@
       }
       await refresh();
       renderCatalog(await request('/profiles'));
-      if (setup.busy) await setupProgress();
-      else if (connection.state === 'authenticated' && capabilities.release_available === true) {
-        try { await observeSavedSetup(); }
-        catch (error) { if (error.code !== 'setup_not_found') showError(error, false); }
+      showPreferences(await request('/preferences'));
+      syncDuration('frames');
+      showSage();
+      if (preferences.connection) {
+        const saved = preferences.connection;
+        lastTarget = { host: saved.host, port: saved.port, username: saved.username };
       }
-      if (!setup.busy) $('operation').textContent = 'Ready for a secure SSH connection.';
-      log('Local browser session secured. Authenticate, scan, select a model and click Install to begin.');
+      if (connection.state === 'disconnected' && preferences.connection) {
+        try {
+          setConnection(await request('/connection/restore', {}));
+          if (connection.state === 'authenticated') await afterAuthentication();
+        } catch (error) {
+          await refresh();
+          showError(error, false);
+        }
+      } else if (setup.busy) await setupProgress();
+      else if (connection.state === 'authenticated') {
+        try { await afterAuthentication(); }
+        catch (error) { showError(error, false); }
+      }
+      if (!setup.busy && connection.state !== 'authenticated') $('operation').textContent = 'Ready for a secure SSH connection.';
+      log(connection.state === 'authenticated'
+        ? 'Connection authenticated. No installation or generation was started automatically.'
+        : 'Local browser session secured. Authenticate, scan, select a model and click Install to begin.');
     } catch (error) {
       ready = false;
       $('session').textContent = 'Local session unavailable';

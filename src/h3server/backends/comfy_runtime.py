@@ -83,7 +83,25 @@ def runtime_record(profile, resolved):
                 runtime=provision_contract(profile), resolved_sha256=hashlib.sha256(resolved.encode()).hexdigest())
 
 
-def verify_provisioned(paths, profile):
+def dependencies_match(paths, resolved, current, *, allow_unverified_sage=False):
+    """Permit only the exact additive component, never relax the base freeze.
+
+    The installer alone can repair an interrupted pinned installation before its
+    GPU receipt exists. Normal runtime/readiness always requires that receipt.
+    """
+    if current == resolved:
+        return True
+    from h3server.backends.sage_attention import VERSION, installed
+    addition = f'sageattention=={VERSION}\n'
+    lines = current.splitlines(keepends=True)
+    if addition in resolved.splitlines(keepends=True) or lines.count(addition) != 1:
+        return False
+    if ''.join(line for line in lines if line != addition) != resolved:
+        return False
+    return allow_unverified_sage or installed(paths)
+
+
+def verify_provisioned(paths, profile, *, allow_unverified_sage=False):
     """Only the running application-owned environment, never a caller import path."""
     environment = Path(sys.prefix).absolute()
     relative = environment.relative_to(paths.environments).as_posix()
@@ -102,7 +120,8 @@ def verify_provisioned(paths, profile):
     verify_sources(environment, profile)
     result = subprocess.run([sys.executable, '-m', 'pip', 'freeze', '--all'],
                             capture_output=True, timeout=60, check=True)
-    if result.stdout.decode() != resolved:
+    if not dependencies_match(paths, resolved, result.stdout.decode(),
+                              allow_unverified_sage=allow_unverified_sage):
         raise ValueError('installed dependencies differ from resolved environment')
     subprocess.run([sys.executable, '-m', 'pip', 'check'], stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL, timeout=60, check=True)
