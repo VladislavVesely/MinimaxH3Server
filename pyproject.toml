@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "h3server"
 version = "0.1.0"
-description = "Domain and path foundations for a self-hosted H3 service"
+description = "Local SSH controller and self-hosted MiniMax H3 video generation service"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.135,<0.136",
@@ -13,10 +14,15 @@ dependencies = [
     "anyio>=4.8,<4.12",
     "uvicorn>=0.34,<1",
     "paramiko>=3.5,<5",
+    "pywin32>=308; sys_platform == 'win32'",
 ]
+
+[project.scripts]
+h3-controller = "h3server.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "httpx>=0.28,<1"]
+packaging = ["build>=1.2,<2", "pyinstaller>=6.12,<7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

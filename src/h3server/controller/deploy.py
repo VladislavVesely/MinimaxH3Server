@@ -282,42 +282,10 @@ class Deployment:
 
 
 def main(argv=None):
-    """Task12 dispatcher: `h3-controller deploy --wheel PATH --sha256 TRUSTED_PIN`.
-
-    Source equivalent: python -m h3server.controller.deploy deploy [...]. No SSH
-    password arguments are accepted. The local browser owns all consent/auth.
-    """
-    import argparse
-    import socket
-    import webbrowser
-    import uvicorn
-    from h3server.controller.app import create_app
-    class Parser(argparse.ArgumentParser):
-        def error(self, message):
-            raise SystemExit('invalid deploy arguments; use --help')
-    parser = Parser(description='Open the authenticated local deployment wizard (no password arguments).')
-    parser.add_argument('command', choices=['deploy'])
-    parser.add_argument('--wheel', required=True)
-    parser.add_argument('--sha256', required=True)
-    parser.add_argument('--state-dir', type=Path, default=Path.home() / '.h3server-controller')
-    parser.add_argument('--port', type=int, default=0)
-    parser.add_argument('--no-browser', action='store_true')
-    args = parser.parse_args(argv)
-    try:
-        release = ReleaseBundle(args.wheel, args.sha256)
-    except (OSError, ValueError, zipfile.BadZipFile):
-        raise SystemExit('release verification failed') from None
-    with socket.socket() as listener:
-        listener.bind(('127.0.0.1', args.port))
-        origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
-        app = create_app(state_dir=args.state_dir, origin=origin, release=release)
-        url = origin + '/#token=' + app.state.session.bootstrap_token
-        if args.no_browser:
-            print(url, flush=True)  # explicit local launch URL, never a remote token
-        else:
-            webbrowser.open(url)
-        uvicorn.Server(uvicorn.Config(app, log_level='critical', access_log=False)).run(sockets=[listener])
+    """Backward-compatible source entry point for the native launcher."""
+    from h3server.__main__ import main as launch
+    return launch(argv)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

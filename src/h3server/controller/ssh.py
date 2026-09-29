@@ -154,16 +154,34 @@ class _TransportDeadline:
 class KnownHosts:
     """Dedicated trust store; never imports account credentials or SSH config.
 
-    POSIX ownership/mode enforcement is implemented here. Windows ACL support
-    requires native integration; persistence explicitly fails closed there.
+    POSIX uses ownership/mode checks; Windows uses native protected owner ACLs.
+    Both implementations fail closed on unsafe files or unsupported filesystems.
     """
 
     def __init__(self, directory: Path):
         self.directory = Path(directory)
         self.path = self.directory / "known_hosts"
 
+    @staticmethod
+    def _parse(lines):
+        keys = paramiko.HostKeys()
+        for line in lines:
+            if not line.strip() or line.startswith('#'):
+                continue
+            entry = paramiko.hostkeys.HostKeyEntry.from_line(line.strip())
+            if entry is None or entry.key is None:
+                raise ValueError('invalid trust file')
+            for host in entry.hostnames:
+                if keys.lookup(host) is not None and entry.key.get_name() in keys[host]:
+                    raise ValueError('duplicate trust entry')
+                keys.add(host, entry.key.get_name(), entry.key)
+        return keys
+
     def load(self) -> paramiko.HostKeys:
         try:
+            if os.name == 'nt':
+                from h3server.controller import windows_trust
+                return self._parse(windows_trust.read(self.directory).splitlines())
             if os.name != "posix" or self.directory.is_symlink():
                 raise OSError("private state directory unavailable")
             self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -181,17 +199,7 @@ class KnownHosts:
                 if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise OSError("invalid trust file")
                 os.fchmod(stream.fileno(), 0o600)
-                for line in stream:
-                    if not line.strip() or line.startswith("#"):
-                        continue
-                    entry = paramiko.hostkeys.HostKeyEntry.from_line(line.strip())
-                    if entry is None or entry.key is None:
-                        raise ValueError("invalid trust file")
-                    for host in entry.hostnames:
-                        if keys.lookup(host) is not None and entry.key.get_name() in keys[host]:
-                            raise ValueError("duplicate trust entry")
-                        keys.add(host, entry.key.get_name(), entry.key)
-            return keys
+                return self._parse(stream)
         except Exception:
             raise ControllerError("state_unavailable", 503) from None
 
@@ -203,6 +211,12 @@ class KnownHosts:
         keys.add(host, key.get_name(), key)
         temporary = None
         try:
+            if os.name == 'nt':
+                from h3server.controller import windows_trust
+                text = ''.join(f'{name} {algorithm} {stored.get_base64()}\n'
+                               for name in keys for algorithm, stored in keys[name].items())
+                windows_trust.write(self.directory, text)
+                return
             fd, temporary = tempfile.mkstemp(prefix=".known_hosts-", dir=self.directory)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 os.fchmod(stream.fileno(), 0o600)

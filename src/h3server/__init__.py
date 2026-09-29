@@ -1,1 +1,1 @@
-"""Foundations for a self-hosted H3 service; importing starts no services."""
+"""Local SSH controller and self-hosted MiniMax H3 service; imports start no services."""

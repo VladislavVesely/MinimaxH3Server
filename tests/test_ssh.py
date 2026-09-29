@@ -1,4 +1,5 @@
 """SSH tests substitute only socket/Paramiko network objects, not policy or probes."""
+import os
 import shlex
 import socket
 import stat
@@ -192,8 +193,13 @@ def test_persisted_host_key_owner_only_and_changed_key_blocked(tmp_path):
     from h3server.controller.ssh import ControllerError
     network, connection = trusted_connection(tmp_path)
     path = tmp_path / "local" / "known_hosts"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    if os.name == 'nt':
+        from test_windows_trust import assert_private
+        assert_private(path)
+        assert_private(path.parent)
+    else:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert "test-secret" not in path.read_text()
     connection.close()
     connection = network.connection(path.parent)
@@ -303,6 +309,7 @@ def test_untrusted_connection_cannot_run_commands_or_sftp(tmp_path):
     connection.close()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows reparse/hardlink cases use native junctions without symlink privilege')
 def test_symlink_trust_file_rejected_without_modifying_target(tmp_path):
     from h3server.controller.ssh import ControllerError
     target = tmp_path / "other"

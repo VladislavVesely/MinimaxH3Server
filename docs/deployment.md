@@ -1,22 +1,24 @@
 # Deployment and launcher integration
 
-## Launcher contract (Task12)
+## Launcher contract
 
-Packaged CLI: `h3-controller deploy --wheel PATH --sha256 TRUSTED_SHA256`
-(source equivalent: `python -m h3server.controller.deploy deploy ...`). Optional
+Packaged CLI: `h3-controller deploy` uses the embedded release wheel and integrity
+pin. `h3-controller deploy --wheel PATH --sha256 TRUSTED_SHA256` selects an explicitly
+verified override (source equivalent: `python -m h3server deploy ...`). Optional
 arguments: `--state-dir PATH`, `--port PORT` (default ephemeral loopback), and
 `--no-browser` (print the one-time local launch URL). Password arguments are not
 accepted. `scripts/deploy.sh` and `scripts/deploy.ps1` dispatch to this command;
 `H3_CONTROLLER` may select the native executable.
 
-A packaged launcher can dispatch to `h3server.controller.deploy.main(argv)` or
-construct `ReleaseBundle(wheel_path, trusted_sha256)` and supply `release=` to
-`controller.app.create_app`. Bundle a **separately built pure-Python release
-wheel**, not a checkout/archive, alongside the native controller. Resolve it with
-package resources (keep an `importlib.resources.as_file` context alive while
-starting), not cwd/repository paths. Authenticate the expected SHA256 through the
-release channel or explicit operator verification. Computing a digest from an
-arbitrary wheel is not provenance authentication.
+The launcher constructs `ReleaseBundle(wheel_path, trusted_sha256)` and supplies
+`release=` to `controller.app.create_app`. Native builds embed a **separately built
+pure-Python release wheel**, not a checkout/archive, using package resources with
+an `importlib.resources.as_file` context alive through shutdown. No cwd/repository
+path lookup occurs. `scripts/build_controller.py` validates its contents and binds
+the embedded digest; `scripts/smoke_controller.py` independently verifies executable
+payload bytes and real loopback behavior. Authenticate the executable/checksum
+through a trusted release channel or explicit operator verification. Computing a
+digest from an arbitrary wheel is not provenance authentication.
 
 The remote wheel includes `h3server/controller/target.py`, installer/recovery,
 remote daemon/worker, backend/downloader and these package resources:
@@ -28,9 +30,10 @@ remote daemon/worker, backend/downloader and these package resources:
 
 Release validation permits only application package and wheel metadata entries,
 rejecting symlinks, traversal, credentials/dev/test/cache/node/venv artifacts.
-Native packaging must still supply the controller's dependencies and implement
-Windows native private trust-store ACLs. Current POSIX trust tests are not Windows
-certification; do not remove the fail-closed boundary as a packaging workaround.
+Native packaging supplies controller dependencies. Windows private trust storage
+uses native protected owner-only ACLs through pywin32; unsupported security
+filesystems fail closed. Native Windows ACL/reparse tests are included in Windows
+CI. Their existence and POSIX test results are not Windows certification.
 
 ## Browser/controller flow
 

@@ -8,7 +8,7 @@ const path = require('node:path');
 const test = base.extend({
   controller: async ({}, use) => {
     const root = path.resolve(__dirname, '../..');
-    const child = spawn(path.join(root, '.venv/bin/python'), [path.join(__dirname, 'controller_fixture.py')], {
+    const child = spawn(process.env.H3_TEST_PYTHON || path.join(root, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python'), [path.join(__dirname, 'controller_fixture.py')], {
       cwd: root, env: { ...process.env, PYTHONPATH: path.join(root, 'src') }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
