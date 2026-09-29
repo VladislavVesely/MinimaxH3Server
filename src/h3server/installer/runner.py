@@ -26,6 +26,7 @@ import shlex
 import subprocess
 
 from h3server.domain import StageStatus
+from h3server.installer.diagnostics import Diagnostics
 from h3server.installer.planner import Approval, validate_approval, validate_plan
 from h3server.installer.steps import (
     CommandFailure, PENDING_DPKG_STATES, ProcessIO, Steps, artifact_path, atomic_text, change_versions,
@@ -95,7 +96,7 @@ class Installer:
                     return checkpoint
                 self.store.transition_setup(setup_id, SetupState.RECONNECTING)
             self.store.transition_setup(setup_id, SetupState.RUNNING)
-            with (self.paths.logs / f"installer-{setup_id}.log").open("a", encoding="utf-8") as log:
+            with Diagnostics(self.paths, setup_id, approval.plan_digest) as log:
                 steps = Steps(self.paths, plan, approval.plan_digest, self.io, log)
                 current = None
                 try:
@@ -105,6 +106,8 @@ class Installer:
                             if stage.name == "system-packages" and stop_after_packages:
                                 return self.store.get_setup(setup_id)
                             continue
+                        steps.stage = stage.name
+                        log.phase(stage.name, stage.name, stage.name.replace("-", " "))
                         self.store.transition_stage(setup_id, stage.name, StageStatus.RUNNING)
                         if stage.name == "replan":
                             self.store.transition_stage(setup_id, stage.name, StageStatus.COMPLETED)
@@ -121,7 +124,8 @@ class Installer:
                         if stage.name == "system-packages" and stop_after_packages:
                             return self.store.get_setup(setup_id)
                     return self.store.transition_setup(setup_id, SetupState.READY)
-                except BaseException:
+                except BaseException as error:
+                    log.failed(error)
                     if current is not None:
                         self.store.transition_stage(setup_id, current, StageStatus.FAILED)
                     self.store.transition_setup(setup_id, SetupState.FAILED)

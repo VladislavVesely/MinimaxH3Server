@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import unicodedata
+import codecs
+import selectors
+import time
+
+from h3server.installer.diagnostics import safe_log, bounded, retry_reason
 
 from h3server.installer.planner import PACKAGE, VERSION, installed_version, package_changes
 from h3server.probe import _os_release
@@ -18,65 +22,87 @@ class CommandFailure(RuntimeError):
 PENDING_DPKG_STATES = ("unpacked", "half-configured", "triggers-awaited", "triggers-pending")
 
 
-def safe_log(text):
-    # Never forward terminal controls or URL userinfo into replay/UI logs.
-    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
-    text = re.sub(r"(https?://)[^/@\s]+:[^/@\s]+@", r"\1[redacted]@", text)
-    return "".join(c for c in text if c in "\n\t" or unicodedata.category(c) not in {"Cc", "Cf"})
-
-
 class ProcessIO:
-    """Drain merged output in bounded chunks; no shell, stdin or synthetic percent.
+    """Drain actual child output with a finite deadline; inherit installer ownership.
 
-    The installer lock is inherited by children: killing a supervisor cannot
-    release ownership while its apt/pip child still mutates the environment.
+    Labels are source-owned, never argv (Python snippets and credentials must not
+    appear in errors). Diagnostic callbacks are optional for legacy IO callers.
     """
     lock_fd = None
 
+    def __init__(self, command_timeout=3600):
+        self.command_timeout = command_timeout
+
     def run(self, argv, *, env, log, capture=False):
-        collected = []
-        size = 0
-        pending, dropping = "", False
+        label = Path(argv[0]).name
+        notify = lambda name, *args: getattr(log, name, lambda *a: None)(*args)
+        notify('started', label)
+        collected, size, tail = [], 0, ''
+        pending, dropping = '', False
+        decoder = codecs.getincrementaldecoder('utf-8')('replace')
+        # Only output is sanitized, never the capture consumed by fixed probes.
+        secrets = [v for k, v in env.items() if len(v) >= 4 and re.search(r'(?i)password|token|secret|api_key', k)]
+        def emit(text):
+            nonlocal tail
+            for secret in secrets:
+                text = text.replace(secret, '[redacted]')
+            text = safe_log(text)
+            tail = bounded(tail + text, 4096)
+            log.write(text)
+            log.flush()
+        code = None
         try:
-            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, env=env, shell=False,
-                                       pass_fds=(() if self.lock_fd is None else (self.lock_fd,)))
-        except FileNotFoundError as error:
-            # Missing optional probes (not permission or other IO failures) share
-            # the failed-command boundary used by driver discovery/reboot checks.
-            raise CommandFailure(f"executable {Path(argv[0]).name} not found") from error
-        with process:
             try:
-                while chunk := process.stdout.read1(4096):
-                    text = chunk.decode("utf-8", "replace")
-                    for part in text.splitlines(keepends=True):
-                        if not dropping:
-                            pending += part
-                            if len(pending) > 65536:
-                                log.write("[oversized output line omitted]\n")
-                                pending = ""
-                                dropping = True
-                        if part.endswith(("\n", "\r")):
+                process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, env=env, shell=False,
+                                           pass_fds=(() if self.lock_fd is None else (self.lock_fd,)))
+            except OSError as error:
+                if isinstance(error, FileNotFoundError):
+                    raise CommandFailure(f'executable {label} not found') from None
+                raise OSError(error.errno, f'executable {label} could not be launched') from None
+            deadline = time.monotonic() + getattr(self, 'command_timeout', 3600)
+            with process, selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                try:
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise CommandFailure('command deadline exceeded')
+                        if not selector.select(min(remaining, .5)):
+                            continue
+                        chunk = os.read(process.stdout.fileno(), 4096)
+                        text = decoder.decode(chunk, final=not chunk)
+                        for part in text.splitlines(keepends=True):
                             if not dropping:
-                                log.write(safe_log(pending))
-                            pending, dropping = "", False
-                            log.flush()
-                    if capture:
-                        size += len(chunk)
-                        if size > 8 * 1024 * 1024:
-                            raise CommandFailure("command output exceeds capture limit")
-                        collected.append(text)
-                if pending:
-                    log.write(safe_log(pending))
-                    log.flush()
-                code = process.wait()
-            except BaseException:
-                process.terminate()
-                process.wait()
-                raise
-        if code:
-            raise CommandFailure(f"command {Path(argv[0]).name} exited {code}; see installer log")
-        return "".join(collected)
+                                pending += part
+                                if len(pending) > 65536:
+                                    emit('[oversized output line omitted]\n')
+                                    pending, dropping = '', True
+                            if part.endswith(('\n', '\r')):
+                                if not dropping:
+                                    emit(pending.replace('\r', '\n'))
+                                pending, dropping = '', False
+                        if capture:
+                            size += len(chunk)
+                            if size > 8 * 1024 * 1024:
+                                raise CommandFailure('command output exceeds capture limit')
+                            collected.append(text)
+                        if not chunk:
+                            break
+                    if pending:
+                        emit(pending)
+                    code = process.wait(timeout=max(.01, deadline - time.monotonic()))
+                except BaseException:
+                    process.kill()
+                    process.wait()
+                    raise
+            if code:
+                raise CommandFailure(f'command {label} exited {code}: {tail.strip() or "no output"}')
+        except BaseException as error:
+            notify('ended', code, str(error) if isinstance(error, (CommandFailure, OSError)) else 'command interrupted')
+            raise
+        notify('ended', code)
+        return ''.join(collected)
 
 
 def environment(paths):
@@ -85,7 +111,7 @@ def environment(paths):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "PYTHON", "GIT_"))}
     env.update(paths.cache_environment())
     env.update(LC_ALL="C", PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1",
-               PIP_NO_INPUT="1", PYTHONNOUSERSITE="1", GIT_CONFIG_NOSYSTEM="1",
+               PIP_NO_INPUT="1", PYTHONUNBUFFERED="1", PYTHONNOUSERSITE="1", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
     return env
 
@@ -150,6 +176,33 @@ class Steps:
 
     def run(self, *argv, capture=False):
         return self.io.run(tuple(argv), env=self.env, log=self.log, capture=capture)
+
+    def phase(self, substage, label):
+        if hasattr(self.log, 'phase'):
+            self.log.phase(getattr(self, 'stage', 'dependencies'), substage, label)
+
+    def acquire(self, *argv):
+        # Only git fetch and pip install enter this boundary. No APT, sudo,
+        # checkout, verification or environment mutations are auto-retried.
+        fresh = False
+        for attempt in range(3):
+            try:
+                return self.run(*argv)
+            except CommandFailure as error:
+                reason = retry_reason(str(error))
+                if reason is None or attempt == 2 or (reason == 'fresh-index' and fresh):
+                    raise
+                if reason == 'fresh-index':
+                    if 'pip' not in argv:
+                        raise
+                    fresh = True
+                    # Bypass HTTP/index cache once without deleting wheel caches,
+                    # changing pins/indexes, or allowing source builds.
+                    argv = (*argv, '--no-cache-dir')
+                delay = 2 ** attempt
+                if hasattr(self.log, 'retry'):
+                    self.log.retry(attempt + 1, reason, delay)
+                time.sleep(delay)
 
     def system_packages(self):
         platform = self.plan["platform"]
@@ -225,8 +278,10 @@ class Steps:
         if self.plan.get('runtime') is not None:
             return self.pruned_dependencies()
         wheel = artifact_path(self.paths, self.plan)
-        self.run(self.python, "-m", "pip", "install", "--index-url", "https://pypi.org/simple",
+        self.phase("python-packages", "Install Python packages: " + ", ".join(self.plan["requirements"]))
+        self.acquire(self.python, "-m", "pip", "install", "--progress-bar", "on", "--timeout", "30", "--retries", "0", "--index-url", "https://pypi.org/simple",
                  "--only-binary=:all:", "--report", str(self.directory / "resolution.json"), str(wheel), *self.plan["requirements"])
+        self.phase("runtime-checks", "Verify installed Python packages (pip check)")
         self.run(self.python, "-m", "pip", "check")
         frozen = self.run(self.python, "-m", "pip", "freeze", "--all", capture=True)
         if not frozen.strip():
@@ -245,9 +300,10 @@ class Steps:
             dest = self.directory / source['directory']
             if dest.is_symlink() or not dest.resolve().is_relative_to(self.directory):
                 raise CommandFailure('runtime source escapes environment')
+            self.phase('runtime-source', 'Fetch ' + source['repository'] + '@' + source['revision'])
             self.run('git', 'init', str(dest))
-            self.run('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
-                     'fetch', '--depth=1', '--no-tags', 'https://github.com/' + source['repository'] + '.git', source['revision'])
+            self.acquire('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
+                     'fetch', '--progress', '--depth=1', '--no-tags', 'https://github.com/' + source['repository'] + '.git', source['revision'])
             self.run('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
                      'checkout', '--detach', source['revision'])
         verify_sources(self.directory, self.plan['profile'])
@@ -258,9 +314,11 @@ class Steps:
         if resolved.exists():
             args.extend(('-c', str(resolved)))
         wheel = artifact_path(self.paths, self.plan)
-        self.run(self.python, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
+        self.phase("python-packages", "Install Python packages: " + ", ".join(self.plan["requirements"]))
+        self.acquire(self.python, '-m', 'pip', 'install', "--progress-bar", "on", "--timeout", "30", "--retries", "0", '--index-url', 'https://pypi.org/simple',
                  '--only-binary=:all:', '--report', str(self.directory / 'resolution.json'),
                  str(wheel), *self.plan['requirements'], *args)
+        self.phase('runtime-checks', 'Verify installed Python packages (pip check)')
         self.run(self.python, '-m', 'pip', 'check')
         frozen = self.run(self.python, '-m', 'pip', 'freeze', '--all', capture=True)
         if not frozen.strip():
@@ -269,7 +327,9 @@ class Steps:
         atomic_text(self.directory / 'runtime.json', json.dumps(runtime_record(self.plan['profile'], frozen), sort_keys=True))
 
     def verify(self):
+        self.phase("runtime-checks", "Verify installed Python packages (pip check)")
         self.run(self.python, "-m", "pip", "check")
+        self.phase('runtime-checks', 'Verify runtime imports, CUDA and codecs; no model weights')
         if self.plan.get('runtime') is not None:
             self.run(self.python, '-m', 'h3server.backends.pruned', '--diagnose', '--environment-only',
                      '--root', str(self.paths.root), '--profile', self.plan['profile'])
