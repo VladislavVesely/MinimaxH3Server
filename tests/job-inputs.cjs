@@ -15,7 +15,7 @@ const result = context.jobInputs(request);
 assert.equal(result.tag, 'details');
 assert.equal(result.children.find(n=>n.className==='job-prompt').text, prompt);
 const fields = result.children.find(n=>n.tag==='dl').children;
-for (const [label, value] of [['Seed','42'],['Model','h3-convrot-int8'],['SageAttention','On'],['LoRAs','None']]) {
+for (const [label, value] of [['Seed','42'],['Model','h3-convrot-int8'],['SageAttention','On'],['Additional LoRAs','None']]) {
   const i=fields.findIndex(n=>n.tag==='dt'&&n.text===label);assert.ok(i>=0);assert.equal(fields[i+1].text,value);
 }
 assert.match(context.inputValue(2**63), /exact browser integer range/);

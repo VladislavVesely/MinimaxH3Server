@@ -1,5 +1,20 @@
 # Validation and acceptance status
 
+## Turbo LoRA — 2026-09-29
+
+Pinned v4-600 EMA plus its custom node/grid installed through the native UI.
+A real six-step ConvRot INT8 + SageAttention generation completed on RTX 4090:
+512×288, 124 frames, 32 kHz stereo audio; independently decoded with PyAV.
+The 368,075-byte output is job `9aa37ffb869341eeb37ffe30598e55dd`.
+Native checks verified persistent switches, six-step defaults, pinned history
+inputs, mobile layout and zero page errors. Exact install-digest rejection and
+idempotent installed-preset RPC were checked on the target. 27 focused Python
+checks, 6 selected transport checks and the input/timing JS checks passed.
+No full suite, full-resolution Turbo benchmark, mixed-profile inference, merge-mode
+VRAM/quality or comparative speedup claim. See
+[the detailed Turbo record](plans/2026-09-29-turbo-lora.md).
+
+
 ## Remembered connection, SageAttention and duration — 2026-09-29
 
 Direct work on main; no subagents or full test-suite run for this update.

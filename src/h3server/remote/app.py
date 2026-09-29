@@ -37,6 +37,11 @@ class MaintenanceInput(BaseModel):
     cancel_confirmed: StrictBool = False
 
 
+class TurboInstallInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    artifact_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class GenerationInput(BaseModel):
     """Canvas area<=1,032,192 is service policy, not an upstream hard maximum.
 
@@ -57,6 +62,10 @@ class GenerationInput(BaseModel):
     loras: Annotated[list[StrictStr], Field(max_length=8)] = Field(default_factory=list)
     sparse_attention: StrictBool | None = None
     sage_attention: StrictBool = False
+    turbo_lora: StrictBool = False
+    turbo_strength: Annotated[float, Field(strict=True, ge=.8, le=1.2)] = 1.0
+    turbo_low_vram: StrictBool = False
+    turbo_artifact_digest: Annotated[StrictStr, Field(pattern=r'^[a-f0-9]{64}$')] | None = None
 
     @model_validator(mode="after")
     def normalized(self):
@@ -76,8 +85,9 @@ class GenerationInput(BaseModel):
         frames = self.num_frames if self.num_frames is not None else (self.duration * 24 if self.duration is not None else 124)
         from h3server.domain import aligned_frames
         aligned = aligned_frames(frames)
-        steps = 20 if self.profile in PRUNED_PROFILE_NAMES and 'steps' not in self.model_fields_set else self.steps
-        settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile, self.sage_attention)
+        steps = (6 if self.turbo_lora else 20) if self.profile in PRUNED_PROFILE_NAMES and 'steps' not in self.model_fields_set else self.steps
+        settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile, self.sage_attention,
+                                      self.turbo_lora, self.turbo_strength, self.turbo_low_vram, self.turbo_artifact_digest)
         return JobRequest(self.prompt, tuple(self.loras), self.sparse_attention, settings)
 
 
@@ -147,15 +157,19 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
 
     from h3server.remote.features import SageInstaller
     features = SageInstaller(worker)
+    from h3server.remote.turbo import TurboInstaller
+    turbo = TurboInstaller(worker)
 
     @asynccontextmanager
     async def lifespan(app):
         worker.start()
         features.recover()
+        turbo.recover()
         try:
             yield
         finally:
             await asyncio.to_thread(features.close)
+            await asyncio.to_thread(turbo.close)
             await asyncio.to_thread(worker.stop)
 
     app = FastAPI(title="MiniMax H3 remote API", version="1.0.0", lifespan=lifespan,
@@ -195,6 +209,20 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         except ValueError:
             raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
 
+    @app.get('/api/v1/features/turbo')
+    def turbo_status():
+        return turbo.status()
+
+    @app.post('/api/v1/features/turbo', status_code=202)
+    def install_turbo(body: TurboInstallInput):
+        from h3server.backends.turbo import DIGEST
+        if body.artifact_digest != DIGEST:
+            raise HTTPException(409, 'turbo_selection_changed')
+        try:
+            return turbo.start(body.artifact_digest)
+        except ValueError:
+            raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
+
     @app.get('/api/v1/maintenance')
     def maintenance_status():
         return worker.maintenance_status()
@@ -229,7 +257,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                                    for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
-                "optional_features": {"sage_attention": features.status()},
+                "optional_features": {"sage_attention": features.status(), "turbo_lora": turbo.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
                                    "canvas_pixels": 1344 * 768, "steps_min": 2, "steps_max": 1000,

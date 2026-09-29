@@ -56,6 +56,25 @@ as text, never HTML. Missing legacy settings are explicitly marked unavailable.
 Images are not yet a supported input; their durable references must join the job
 request when image support is implemented.
 
+## Optional Turbo LoRA
+
+The UI offers independent remembered install/use flags (`install_turbo`,
+`use_turbo` in preferences). `POST /setup/start` accepts `turbo_lora:true` to acquire
+it after the base environment, model and optional SageAttention setup. Existing
+ready installs use `GET/POST /remote/features/turbo` on the local controller.
+The controller supplies its fixed artifact digest; the authenticated daemon's
+`POST /api/v1/features/turbo` requires `{artifact_digest: <exact pinned digest>}`.
+A mismatched preset is rejected before any mutation. This is not an arbitrary URL,
+plugin or LoRA installation endpoint. Running/queued jobs block installation.
+
+Generation accepts `turbo_lora`, `turbo_strength` (0.8–1.2), `turbo_low_vram`, and
+`turbo_artifact_digest`. The UI defaults to six steps when enabling Turbo and
+bounds it to 4–8. Settings/preset identity persist in each job's inputs; loading
+checks the requested set and all hashes again. Standard generation does not load
+Turbo code. Native ConvRot INT8/mixed are the current supported profile scope;
+only INT8 received the real GPU acceptance check. See
+[Turbo implementation and evidence](plans/2026-09-29-turbo-lora.md).
+
 ## Optional SageAttention
 
 `POST /setup/start` accepts `sage_attention: true` to add the pinned optional

@@ -30,16 +30,18 @@ class Preferences:
         try:
             fd = os.open(self.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         except FileNotFoundError:
-            return {'install_sage': False, 'use_sage': False, 'connection': None}
+            return {'install_sage': False, 'use_sage': False, 'install_turbo': False, 'use_turbo': False, 'connection': None}
         with os.fdopen(fd, 'rb') as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_size > 32768
                     or (os.name == 'posix' and (info.st_uid != os.getuid() or info.st_mode & 0o077))):
                 raise ValueError('unsafe preferences file')
             data = json.loads(stream.read(32769))
-        if type(data) is not dict or set(data) != {'install_sage', 'use_sage', 'connection'}:
+        if type(data) is dict:
+            data = {'install_turbo': False, 'use_turbo': False, **data}
+        if type(data) is not dict or set(data) != {'install_sage', 'use_sage', 'install_turbo', 'use_turbo', 'connection'}:
             raise ValueError('invalid preferences')
-        if any(type(data[k]) is not bool for k in ('install_sage', 'use_sage')):
+        if any(type(data[k]) is not bool for k in ('install_sage', 'use_sage', 'install_turbo', 'use_turbo')):
             raise ValueError('invalid preferences')
         c = data['connection']
         if c is not None:
@@ -70,10 +72,12 @@ class Preferences:
             c = data['connection']
             return {**data, 'connection': ({k: c[k] for k in ('host', 'port', 'username')} | {'password_saved': True}) if c else None}
 
-    def settings(self, install_sage, use_sage):
+    def settings(self, install_sage, use_sage, install_turbo=None, use_turbo=None):
         with self.lock:
             data = self._load()
             data.update(install_sage=install_sage, use_sage=use_sage)
+            if install_turbo is not None: data['install_turbo'] = install_turbo
+            if use_turbo is not None: data['use_turbo'] = use_turbo
             self._save(data)
             return self.public()
 

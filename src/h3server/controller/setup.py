@@ -61,16 +61,19 @@ class SetupCoordinator:
                 self._phase_ended = time.monotonic()
             self._status.update(values)
 
-    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False):
+    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False, turbo_lora=False):
         # Serialized with explicit controller operations, but never with worker IO.
         with self.recovery.operations, self._lock:
             selection = profile_document(profile)
             if sage_attention and not selection['runtime_id'].startswith('comfyui-h3-'):
                 raise ControllerError('optional_install_busy_or_unsupported')
+            from h3server.domain import TURBO_PROFILES
+            if turbo_lora and profile not in TURBO_PROFILES:
+                raise ControllerError('optional_install_busy_or_unsupported')
             if selection['artifact_set_digest'] != artifact_set_digest:
                 raise ControllerError('selection_changed')
             binding = (profile, artifact_set_digest)
-            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention)
+            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention, turbo_lora)
             if request_id in self._requests:
                 prior_binding, prior_status = self._requests[request_id]
                 if request_binding != prior_binding:
@@ -83,6 +86,7 @@ class SetupCoordinator:
             target = self.recovery.setup_target() if retry_digest is None else self.recovery.target()
             self._retry_digest = retry_digest
             self._sage_requested = sage_attention
+            self._turbo_requested = turbo_lora
             if self._observe_connection()['state'] != 'authenticated':
                 raise ControllerError('authentication_required')
             if self.deployment.release is None:
@@ -91,7 +95,7 @@ class SetupCoordinator:
             self._phase_started, self._phase_ended = time.monotonic(), None
             self._status = {'state': 'running', 'phase': 'planning', 'operation_id': uuid.uuid4().hex,
                             'request_id': request_id, 'profile': profile, 'artifact_set_digest': artifact_set_digest,
-                            'sage_attention': sage_attention,
+                            'sage_attention': sage_attention, 'turbo_lora': turbo_lora,
                             'plan_digest': None, 'error': None, 'snapshot': None,
                             'installation_ready': False, 'model_ready': False, 'generation_tested': False}
             self._requests[request_id] = (request_binding, self._status)
@@ -375,6 +379,15 @@ class SetupCoordinator:
                         raise ControllerError('sage_install_failed')
                     self._wait()
                     feature = self._call(lambda: self.sage_request('GET'))
+            if self._turbo_requested:
+                self._publish(phase='turbo_lora')
+                feature = self._call(lambda: self.turbo_request('POST'), mutation=True)
+                while True:
+                    self._publish(turbo_install=feature)
+                    if feature.get('installed') and not feature.get('busy'): break
+                    if feature.get('state') == 'failed': raise ControllerError('turbo_install_failed')
+                    self._wait()
+                    feature = self._call(lambda: self.turbo_request('GET'))
             self._publish(state='completed', phase='completed', model_ready=True)
         except Exception as error:
             safe = {'selection_changed', 'invalid_checkpoint', 'setup_remote_busy', 'setup_replan_limit', 'setup_plan_blocked',
@@ -386,7 +399,7 @@ class SetupCoordinator:
                     'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
                     'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost',
                     'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe',
-                    'sage_install_failed', 'optional_install_busy_or_unsupported'}
+                    'sage_install_failed', 'turbo_install_failed', 'turbo_selection_changed', 'optional_install_busy_or_unsupported'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)

@@ -26,7 +26,7 @@ from h3server.paths import AppPaths
 from h3server.profiles import gpu_family_eligible
 
 CAPABILITIES = Capabilities(
-    lora=Capability(CapabilityStatus.UNSUPPORTED, ('Pruned fixed base T2V composition; no LoRA path',)),
+    lora=Capability(CapabilityStatus.UNSUPPORTED, ('Arbitrary LoRAs unsupported; the pinned optional Turbo preset has a separate validated path',)),
     sparse_attention=Capability(CapabilityStatus.UNSUPPORTED, ('Pinned dense attention only',)))
 
 
@@ -182,6 +182,10 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False):
                 model = rt.gguf.UnetLoaderGGUF().load_unet(files['diffusion_model'])[0]
             else:
                 model = rt.nodes.UNETLoader().load_unet(files['diffusion_model'], 'default')[0]
+            if settings.turbo_lora:
+                from h3server.backends.turbo import apply
+                model = apply(model, settings, rt.turbo)
+                emit(Event('loading', StageStatus.RUNNING, 'Turbo v4-600 EMA LoRA applied; custom dual-schedule-aware sampler enabled.'))
             clip = rt.nodes.CLIPLoader().load_clip(files['text_encoder'], 'minimax', 'default')[0]
             video_vae = rt.nodes.VAELoader().load_vae(files['video_vae'])[0]
             audio_vae = rt.nodes.VAELoader().load_vae(files['audio_vae'])[0]
@@ -191,9 +195,13 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False):
                 first_frame=None, last_frame=None).result
         with run_stage('denoising'):
             model = rt.shift.execute(model, 12.0, 3.0)[0]
-            sampled = rt.nodes.KSampler().sample(model=model, seed=settings.seed, steps=settings.steps,
-                cfg=1.0, sampler_name='res_multistep', scheduler='simple', positive=positive,
-                negative=[], latent_image=latent, denoise=1.0)[0]
+            if settings.turbo_lora:
+                from h3server.backends.turbo import sample
+                sampled = sample(model, positive, latent, settings, rt.turbo)
+            else:
+                sampled = rt.nodes.KSampler().sample(model=model, seed=settings.seed, steps=settings.steps,
+                    cfg=1.0, sampler_name='res_multistep', scheduler='simple', positive=positive,
+                    negative=[], latent_image=latent, denoise=1.0)[0]
             video_latent, audio_latent = rt.separate.execute(sampled).result
         with run_stage('video_decoding'):
             images = rt.nodes.VAEDecode().decode(video_vae, video_latent)[0]
@@ -267,6 +275,9 @@ def execute_document(request_path, *, emit, profile=None):
         emit(Event('loading', StageStatus.RUNNING, 'SageAttention 1.0.6 enabled for supported attention; masked/full-precision layers retain PyTorch attention.'))
     rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile), prepare_weights=True,
                       sage_attention=request.settings.sage_attention)
+    if request.settings.turbo_lora:
+        from h3server.backends.turbo import load_node
+        rt.turbo = load_node(paths, request.settings.turbo_artifact_digest)
     check_gpu(rt, get_artifact_set(profile))
     cancelled = threading.Event()
     old_signal = signal.signal(signal.SIGTERM, lambda *args: cancelled.set())
@@ -302,6 +313,9 @@ def backend(paths, profile):
         if request.settings.sage_attention:
             from h3server.backends.sage_attention import require
             require(paths)
+        if request.settings.turbo_lora:
+            from h3server.backends.turbo import require
+            require(paths, request.settings.turbo_artifact_digest)
     return Backend(command=command, readiness=readiness, capabilities=CAPABILITIES,
         validate_video=validate_media_fd, validate_request=validate, diagnostics=readiness.diagnostics,
         runtime_id=selected.runtime_id, profiles=(profile,))

@@ -176,8 +176,8 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     if request["settings"] is not None:
         values = request['settings']
         if type(values) is dict:
-            values = {'sage_attention': False, **values}
-        settings = _keys(values, {"num_frames", "width", "height", "steps", "seed", "profile", "sage_attention"})
+            values = {'sage_attention': False, 'turbo_lora': False, 'turbo_strength': 1.0, 'turbo_low_vram': False, 'turbo_artifact_digest': None, **values}
+        settings = _keys(values, {"num_frames", "width", "height", "steps", "seed", "profile", "sage_attention", 'turbo_lora', 'turbo_strength', 'turbo_low_vram', 'turbo_artifact_digest'})
         request["settings"] = GenerationSettings(**settings)
     _text(request["prompt"])
     if type(request["loras"]) is not list:

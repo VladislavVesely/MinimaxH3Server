@@ -29,12 +29,20 @@ RESPONSE_HEADERS = ("Content-Length", "Content-Range", "Content-Encoding")
 
 class DownloadTransport:
     """Private response-compatible context; command is a Python test injection seam."""
-    def __init__(self, paths, name, offset, *, timeout, deadline, cancelled, command=None, profile_name=None):
+    def __init__(self, paths, name, offset, *, timeout, deadline, cancelled, command=None, profile_name=None, component=None):
         from h3server.downloads import _selected_manifest
-        manifest = _selected_manifest(profile_name)
+        if component not in (None, 'turbo') or (component and profile_name is not None):
+            raise ValueError('unknown pinned component')
+        if component:
+            from h3server.backends.turbo import REVISION
+            manifest = {'model': {'revision': REVISION}}
+        else:
+            manifest = _selected_manifest(profile_name)
         self.paths, self.deadline, self.cancelled = paths, deadline, cancelled
         self.document = {"name": name, "offset": offset, "timeout": timeout, "deadline": deadline,
                          "revision": manifest["model"]["revision"]}
+        if component:
+            self.document['component'] = component
         if "profile_name" in manifest:
             self.document.update(profile_name=profile_name, artifact_set_digest=manifest["artifact_set_digest"])
         # SSH workers may import us from an explicitly trusted release wheel,
@@ -165,13 +173,23 @@ def _fetch(document, *, opener=None):
     profile_name = document.get("profile_name")
     if "profile_name" in document and type(profile_name) is not str:
         raise ValueError("invalid pinned transport profile")
-    manifest = _selected_manifest(profile_name)
+    component = document.get('component')
+    if 'component' in document and (component != 'turbo' or 'profile_name' in document):
+        raise ValueError('unknown pinned component')
+    if component:
+        from h3server.backends import turbo
+        manifest = {'model': {'revision': turbo.REVISION}}
+        entries = {e['name']: e for e in turbo.FILES}
+    else:
+        manifest = _selected_manifest(profile_name)
+        entries = {entry['rfilename']: entry for entry in _inventory(manifest)}
     keys = {"name", "offset", "timeout", "deadline", "revision"}
+    if component:
+        keys.add('component')
     if "profile_name" in manifest:
         keys.update(("profile_name", "artifact_set_digest"))
         if document.get("artifact_set_digest") != manifest["artifact_set_digest"]:
             raise ValueError("invalid pinned artifact set")
-    entries = {entry["rfilename"]: entry for entry in _inventory(manifest)}
     if (set(document) != keys
         or type(document["name"]) is not str or document["name"] not in entries
         or document["revision"] != manifest["model"]["revision"]
@@ -181,16 +199,22 @@ def _fetch(document, *, opener=None):
         raise ValueError("invalid pinned transport request")
     # HOME is the parent's explicit managed root, not the account's global home.
     # Also guard direct invocation/revocation between parent approval and startup.
-    require_consent(AppPaths(os.environ["HOME"]), profile_name=profile_name)
+    if component:
+        turbo.require_consent(AppPaths(os.environ['HOME']))
+    else:
+        require_consent(AppPaths(os.environ["HOME"]), profile_name=profile_name)
     threading.Thread(target=_watch_parent_and_deadline, args=(document["deadline"],), daemon=True).start()
     headers = {"Accept-Encoding": "identity", "User-Agent": "h3server-pinned-downloader/1"}
     if document["offset"]:
         headers["Range"] = f"bytes={document['offset']}-"
     entry = entries[document["name"]]
-    repository = entry.get("repository", manifest["model"]["repository"])
-    revision = entry.get("revision", manifest["model"]["revision"])
-    source_path = entry.get("source_path", document["name"])
-    url = f"https://huggingface.co/{repository}/resolve/{revision}/{quote(source_path, safe='/')}"
+    if component:
+        url = entry['url']  # Source-owned exact pinned URL; never supplied over IPC.
+    else:
+        repository = entry.get("repository", manifest["model"]["repository"])
+        revision = entry.get("revision", manifest["model"]["revision"])
+        source_path = entry.get("source_path", document["name"])
+        url = f"https://huggingface.co/{repository}/resolve/{revision}/{quote(source_path, safe='/')}"
     opener = opener or build_opener(_Redirects()).open
     with opener(Request(url, headers=headers), timeout=document["timeout"]) as response:
         # urllib itself bounds line/count parsing; tighten the whole header block

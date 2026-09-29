@@ -140,6 +140,9 @@ H3_PROFILES = (
 )
 
 
+TURBO_PROFILES = ('h3-convrot-int8', 'h3-convrot-mixed')
+
+
 @dataclass(frozen=True)
 class GenerationSettings:
     """Normalized H3 settings. Canvas/step caps are service resource policy.
@@ -156,8 +159,23 @@ class GenerationSettings:
     seed: int = 42
     profile: str = H3_PROFILES[0]
     sage_attention: bool = False
+    turbo_lora: bool = False
+    turbo_strength: float = 1.0
+    turbo_low_vram: bool = False
+    turbo_artifact_digest: str | None = None
 
     def __post_init__(self):
+        if type(self.turbo_lora) is not bool or type(self.turbo_low_vram) is not bool:
+            raise ValueError('Turbo selections must be bool')
+        if type(self.turbo_strength) not in (int, float) or not math.isfinite(self.turbo_strength) or not .8 <= self.turbo_strength <= 1.2:
+            raise ValueError('Turbo strength must be between 0.8 and 1.2')
+        if self.turbo_lora and (self.profile not in TURBO_PROFILES or type(self.steps) is not int or not 4 <= self.steps <= 8):
+            raise ValueError('Turbo requires a supported ConvRot profile and 4–8 steps')
+        if self.turbo_lora and self.turbo_artifact_digest is None:
+            from h3server.backends.turbo import DIGEST
+            object.__setattr__(self, 'turbo_artifact_digest', DIGEST)
+        if self.turbo_artifact_digest is not None and (not isinstance(self.turbo_artifact_digest, str) or len(self.turbo_artifact_digest) != 64 or any(c not in '0123456789abcdef' for c in self.turbo_artifact_digest)):
+            raise ValueError('invalid Turbo artifact digest')
         if type(self.sage_attention) is not bool:
             raise ValueError('sage_attention must be bool')
         for name in ("num_frames", "width", "height", "steps", "seed"):

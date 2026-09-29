@@ -37,6 +37,8 @@
   let preferences = { connection: null, install_sage: false, use_sage: false };
   let preferencesSave = Promise.resolve();
   let sageState = { installed: false, busy: false, supported: false };
+  let turboState = { installed: false, busy: false, supported: false };
+  const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
 
   function savedTargetMatches() {
     const saved = preferences.connection;
@@ -46,6 +48,8 @@
     preferences = value;
     $('install-sage').checked = value.install_sage;
     $('use-sage').checked = value.use_sage;
+    $('install-turbo').checked = value.install_turbo;
+    $('use-turbo').checked = value.use_turbo;
     if (value.connection) {
       for (const key of ['host', 'port', 'username']) $(key).value = value.connection[key];
     }
@@ -54,7 +58,8 @@
   }
   function savePreferences() {
     preferencesSave = preferencesSave.catch(() => {}).then(async () => {
-      preferences = await request('/preferences', { install_sage: $('install-sage').checked, use_sage: $('use-sage').checked });
+      preferences = await request('/preferences', { install_sage: $('install-sage').checked, use_sage: $('use-sage').checked,
+        install_turbo: $('install-turbo').checked, use_turbo: $('use-turbo').checked });
     });
     return preferencesSave;
   }
@@ -69,9 +74,30 @@
       ? 'SageAttention 1.0.6 is available. Supported unmasked attention uses Sage; masked/full-precision layers retain PyTorch.'
       : 'To use SageAttention, select its installation option above and click Install. You can leave it off to use normal attention.';
   }
-  async function installSageNow() {
-    showSage(await request('/remote/features/sageattention', {}));
-    await dashboard();
+  function showTurbo(value) {
+    if (value) {
+      const matching = value.artifact_digest === capabilities.turbo_artifact_digest;
+      turboState = { ...value, installed: value.installed && matching, supported: value.supported && matching,
+        error: matching ? value.error : 'Controller and daemon Turbo pins differ; update to matching versions before use.' };
+    }
+    $('turbo-install-state').textContent = turboState.busy
+      ? `Downloading Turbo: ${bytes(turboState.completed || 0)} / ${bytes(turboState.total)}`
+      : turboState.installed ? 'Turbo v4-600 EMA downloaded. Pinned hashes are checked again before use.'
+      : turboState.error || 'Optional Turbo LoRA is not installed.';
+    $('turbo-progress').hidden = !turboState.busy;
+    $('turbo-progress').max = turboState.total || 1;
+    $('turbo-progress').value = turboState.completed || 0;
+  }
+  async function installOptional(name, show) {
+    let feature = await request('/remote/features/' + name, {});
+    show(feature); render();
+    while (feature.busy && pageActive) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      feature = await request('/remote/features/' + name);
+      show(feature); render();
+    }
+    if (pageActive && !feature.installed) throw { code: name === 'turbo' ? 'turbo_install_failed' : 'sage_install_failed' };
+    if (pageActive) await dashboard();
   }
   async function afterAuthentication() {
     preferences = await request('/preferences');
@@ -108,8 +134,10 @@
     setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
     saved_connection_missing: 'No saved connection is available. Enter the SSH details and authenticate once.',
     saved_connection_mismatch: 'Saved credentials belong to a different SSH target. Enter the password for this connection.',
+    turbo_selection_changed: 'The controller and daemon Turbo pins differ. Update to matching versions; no download was started.',
+    turbo_install_failed: 'Optional Turbo download failed. Its status shows the reason; click Install to retry/resume without reinstalling the base model.',
     sage_install_failed: 'Optional SageAttention installation or its GPU check failed. See the component output; model files have not been changed.',
-    optional_install_busy_or_unsupported: 'SageAttention requires an idle pruned-profile environment. Wait for jobs to finish before installing it.',
+    optional_install_busy_or_unsupported: 'The optional component requires a supported, idle environment. Wait for jobs to finish; Turbo currently supports ConvRot INT8/mixed.',
     saved_operation_interrupted: 'The server operation stopped unexpectedly (for example after a reboot). Downloaded partial files are preserved. No new installation or retry was started.',
     saved_operation_failed: 'The saved server operation failed. Its latest measured progress and recorded diagnostics are shown below; downloaded partial files are preserved.',
     matching_release_required: 'This saved setup belongs to an unsupported release. Recovery is blocked; keep its checkpoints and use its matching trusted controller. Nothing was retried.',
@@ -230,6 +258,9 @@
     if (data.setup) showSetup(!data.setup.busy && inspectedSetup ? inspectedSetup : data.setup);
     if (data.state !== 'authenticated') {
       runtimeReady = false;
+      sageState = { installed: false, busy: false, supported: false };
+      turboState = { installed: false, busy: false, supported: false };
+      showSage(); showTurbo();
       resetDashboardPolling();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
@@ -279,17 +310,21 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
+    const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'turbo_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
     $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || (setup.state === 'failed' && !optionalOnlyFailure);
     $('install-sage').disabled = !available || sageState.busy || !!pendingInstall || !!pendingRetry;
+    $('install-turbo').disabled = !available || sageState.busy || turboState.busy || !!pendingInstall || !!pendingRetry;
     const needsSage = $('install-sage').checked && !sageState.installed;
+    const needsTurbo = $('install-turbo').checked && !turboState.installed;
     const selectedInstall = profileCatalog.find(p => p.profile_name === $('install-profile').value);
     const alreadyInstalled = setup.installation_ready === true && setup.model_ready === true
-      && setup.profile === $('install-profile').value && !needsSage;
+      && setup.profile === $('install-profile').value && !needsSage && !needsTurbo;
     const installReason = !ready ? 'Open a valid local controller session to enable Install.'
       : alreadyInstalled ? 'This environment and its model files are already installed and verified. No installation is needed.'
+      : turboState.busy ? 'Optional Turbo download is running; actual bytes are shown below.'
+      : $('install-turbo').checked && selectedInstall && !turboProfiles.includes(selectedInstall.profile_name) ? 'Turbo currently supports ConvRot INT8/mixed only. Uncheck it for this profile.'
       : sageState.busy ? 'Optional SageAttention installation is running; progress is shown below.'
-      : needsSage && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing SageAttention. Running jobs will not be cancelled.'
+      : (needsSage || needsTurbo) && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing optional components. Running jobs will not be cancelled.'
       : $('install-sage').checked && selectedInstall && !selectedInstall.runtime_id.startsWith('comfyui-h3-') ? 'SageAttention is available for pruned profiles only. Uncheck it to install a legacy profile.'
       : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
       : busy ? 'An operation is in progress. Wait for it to finish.'
@@ -307,13 +342,20 @@
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
     $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request'
+      : setup.model_ready && needsSage && needsTurbo ? 'Install optional components'
+      : setup.model_ready && needsTurbo ? 'Install Turbo LoRA'
       : setup.model_ready && needsSage ? 'Install SageAttention' : 'Install';
     $('cancel-setup').hidden = !setup.busy || setup.observing === true;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
     $('setup-refresh').disabled = !usable;
     $('dashboard-refresh').disabled = !available || !authenticated;
     $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
-    $('generate').disabled = sageState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported));
+    $('generate').disabled = sageState.busy || turboState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported))
+      || ($('use-turbo').checked && (!turboState.installed || !turboState.supported));
+    $('steps').min = $('use-turbo').checked ? 4 : 2;
+    $('steps').max = $('use-turbo').checked ? 8 : 1000;
+    $('turbo-strength').disabled = !$('use-turbo').checked;
+    $('turbo-low-vram').disabled = !$('use-turbo').checked;
     for (const button of $('jobs').querySelectorAll('button')) button.disabled = !available || !authenticated;
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
@@ -523,7 +565,8 @@
       catch (error) { showError(error, false); }
     }
   });
-  for (const id of ['install-sage', 'use-sage']) $(id).addEventListener('change', () => {
+  for (const id of ['install-sage', 'use-sage', 'install-turbo', 'use-turbo']) $(id).addEventListener('change', () => {
+    if (id === 'use-turbo' && $('use-turbo').checked && ![4,5,6,7,8].includes(Number($('steps').value))) $('steps').value = 6;
     render(); savePreferences().catch(error => showError(error, false));
   });
   $('duration').addEventListener('input', () => syncDuration('seconds'));
@@ -572,7 +615,7 @@
   }
   const phases = { idle: 'Not started', planning: 'Inspecting and staging', prerequisites: 'Installing prerequisites',
     replanning: 'Rechecking prerequisites', installing: 'Installing environment', rebooting: 'Rebooting',
-    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', sage_attention: 'Installing optional SageAttention', completed: 'Completed' };
+    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', sage_attention: 'Installing optional SageAttention', turbo_lora: 'Downloading optional Turbo LoRA', completed: 'Completed' };
   const substages = { 'runtime-source': 'Acquiring runtime source', 'python-packages': 'Installing Python packages', 'runtime-checks': 'Checking runtime' };
   function seconds(value) {
     return typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))}s` : 'not reported';
@@ -605,6 +648,7 @@
   function showSetup(data) {
     setup = data;
     if (data.sage_install) showSage(data.sage_install);
+    if (data.turbo_install) showTurbo(data.turbo_install);
     if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see current phase and live output.' : 'Idle · no operation running.';
     if (setup.request_id === pendingInstall?.request_id) pendingInstall = null;
     if (setup.request_id === pendingRetry?.request_id) pendingRetry = null;
@@ -692,7 +736,7 @@
   $('retry-setup').addEventListener('click', () => perform('Retrying the eligible failed stage; completed work is preserved…', async () => {
     if (!setup.retry?.eligible) return;
     pendingRetry ||= {profile: setup.profile, artifact_set_digest: setup.artifact_set_digest,
-      sage_attention: $('install-sage').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
     try {
       const result = await request('/setup/retry', pendingRetry);
       inspectedSetup = null;
@@ -742,9 +786,10 @@
       await observeSavedSetup();
       if (setup.busy || (setup.profile === selected.profile_name && setup.model_ready)) {
         pendingInstall = null;
-        if (!setup.busy && $('install-sage').checked && !sageState.installed) {
+        if (!setup.busy) {
           await savePreferences();
-          await installSageNow();
+          if ($('install-sage').checked && !sageState.installed) await installOptional('sageattention', showSage);
+          if (pageActive && $('install-turbo').checked && !turboState.installed) await installOptional('turbo', showTurbo);
         }
         return;
       }
@@ -754,7 +799,7 @@
     // Retain only the public intent ID across an ambiguous response, never secrets.
     await savePreferences();
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest,
-      sage_attention: $('install-sage').checked, request_id: crypto.randomUUID() };
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, request_id: crypto.randomUUID() };
     try {
       const result = await request('/setup/start', pendingInstall);
       inspectedSetup = null;
@@ -827,7 +872,7 @@
     details.append(node('h5', 'Prompt'), node('p', request.prompt ?? 'Not recorded', 'job-prompt'));
     const fields = node('dl');
     const labels = { profile: 'Model', seed: 'Seed', width: 'Width', height: 'Height', num_frames: 'Frames',
-      steps: 'Sampling steps', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'LoRAs' };
+      steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'Additional LoRAs' };
     const add = (key, value) => fields.append(node('dt', labels[key] || key.replaceAll('_', ' ')), node('dd', inputValue(value)));
     for (const [key, value] of Object.entries(request.settings || {})) add(key, value);
     if (!request.settings) details.append(node('p', 'Generation settings were not recorded for this older job.'));
@@ -873,7 +918,7 @@
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
-        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · Seed ${inputValue(settings.seed)} · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}` : '', 'field-hint');
+        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · Seed ${inputValue(settings.seed)} · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}${settings.turbo_lora ? ' · Turbo v4-600 EMA' : ''}` : '', 'field-hint');
         const timing = node('p', undefined, 'job-timing');
         timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
         item.append(heading, caption, jobInputs(job.request), status, timing, meter, detail, output);
@@ -944,6 +989,7 @@
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
     showSage(capability.optional_features?.sage_attention);
+    showTurbo(capability.optional_features?.turbo_lora);
     const profiles = capability.profiles || [];
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
@@ -952,7 +998,7 @@
       for (const name of profiles) {
         const option = node('option', profileLabel(name)); option.value = name; $('generation-profile').append(option);
       }
-      $('steps').value = capability.service_limits.steps_default;
+      $('steps').value = $('use-turbo').checked ? 6 : capability.service_limits.steps_default;
     }
     const diagnostic = capability.diagnostic || {};
     const backgroundCheck = diagnostic.environment_ready === true && diagnostic.model_ready === true
@@ -971,7 +1017,7 @@
       dashboard().catch(error => {
         if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
       });
-    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy ? 2000 : 5000);
+    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy ? 2000 : 5000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
   $('generation-form').addEventListener('submit', event => {
@@ -979,7 +1025,9 @@
     perform('Submitting local generation job…', async () => {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
-        sage_attention: $('use-sage').checked };
+        sage_attention: $('use-sage').checked, turbo_lora: $('use-turbo').checked,
+        turbo_strength: Number($('turbo-strength').value), turbo_low_vram: $('turbo-low-vram').checked,
+        turbo_artifact_digest: $('use-turbo').checked ? capabilities.turbo_artifact_digest : null };
       if (!$('lora-field').hidden && $('lora').value) body.loras = [$('lora').value];
       const accepted = await request('/remote/jobs', body);
       selectedJob = accepted.job_id || accepted.job?.job_id || null;

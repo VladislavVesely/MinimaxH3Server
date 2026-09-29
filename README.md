@@ -65,7 +65,7 @@ executable on PATH. To deploy a separately authenticated wheel:
    Environment ready, daemon healthy, verified weights, model loaded and a real
    playable video are distinct milestones. A successful scan proves none of them.
 
-### Optional SageAttention and duration
+### Optional acceleration and duration
 
 - Separate remembered switches control **install SageAttention** and **use it for
   generation**. Existing pruned environments can add it without reinstalling models.
@@ -74,6 +74,14 @@ executable on PATH. To deploy a separately authenticated wheel:
 - Sage is distinct from sparse attention. It applies to supported attention in the
   pruned ComfyUI backend; masked/full-precision layers retain PyTorch. Upstream kernel
   fallbacks are logged. Legacy Diffusers profiles do not advertise Sage support.
+- **Turbo LoRA v4-600 EMA** has separate remembered install/use switches. The
+  optional pinned download is about 785 MB; it does not replace base models or
+  upgrade Torch/ComfyUI. Currently enabled for native ConvRot INT8/mixed only.
+  Start with **6 steps, strength 1.0** (supported range: 4–8 steps). The optional
+  low-VRAM merge mode can soften quantized output. The publisher warns about
+  four-step fast-motion smear and preview audio quality. This is a dedicated
+  LoRA + pruned-conditioning + custom-sampler integration, not arbitrary LoRA loading.
+  Exact checkpoint/code identities and generation choices are saved in job inputs.
 - Seconds and frames update each other at 24fps. Seconds snap to the nearest valid
   H3 length (`17*n+5`, 124–345 frames); the effective duration is shown explicitly.
 - macOS saved settings: `~/Library/Application Support/H3Server/preferences.json`.

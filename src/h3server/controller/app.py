@@ -28,6 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from h3server.backends import load_profiles
+from h3server.backends.turbo import DIGEST as TURBO_DIGEST
 from h3server.controller.deploy import Deployment, profile_catalog
 from h3server.controller.proxy import RemoteProxy
 from h3server.controller.reconnection import SetupRecovery
@@ -40,7 +41,7 @@ from h3server.profiles import recommend_profiles
 
 API = "/api/v1/controller"
 BODY_LIMIT = 16384
-CAPABILITIES = {"scan": True, "installer": True, "generation": True}
+CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_artifact_digest": TURBO_DIGEST}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
@@ -191,6 +192,8 @@ class AuthenticationRequest(StrictRequest):
 class PreferencesRequest(StrictRequest):
     install_sage: bool
     use_sage: bool
+    install_turbo: bool | None = None
+    use_turbo: bool | None = None
 
 
 class EmptyRequest(StrictRequest):
@@ -199,6 +202,7 @@ class EmptyRequest(StrictRequest):
 
 class SetupStartRequest(StrictRequest):
     sage_attention: bool = False
+    turbo_lora: bool = False
     profile: str = Field(min_length=1, max_length=100)
     artifact_set_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,64}$')
@@ -281,6 +285,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     setup = SetupCoordinator(deployment, recovery, lambda: session.active)
     proxy = RemoteProxy(connection)
     setup.sage_request = lambda method: proxy.request_json(method, '/api/v1/features/sageattention')
+    setup.turbo_request = lambda method: proxy.request_json(method, '/api/v1/features/turbo', body={'artifact_digest': TURBO_DIGEST})
 
     def setup_idle(*, cancel=False):
         if setup.active():
@@ -414,7 +419,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/preferences')
     def save_preferences(body: PreferencesRequest):
-        return preferences.settings(body.install_sage, body.use_sage)
+        return preferences.settings(body.install_sage, body.use_sage, body.install_turbo, body.use_turbo)
 
     @app.post(API + '/connection/forget')
     def forget_connection(body: EmptyRequest):
@@ -478,11 +483,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/setup/start', status_code=202)
     def setup_start(body: SetupStartRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora)
 
     @app.post(API + '/setup/retry', status_code=202)
     def retry_setup(body: SetupRetryRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora)
 
     @app.post(API + '/setup/observe')
     @observed
@@ -542,6 +547,16 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         if action not in {'activate', 'download', 'cancel-download', 'repair', 'resume'}:
             raise ControllerError('unknown_action', 404)
         return deployment.action(action, body.model_dump())
+
+    @app.get(API + '/remote/features/turbo')
+    @observed
+    def turbo_status():
+        return proxy.request('GET', '/api/v1/features/turbo')
+
+    @app.post(API + '/remote/features/turbo')
+    @observed
+    def install_turbo(body: EmptyRequest):
+        return proxy.request('POST', '/api/v1/features/turbo', body={'artifact_digest': TURBO_DIGEST})
 
     @app.get(API + '/remote/features/sageattention')
     @observed
