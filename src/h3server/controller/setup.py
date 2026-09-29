@@ -205,7 +205,9 @@ class SetupCoordinator:
             if operation and operation['state'] in {'running', 'interrupted'}:
                 raise ControllerError('setup_remote_busy')
             if self.deployment.plan['profile'] == self._selection[0]:
-                return self._binding()
+                document = self._binding()
+                if not self._call(lambda: self.deployment.can_rediscover_blocked_plan(prior)):
+                    return document
             if any(s['state'] in {'running', 'waiting_for_reboot'} for s in prior['setups']):
                 raise ControllerError('setup_remote_busy')
         return self._call(lambda: self.deployment.make_plan(self._selection[0], sudo_password_available=True))

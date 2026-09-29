@@ -474,3 +474,81 @@ def test_reboot_is_not_reissued_when_remote_remains_waiting(flow, monkeypatch):
     assert result['error'] == 'setup_timeout'
     assert calls.count('reboot') == calls.count('prepare') == 1
     assert 'activate' not in calls
+
+
+def reauthenticate(client, headers):
+    assert client.post(API + '/disconnect', json={}, headers=headers).status_code == 200
+    assert connect(client, headers).json()['state'] == 'awaiting_authentication'
+    assert client.post(API + '/authenticate', json={'password': 'SSH-SECRET', 'reuse_for_setup': True},
+                       headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize('profile', [PROFILE, 'h3-gguf-q4-k-m'])
+@pytest.mark.parametrize('python_ready', [True, False])
+def test_repaired_never_launched_blocked_plan_gets_fresh_discovery(flow, monkeypatch, profile, python_ready):
+    from h3server.backends.catalog import get_artifact_set
+    app, client, headers, calls, passwords, _, _ = flow
+    inspections = []
+    issue = 'APT dependency simulation failed; repair package metadata/dependencies and rescan.'
+    def inspect(**kw):
+        inspections.append(kw)
+        return facts(python_ready=python_ready, issues=(issue,)) if len(inspections) == 1 else facts()
+    monkeypatch.setattr(app.state.connection, 'inspect_install', inspect)
+    digest = None if profile == PROFILE else get_artifact_set(profile).digest
+    selection = {'profile': profile, 'artifact_set_digest': digest}
+    assert start(client, headers, **selection).status_code == 202
+    first = finished(app)
+    eventually(lambda: not app.state.setup.active())
+    assert first['error'] == 'setup_plan_blocked' and first['blockers'] == [issue]
+    assert not passwords and 'prepare' not in calls
+    assert not app.state.recovery.status()['credential_retained']
+
+    reauthenticate(client, headers)
+    assert app.state.deployment.plan is None  # exercise durable restore, not just memory reuse
+    assert client.post(API + '/scan', json={}, headers=headers).status_code == 200
+    assert len(inspections) == 1  # hardware scan does not inspect install prerequisites
+    assert start(client, headers, request_id='repaired-explicit-install', **selection).status_code == 202
+    second = finished(app)
+    assert second['state'] == 'completed', second
+    assert len(inspections) == 2
+    assert second['plan_digest'] != first['plan_digest']
+    assert second['profile'] == profile and second['artifact_set_digest'] == digest
+    assert calls.count('prepare') == calls.count('activate') == calls.count('download') == 1
+    assert second['model_ready'] and not second['generation_tested']
+
+
+@pytest.mark.parametrize('python_ready,evidence',
+    [(True, evidence) for evidence in ('composite-install.json', 'approval.json', 'status',
+                                      'planned', 'running', 'failed', 'ready', 'operation', 'active_release')]
+    + [(False, evidence) for evidence in ('composite-install.json', 'approval.json', 'status')])
+def test_blocked_plan_with_launch_evidence_is_not_rediscovered(flow, monkeypatch, python_ready, evidence):
+    from h3server.controller.deploy import _write
+    app, client, headers, calls, passwords, state, _ = flow
+    inspections = []
+    def inspect(**kw):
+        inspections.append(kw)
+        return facts(python_ready=python_ready, issues=('Administrator repair required.',)) if len(inspections) == 1 else facts()
+    monkeypatch.setattr(app.state.connection, 'inspect_install', inspect)
+    assert start(client, headers).status_code == 202
+    first = finished(app)
+    eventually(lambda: not app.state.setup.active())
+    assert first['error'] == 'setup_plan_blocked'
+    if evidence in {'composite-install.json', 'approval.json', 'status'}:
+        with app.state.connection.private_sftp() as sftp:
+            # Even incomplete launch/approval records must fail closed.
+            data = b'awaiting_approval\n' if evidence == 'status' else b''
+            _write(sftp, f"{app.state.deployment.root}/bootstrap/{first['plan_digest']}/{evidence}", data)
+    elif evidence == 'operation':
+        state['operation'] = {'operation': 'b' * 32, 'plan_digest': first['plan_digest'],
+                              'action': 'install-update', 'state': 'completed'}
+    elif evidence == 'active_release':
+        state['active_release'] = {'environment': first['plan_digest']}
+    else:
+        state['setup'] = evidence
+    reauthenticate(client, headers)
+    assert start(client, headers, request_id='blocked-with-launch-evidence').status_code == 202
+    second = finished(app)
+    assert second['state'] == 'failed' and second['error'] == 'setup_plan_blocked', second
+    assert second['plan_digest'] == first['plan_digest']
+    assert len(inspections) == 1
+    assert not passwords and 'prepare' not in calls and 'activate' not in calls

@@ -192,6 +192,32 @@ class Deployment:
                 'license_text': license_document(), 'license_sha256': load_manifest()['sources']['license']['sha256'],
                 'selection': profile_document(self.plan['profile'])}
 
+    def can_rediscover_blocked_plan(self, snapshot):
+        """Only a blocked discovery with no durable launch evidence may be replaced."""
+        with self.connection.lock:
+            self._authenticated()
+            if self.plan is None or not self.plan['blockers']:
+                return False
+            digest = canonical_plan_digest(self.plan)
+            if (snapshot.get('operation') or {}).get('plan_digest') == digest:
+                return False
+            if (snapshot.get('active_release') or {}).get('environment') == digest:
+                return False
+            for checkpoint in snapshot['setups']:
+                if checkpoint['plan_digest'] == digest:
+                    # Prerequisite snapshots synthesize awaiting_approval when no
+                    # status file exists. All real checkpoints prevent discovery.
+                    if self.plan['purpose'] != 'prerequisites' or checkpoint['state'] != 'awaiting_approval':
+                        return False
+            with self.connection.private_sftp() as sftp:
+                for name in ('composite-install.json', 'approval.json', 'status'):
+                    try:
+                        sftp.lstat(f'{self.root}/bootstrap/{digest}/{name}')
+                    except FileNotFoundError:
+                        continue
+                    return False  # partial records and symlinks also block retry
+            return True
+
     def install_once(self, approval, *, service_digest, sudo_password=None):
         """Composite-only durable at-most-once launch guard, including lost replies.
 

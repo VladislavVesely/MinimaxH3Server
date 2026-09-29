@@ -132,6 +132,12 @@ an old worker operating on a replacement connection.
   Observe/perform explicit advanced repair; do not repeatedly click Install.
 - `setup_plan_blocked`, `update_prerequisite_maintenance_required`: administrator
   intervention is required; do not cancel jobs or bypass privilege policy.
+  After repairing a blocked target, disconnect/reconnect/authenticate and submit
+  a new explicit Install. A same-selection blocked plan is freshly inspected only
+  when it has no real checkpoint, matching operation/active environment, or
+  bootstrap launch/approval/status record. Even partial launch records prevent
+  rediscovery, so a new digest cannot bypass an ambiguous privileged operation.
+  A hardware scan alone does not refresh installation prerequisites.
 - `setup_install_failed`, `setup_activation_failed`, `setup_operation_failed`,
   `setup_replan_stalled`, `setup_replan_limit`, `setup_reboot_not_observed`,
   `setup_timeout`, `setup_credential_check_failed`, `setup_failed`: stop with safe
