@@ -344,12 +344,23 @@ def snapshot(paths, store, after, digest=None):
             result[name] = read_json(paths, f'state/{name}.json')
         except FileNotFoundError:
             result[name] = None
-    if result['operation'] and result['operation']['state'] == 'running':
+    if result['operation']:
+        result['operation']['lock_released'] = False
         try:
             with operation_lock(paths):
-                result['operation']['state'] = 'interrupted'
-        except BlockingIOError:
-            pass
+                # Completion is written before the detached worker closes its
+                # flock. Re-read under that lock: the pre-lock view may be stale.
+                observed = read_json(paths, 'state/operation.json')
+                if (isinstance(observed, dict)
+                        and observed.get('state') in {'running', 'completed', 'failed', 'cancelled'}
+                        and all(isinstance(observed.get(key), str) for key in ('operation', 'action', 'plan_digest'))):
+                    same = all(observed[key] == result['operation'].get(key)
+                               for key in ('operation', 'action', 'plan_digest'))
+                    result['operation'] = {**observed, 'lock_released': same}
+                    if same and observed['state'] == 'running':
+                        result['operation']['state'] = 'interrupted'
+        except (OSError, ValueError, TypeError):
+            pass  # Missing/malformed records or an unavailable lock prove nothing.
     if digest is not None:
         selected = [s for s in store.list_setups(limit=1000) if s.plan_digest == digest]
         if len(selected) > 1:

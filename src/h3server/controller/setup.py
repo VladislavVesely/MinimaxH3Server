@@ -290,7 +290,17 @@ class SetupCoordinator:
                     else:
                         resumed[digest] = time.monotonic()
                         self._publish(phase='installing')
-                        self._action('retry-stage')
+                        setup_id = checkpoints[0].get('setup_id')
+                        if not setup_id:
+                            raise ControllerError('invalid_checkpoint')
+                        result = self._action('retry-stage')
+                        operation_id = result.get('operation') if result else None
+                        if not isinstance(operation_id, str) or not operation_id:
+                            raise ControllerError('setup_operation_outcome_unknown')
+                        completed = self._await_operation('retry-stage', digest, operation_id,
+                            expected_setup_id=setup_id)
+                        if completed['setups'][0]['state'] != 'ready':
+                            raise ControllerError('setup_install_failed')
                 elif state == 'waiting_for_reboot':
                     self._publish(phase='rebooting')
                     if digest not in rebooted:
@@ -374,16 +384,33 @@ class SetupCoordinator:
                     pass  # may be offline; no cancellation of another operation
             self.recovery.revoke()
 
-    def _await_operation(self, action, digest, expected_operation=None):
+    def _await_operation(self, action, digest, expected_operation=None, *, expected_setup_id=None):
         deadline = time.monotonic() + 30
+        release_deadline = None
         while True:
             snapshot = self._snapshot()
+            if expected_setup_id is not None:
+                checkpoints = snapshot.get('setups', [])
+                if (len(checkpoints) != 1 or checkpoints[0].get('setup_id') != expected_setup_id
+                        or checkpoints[0].get('plan_digest') != digest):
+                    raise ControllerError('invalid_checkpoint')
             operation = snapshot.get('operation')
+            if expected_setup_id is not None and operation and operation.get('operation') != expected_operation:
+                raise ControllerError('setup_remote_busy')
             if operation and operation['action'] == action and operation['plan_digest'] == digest:
                 if expected_operation is not None and operation['operation'] != expected_operation:
                     raise ControllerError('setup_remote_busy')
                 if operation['state'] == 'completed':
-                    return snapshot
+                    if expected_setup_id is None or operation.get('lock_released') is True:
+                        return snapshot
+                    # READY and even the terminal record precede the detached
+                    # worker's lock release. Missing metadata is not proof.
+                    if release_deadline is None:
+                        release_deadline = time.monotonic() + 30
+                    if time.monotonic() > release_deadline:
+                        raise ControllerError('setup_operation_outcome_unknown')
+                    self._wait()
+                    continue
                 if operation['state'] in {'failed', 'cancelled', 'interrupted'}:
                     raise ControllerError('setup_operation_failed')
                 if operation['state'] != 'running':

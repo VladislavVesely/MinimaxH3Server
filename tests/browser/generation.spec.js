@@ -485,6 +485,11 @@ for (const mode of ['pip-failure', 'pip-permanent']) {
       const exported = fs.readFileSync(await (await download).path(), 'utf8');
       expect(exported).toContain(error);
       expect(exported).not.toContain('TEST-ONLY-secret');
+      expect(exported).toContain('example.test/wheel');
+      for (const secret of ['URLLEAK', 'QUERYLEAK', 'MIXEDLEAK', 'FRAGMENTLEAK']) {
+        expect(exported).not.toContain(secret);
+        await expect(page.locator('#setup-output')).not.toContainText(secret);
+      }
       if (mode === 'pip-failure') {
         await controller.control({action:'allow-package-success'});
         await page.locator('#retry-setup').click();
@@ -584,3 +589,37 @@ test.describe('inspect before Install', () => {
     expect((await controllerStatus(page)).setup.plan_digest).toBe(saved.plan_digest);
   });
 });
+
+for (const interrupt of [false, true]) {
+  test.describe(`detached retry handoff (${interrupt ? 'interrupted' : 'completed'})`, () => {
+    test.use({controlledSetup:'pip-failure', prunedProfile:'h3-convrot-int8'});
+    test('READY waits for exact durable completion and lock release before activation', async ({page,controller}) => {
+      await install(page,controller,'h3-convrot-int8');
+      await expect(page.locator('#setup-output')).toContainText('Collecting av==18.1.0');
+      await controller.control({action:'finish-package'});
+      await expect(page.locator('#retry-setup')).toBeEnabled();
+      await controller.control({action:'allow-package-success', gated:true});
+      await page.locator('#retry-setup').click();
+      await expect.poll(async () => (await controller.control({action:'retry-checkpoint'})).ready).toBe(true);
+      await expect(page.locator('#setup-checkpoint')).toContainText('ready');
+      await page.waitForTimeout(800);
+      expect((await controllerStatus(page)).setup.state).toBe('running');
+      expect((await controller.control({action:'calls'})).calls).not.toContain('activate');
+      await controller.control({action:'finish-retry-work', interrupt});
+      if (interrupt) {
+        await expect(page.locator('#setup-status')).toContainText('failed');
+        expect((await controllerStatus(page)).setup.error).toBe('setup_operation_failed');
+        expect((await controller.control({action:'calls'})).calls).not.toContain('activate');
+      } else {
+        await expect.poll(async () => (await controller.control({action:'retry-checkpoint'})).recorded).toBe(true);
+        await page.waitForTimeout(800);
+        expect((await controllerStatus(page)).setup.state).toBe('running');
+        expect((await controller.control({action:'calls'})).calls).not.toContain('activate');
+        await controller.control({action:'release-retry-lock'});
+        await completed(page);
+        expect((await controller.control({action:'calls'})).calls.filter(c=>c==='activate')).toHaveLength(1);
+      }
+      expect((await controller.control({action:'calls'})).calls.filter(c=>c==='retry-stage')).toHaveLength(1);
+    });
+  });
+}

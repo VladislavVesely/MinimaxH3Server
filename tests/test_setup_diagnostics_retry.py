@@ -60,12 +60,16 @@ def test_real_failure_through_selected_routes_reload_and_explicit_retry(flow, tm
             document['setups'][0]['plan_digest'] = kw['digest']
             document['diagnostics']['plan_digest'] = kw['digest']
             document['active_release'] = state['active_release']
-            document['operation'] = state['operation']
+            if state['operation'] is not None:
+                document['operation'] = state['operation']
             return document
         if kw['action'] == 'retry-stage':
             retry_calls.append(kw)
             system.run = good
             recovery.retry_stage(setup.setup_id, setup.plan_digest)
+            from h3server.backends.base import atomic_json
+            atomic_json(paths, 'state/operation.json', {'operation': 'b' * 32,
+                'action': 'retry-stage', 'state': 'completed', 'plan_digest': kw['digest']})
             return {'state': 'accepted', 'operation': 'b' * 32}
         return original_action(**kw)
     monkeypatch.setattr(app.state.connection, 'deployment_action', target)
@@ -201,3 +205,138 @@ def test_retry_boundary_rejects_privileged_or_environment_commands(tmp_path, com
     steps = Steps(paths, plan, canonical_plan_digest(plan), ProcessIO(), io.StringIO())
     with pytest.raises(ValueError, match='only fixed dependency'):
         steps.acquire(*command)
+
+
+@pytest.mark.parametrize('outcome', ['completed', 'interrupted', 'failed', 'ownership-changed', 'lost-acceptance', 'cancelled'])
+def test_async_retry_waits_for_exact_completed_operation_and_lock_release(flow, tmp_path, monkeypatch, outcome):
+    from h3server.backends.base import atomic_json
+    from h3server.controller.target import operation_lock
+    app, client, headers, calls, _, state, _ = flow
+    paths, plan, store, setup, recovery, system, good = failed_target(tmp_path, monkeypatch)
+    original = app.state.connection.deployment_action
+    ready, finish, written, release = (threading.Event() for _ in range(4))
+    errors, workers = [], []
+    operation_id = 'b' * 32
+    def target(**kw):
+        if kw['action'] == 'snapshot':
+            document = snapshot(paths, Store(store.path), 0, setup.plan_digest)
+            document['setups'][0]['plan_digest'] = kw['digest']
+            document['diagnostics']['plan_digest'] = kw['digest']
+            document['active_release'] = state['active_release']
+            if state['operation'] is not None:
+                document['operation'] = state['operation']
+            return document
+        if kw['action'] == 'retry-stage':
+            def worker():
+                try:
+                    with operation_lock(paths):
+                        record = {'operation': operation_id, 'action': 'retry-stage',
+                                  'state': 'running', 'plan_digest': kw['digest']}
+                        atomic_json(paths, 'state/operation.json', record)
+                        system.run = good
+                        recovery.retry_stage(setup.setup_id, setup.plan_digest)
+                        assert store.get_setup(setup.setup_id).state == SetupState.READY
+                        ready.set()
+                        assert finish.wait(5)
+                        if outcome != 'interrupted':
+                            record['state'] = 'failed' if outcome == 'failed' else 'completed'
+                            if outcome == 'ownership-changed':
+                                record['operation'] = 'c' * 32
+                            atomic_json(paths, 'state/operation.json', record)
+                        written.set()
+                        assert release.wait(5)
+                except BaseException as error:
+                    errors.append(error)
+            thread = threading.Thread(target=worker)
+            workers.append(thread); thread.start()
+            assert ready.wait(3)
+            return None if outcome == 'lost-acceptance' else {'state': 'accepted', 'operation': operation_id}
+        if kw['action'] == 'activate':
+            with operation_lock(paths):  # A premature activation really collides.
+                return original(**kw)
+        return original(**kw)
+    monkeypatch.setattr(app.state.connection, 'deployment_action', target)
+    assert start(client, headers).status_code == 202
+    assert finished(app)['error'] == 'setup_install_failed'
+    body = {'profile': PROFILE, 'plan_digest': app.state.deployment.document()['plan_digest'],
+            'request_id': 'async-retry-operation'}
+    try:
+        assert client.post(API + '/setup/retry', json=body, headers=headers).status_code == 202
+        assert ready.wait(3)
+        if outcome == 'lost-acceptance':
+            assert finished(app)['error'] == 'setup_operation_outcome_unknown'
+            assert 'activate' not in calls
+            assert len(workers) == 1  # Never replay an uncertain retry acceptance.
+            return
+        eventually(lambda: app.state.setup.status().get('snapshot', {}).get('setups', [{}])[0].get('state') == 'ready')
+        threading.Event().wait(.05)
+        assert app.state.setup.status()['state'] == 'running'
+        assert 'activate' not in calls
+        if outcome == 'cancelled':
+            assert client.post(API + '/setup/cancel', json={}, headers=headers).status_code == 202
+            assert finished(app)['state'] == 'cancelled'
+            assert 'activate' not in calls
+            return
+        finish.set(); assert written.wait(3)
+        if outcome == 'completed':
+            eventually(lambda: app.state.setup.status()['snapshot']['operation']['state'] == 'completed')
+            threading.Event().wait(.05)
+            assert app.state.setup.status()['state'] == 'running'
+            assert 'activate' not in calls
+        release.set()
+        result = finished(app)
+        if outcome == 'completed':
+            assert result['state'] == 'completed', result
+            assert calls.count('activate') == 1
+        else:
+            assert result['state'] == 'failed', result
+            assert 'activate' not in calls
+            assert result['error'] == ('setup_remote_busy' if outcome == 'ownership-changed' else 'setup_operation_failed')
+        assert 'prepare' not in calls
+    finally:
+        finish.set(); release.set()
+        for worker in workers:
+            worker.join(5)
+        assert not errors
+
+
+@pytest.mark.parametrize('change', ['completed', 'ownership', 'missing', 'malformed'])
+def test_snapshot_rereads_operation_under_lock_before_reporting_release(tmp_path, monkeypatch, change):
+    from contextlib import contextmanager
+    from h3server.backends.base import atomic_json
+    from h3server.controller import target
+    paths, plan, store = prepared(tmp_path)
+    record = {'operation': 'a' * 32, 'action': 'retry-stage', 'state': 'running',
+              'plan_digest': canonical_plan_digest(plan)}
+    atomic_json(paths, 'state/operation.json', record)
+    original = target.operation_lock
+    @contextmanager
+    def raced_lock(paths):
+        with original(paths) as fd:
+            if change == 'missing':
+                (paths.state / 'operation.json').unlink()
+            elif change == 'malformed':
+                (paths.state / 'operation.json').write_text('{')
+            else:
+                atomic_json(paths, 'state/operation.json', {**record, 'state': 'completed',
+                    'operation': 'b' * 32 if change == 'ownership' else record['operation']})
+            yield fd
+    monkeypatch.setattr(target, 'operation_lock', raced_lock)
+    result = snapshot(paths, store, 0)['operation']
+    assert result['state'] != 'interrupted'
+    assert result['lock_released'] is (change == 'completed')
+
+
+def test_retry_wait_without_release_metadata_times_out_closed(flow, monkeypatch):
+    from h3server.controller.ssh import ControllerError
+    app, _, _, _, _, _, _ = flow
+    coordinator = app.state.setup
+    digest, setup_id, operation_id = 'a' * 64, 'b' * 32, 'c' * 32
+    snapshot = {'setups': [{'plan_digest': digest, 'setup_id': setup_id, 'state': 'ready'}],
+        'operation': {'plan_digest': digest, 'operation': operation_id, 'state': 'completed', 'action': 'retry-stage'}}
+    clock = [0]
+    monkeypatch.setattr('h3server.controller.setup.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr(coordinator, '_snapshot', lambda: snapshot)
+    monkeypatch.setattr(coordinator, '_wait', lambda: clock.__setitem__(0, clock[0] + 31))
+    with pytest.raises(ControllerError, match='setup_operation_outcome_unknown'):
+        coordinator._await_operation('retry-stage', digest, operation_id, expected_setup_id=setup_id)

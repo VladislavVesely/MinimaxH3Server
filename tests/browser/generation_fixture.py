@@ -70,6 +70,8 @@ class PackageIO(SystemIO):
             script = ("from pathlib import Path; import time; "
                       "print('Collecting av==18.1.0', flush=True); "
                       "print('Authorization: Bearer TEST-ONLY-secret', flush=True)\n"
+                      "print('HTTPS://alice:URLLEAK@example.test/wheel?sig=QUERYLEAK', flush=True)\n"
+                      "print('hTtPs://alice:MIXEDLEAK@example.test/wheel#FRAGMENTLEAK', flush=True)\n"
                       "while not Path(" + repr(str(self.paths.root/'fixture-package-finish')) + ").exists(): time.sleep(.02)\n"
                       "print(" + repr(message) + ", flush=True)\n"
                       "raise SystemExit(" + str(0 if self.success else 1) + ")")
@@ -215,12 +217,7 @@ class FixtureSSH(SSHConnection):
         from h3server.controller.target import snapshot
         paths = AppPaths(root)
         if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'], digest)
-        if action == 'retry-stage':
-            self.calls.append(action)
-            with patch('h3server.backends.comfy_runtime.verify_sources'):
-                self.package_recovery.retry_stage(self.package_setup.setup_id, digest)
-            return {'state': 'accepted', 'operation': 'b' * 32}
-        if action in {'activate', 'download', 'cancel-download'}:
+        if action in {'retry-stage', 'activate', 'download', 'cancel-download'}:
             self.calls.append(action)
             if action == 'activate': assert data['policy'] == 'reject' and not data['cancel_confirmed']
             command = [sys.executable, str(Path(__file__).with_name('target_fixture.py')),
@@ -373,7 +370,20 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                 elif command['action'] == 'invalidate-service-receipt':
                     (paths.config/'systemd/h3-bootstrap.service').write_text('TEST ONLY changed service unit')
                 elif command['action'] == 'finish-package': (paths.root/'fixture-package-finish').touch()
-                elif command['action'] == 'allow-package-success': connection.package_io.success = True
+                elif command['action'] == 'allow-package-success':
+                    connection.package_io.success = True
+                    (paths.root/'fixture-package-success').touch()
+                    if command.get('gated'):
+                        (paths.root/'fixture-retry-gated').touch()
+                elif command['action'] == 'retry-checkpoint':
+                    print(json.dumps({'ready': (paths.root/'fixture-retry-ready').exists(),
+                        'recorded': (paths.root/'fixture-retry-recorded').exists()}), flush=True)
+                    continue
+                elif command['action'] == 'finish-retry-work':
+                    if command.get('interrupt'):
+                        (paths.root/'fixture-retry-interrupt').touch()
+                    (paths.root/'fixture-retry-finish').touch()
+                elif command['action'] == 'release-retry-lock': (paths.root/'fixture-retry-release').touch()
                 elif command['action'] == 'finish-download': (paths.root/'fixture-download-finish').touch()
                 elif command['action'] == 'start-setup': connection.start_setup.set()
                 elif command['action'] == 'finish-setup': connection.finish_setup.set()

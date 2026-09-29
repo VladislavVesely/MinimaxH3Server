@@ -126,7 +126,24 @@ already authenticated SSH connection, **not a fresh sudo password or retained
 credential**. A lost connection requires reauthentication; mutation replies are
 never blindly replayed. A retry is refused for planned, active, ready, privileged,
 registration, or inconsistent checkpoints. Completed APT/linger/service setup and
-environment creation are not repeated. Caches and original environment digest
+environment creation are not repeated.
+
+The coordinator binds a launched retry to its accepted operation ID, original
+plan digest and setup ID. READY alone is not completion: it waits for that exact
+operation's `completed` record and confirmed lock release before re-observing
+readiness and attempting activation. Target snapshots add `operation.lock_released`:
+true only when a nonblocking deployment-lock probe succeeds and the same operation
+identity is reread under that lock. A stale running record is marked interrupted
+only after this reread. Missing/malformed records, changed ownership or unavailable
+locks do not prove release. This observation is not a lease: activation still
+acquires its own authoritative lock. Missing lock metadata is handled fail-closed
+for retry handoff, while existing non-retry observation remains compatible.
+
+Running retry observation remains within the overall workflow deadline and is
+cancellable. A completed retry gets at most 30 seconds to confirm lock release;
+missing/uncertain acceptance or release fails with `setup_operation_outcome_unknown`,
+never a replay of retry or activation. Failed/interrupted retry completion stops
+with `setup_operation_failed`; changed operation ownership stops with `setup_remote_busy`. Caches and original environment digest
 remain in place. Activation/model acquisition only follow successful verification.
 
 Automatic retries occur only inside fixed pip-install/git-fetch acquisition:
