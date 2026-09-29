@@ -554,7 +554,14 @@ def test_systemd_scalar_paths_are_not_exec_arguments(tmp_path, name):
     assert values['WorkingDirectory'] == str(paths.root).replace('%', '%%')
     readiness = paths.environments / canonical_plan_digest(p) / 'readiness.json'
     assert values['ConditionPathExists'] == str(readiness).replace('%', '%%')
-    assert values['ExecStart'].startswith('"')
+    python = paths.environments / canonical_plan_digest(p) / 'bin/python'
+    escaped_python, escaped_root = (
+        str(path).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$')
+        for path in (python, paths.root)
+    )
+    assert values['ExecStart'] == (
+        f'/usr/bin/env "{escaped_python}" -m h3server.remote --root "{escaped_root}"'
+    )
 
 
 def test_native_systemd_parser_without_activation(tmp_path):

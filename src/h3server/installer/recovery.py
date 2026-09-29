@@ -61,6 +61,8 @@ Restart=no
 [Install]
 WantedBy=default.target
 '''
+# systemd restricts executable paths; env keeps the absolute Python path an
+# escaped argument (including quotes and dollars), without a shell or PATH lookup.
 DAEMON_UNIT = '''[Unit]
 Description=H3 loopback user daemon
 After=network-online.target h3-bootstrap.service
@@ -69,7 +71,7 @@ ConditionPathExists=@READINESS@
 
 [Service]
 Type=simple
-ExecStart=@PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
+ExecStart=/usr/bin/env @PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
 Environment=@ENVIRONMENT@
 WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure
