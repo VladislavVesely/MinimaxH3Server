@@ -86,6 +86,43 @@ time.sleep(60)
         worker.stop()
 
 
+@pytest.mark.parametrize("current_support", ["unsupported", "unknown", "supported"])
+def test_restart_revalidates_queued_lora_capability_before_launch(tmp_path, monkeypatch, current_support):
+    from dataclasses import replace
+    import subprocess
+    from h3server.domain import Capability, CapabilityStatus
+    from h3server.store import Store
+
+    fixture = fixture_backend(tmp_path)
+    supported = Capabilities(lora=Capability(CapabilityStatus.SUPPORTED, ("fixture LoRA support",)))
+    store, original, _ = service(tmp_path, backend=replace(fixture, capabilities=supported), min_free_bytes=0)
+    job = original.submit(JobRequest("fixture", loras=("fixture-adapter",), settings=GenerationSettings()))
+    assert store.get_job(job.job_id).status == JobStatus.QUEUED
+    original.stop()
+
+    reopened = Store(store.path)
+    current = Capabilities(lora=Capability(CapabilityStatus(current_support), ("private-adapter-diagnostic",)))
+    restarted = Worker(reopened, original.paths, backend=replace(fixture, capabilities=current), min_free_bytes=0)
+    launches = []
+    popen = subprocess.Popen
+    def record_launch(*args, **kwargs):
+        launches.append(args[0])
+        return popen(*args, **kwargs)
+    monkeypatch.setattr(subprocess, "Popen", record_launch)
+    restarted.start()
+    try:
+        expected = JobStatus.COMPLETED if current_support == "supported" else JobStatus.FAILED
+        assert wait_status(reopened, job.job_id, {JobStatus.COMPLETED, JobStatus.FAILED}).status == expected
+    finally:
+        restarted.stop()
+    assert Store(store.path).get_job(job.job_id).status == expected
+    assert len(launches) == (1 if current_support == "supported" else 0)
+    if current_support != "supported":
+        assert not restarted.paths.job_dir(job.job_id).exists()
+        assert reopened.get_job_output(job.job_id) is None
+    assert "private-adapter-diagnostic" not in str(reopened.read_events())
+
+
 def test_startup_reconciles_and_exclusive_owner(tmp_path):
     store, worker, _ = service(tmp_path)
     job = store.accept_job(JobRequest("test"), capabilities=Capabilities())

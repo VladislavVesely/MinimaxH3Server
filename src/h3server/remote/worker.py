@@ -329,6 +329,8 @@ class Worker:
             with self._lock:
                 if self.store.get_job(job.job_id).status is not JobStatus.RUNNING:
                     return
+                # A queued request may outlive the adapter that accepted it.
+                job.request.validate_capabilities(self.backend.capabilities)
                 self._disk_check()
                 request_path = self._prepare(job)
                 process = subprocess.Popen(
