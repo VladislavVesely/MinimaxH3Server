@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import socket
 from urllib.parse import urlsplit
+from typing import Literal
 
 from fastapi import Body, FastAPI, Request, Query
 from fastapi.exceptions import RequestValidationError
@@ -29,6 +30,7 @@ from starlette.exceptions import HTTPException
 
 from h3server.backends import load_profiles
 from h3server.backends.turbo import DIGEST as TURBO_DIGEST
+from h3server.backends.sparse import DIGEST as SPARSE_DIGEST
 from h3server.controller.deploy import Deployment, profile_catalog
 from h3server.controller.proxy import RemoteProxy
 from h3server.controller.reconnection import SetupRecovery
@@ -41,7 +43,7 @@ from h3server.profiles import recommend_profiles
 
 API = "/api/v1/controller"
 BODY_LIMIT = 16384
-CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_artifact_digest": TURBO_DIGEST}
+CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
@@ -194,6 +196,8 @@ class PreferencesRequest(StrictRequest):
     use_sage: bool
     install_turbo: bool | None = None
     use_turbo: bool | None = None
+    install_sparse: bool | None = None
+    sparse_preset: Literal['off', 'quality', 'balanced', 'draft'] | None = None
 
 
 class EmptyRequest(StrictRequest):
@@ -203,6 +207,7 @@ class EmptyRequest(StrictRequest):
 class SetupStartRequest(StrictRequest):
     sage_attention: bool = False
     turbo_lora: bool = False
+    sparse_attention: bool = False
     profile: str = Field(min_length=1, max_length=100)
     artifact_set_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,64}$')
@@ -286,6 +291,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     proxy = RemoteProxy(connection)
     setup.sage_request = lambda method: proxy.request_json(method, '/api/v1/features/sageattention')
     setup.turbo_request = lambda method: proxy.request_json(method, '/api/v1/features/turbo', body={'artifact_digest': TURBO_DIGEST})
+    setup.sparse_request = lambda method: proxy.request_json(method, '/api/v1/features/sparse', body={'artifact_digest': SPARSE_DIGEST})
 
     def setup_idle(*, cancel=False):
         if setup.active():
@@ -419,7 +425,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/preferences')
     def save_preferences(body: PreferencesRequest):
-        return preferences.settings(body.install_sage, body.use_sage, body.install_turbo, body.use_turbo)
+        return preferences.settings(body.install_sage, body.use_sage, body.install_turbo, body.use_turbo, body.install_sparse, body.sparse_preset)
 
     @app.post(API + '/connection/forget')
     def forget_connection(body: EmptyRequest):
@@ -483,11 +489,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/setup/start', status_code=202)
     def setup_start(body: SetupStartRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention)
 
     @app.post(API + '/setup/retry', status_code=202)
     def retry_setup(body: SetupRetryRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention)
 
     @app.post(API + '/setup/observe')
     @observed
@@ -547,6 +553,16 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         if action not in {'activate', 'download', 'cancel-download', 'repair', 'resume'}:
             raise ControllerError('unknown_action', 404)
         return deployment.action(action, body.model_dump())
+
+    @app.get(API + '/remote/features/sparse')
+    @observed
+    def sparse_status():
+        return proxy.request('GET', '/api/v1/features/sparse')
+
+    @app.post(API + '/remote/features/sparse')
+    @observed
+    def install_sparse(body: EmptyRequest):
+        return proxy.request('POST', '/api/v1/features/sparse', body={'artifact_digest': SPARSE_DIGEST})
 
     @app.get(API + '/remote/features/turbo')
     @observed

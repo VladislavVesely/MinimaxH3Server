@@ -31,11 +31,11 @@ class DownloadTransport:
     """Private response-compatible context; command is a Python test injection seam."""
     def __init__(self, paths, name, offset, *, timeout, deadline, cancelled, command=None, profile_name=None, component=None):
         from h3server.downloads import _selected_manifest
-        if component not in (None, 'turbo') or (component and profile_name is not None):
+        if component not in (None, 'turbo', 'sparse') or (component and profile_name is not None):
             raise ValueError('unknown pinned component')
         if component:
-            from h3server.backends.turbo import REVISION
-            manifest = {'model': {'revision': REVISION}}
+            from h3server.backends import turbo, sparse
+            manifest = {'model': {'revision': (turbo if component == 'turbo' else sparse).REVISION}}
         else:
             manifest = _selected_manifest(profile_name)
         self.paths, self.deadline, self.cancelled = paths, deadline, cancelled
@@ -174,12 +174,13 @@ def _fetch(document, *, opener=None):
     if "profile_name" in document and type(profile_name) is not str:
         raise ValueError("invalid pinned transport profile")
     component = document.get('component')
-    if 'component' in document and (component != 'turbo' or 'profile_name' in document):
+    if 'component' in document and (component not in ('turbo', 'sparse') or 'profile_name' in document):
         raise ValueError('unknown pinned component')
     if component:
-        from h3server.backends import turbo
-        manifest = {'model': {'revision': turbo.REVISION}}
-        entries = {e['name']: e for e in turbo.FILES}
+        from h3server.backends import turbo, sparse
+        addon = turbo if component == 'turbo' else sparse
+        manifest = {'model': {'revision': addon.REVISION}}
+        entries = {e['name']: e for e in addon.FILES}
     else:
         manifest = _selected_manifest(profile_name)
         entries = {entry['rfilename']: entry for entry in _inventory(manifest)}
@@ -200,7 +201,7 @@ def _fetch(document, *, opener=None):
     # HOME is the parent's explicit managed root, not the account's global home.
     # Also guard direct invocation/revocation between parent approval and startup.
     if component:
-        turbo.require_consent(AppPaths(os.environ['HOME']))
+        addon.require_consent(AppPaths(os.environ['HOME']))
     else:
         require_consent(AppPaths(os.environ["HOME"]), profile_name=profile_name)
     threading.Thread(target=_watch_parent_and_deadline, args=(document["deadline"],), daemon=True).start()

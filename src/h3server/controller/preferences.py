@@ -30,7 +30,7 @@ class Preferences:
         try:
             fd = os.open(self.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         except FileNotFoundError:
-            return {'install_sage': False, 'use_sage': False, 'install_turbo': False, 'use_turbo': False, 'connection': None}
+            return {'install_sage': False, 'use_sage': False, 'install_turbo': False, 'use_turbo': False, 'install_sparse': False, 'sparse_preset': 'off', 'connection': None}
         with os.fdopen(fd, 'rb') as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_size > 32768
@@ -38,11 +38,13 @@ class Preferences:
                 raise ValueError('unsafe preferences file')
             data = json.loads(stream.read(32769))
         if type(data) is dict:
-            data = {'install_turbo': False, 'use_turbo': False, **data}
-        if type(data) is not dict or set(data) != {'install_sage', 'use_sage', 'install_turbo', 'use_turbo', 'connection'}:
+            data = {'install_turbo': False, 'use_turbo': False, 'install_sparse': False, 'sparse_preset': 'off', **data}
+        if type(data) is not dict or set(data) != {'install_sage', 'use_sage', 'install_turbo', 'use_turbo', 'install_sparse', 'sparse_preset', 'connection'}:
             raise ValueError('invalid preferences')
-        if any(type(data[k]) is not bool for k in ('install_sage', 'use_sage', 'install_turbo', 'use_turbo')):
+        if any(type(data[k]) is not bool for k in ('install_sage', 'use_sage', 'install_turbo', 'use_turbo', 'install_sparse')):
             raise ValueError('invalid preferences')
+        if data['sparse_preset'] not in ('off', 'quality', 'balanced', 'draft'):
+            raise ValueError('invalid sparse preference')
         c = data['connection']
         if c is not None:
             if (type(c) is not dict or set(c) != {'host', 'port', 'username', 'password'}
@@ -72,12 +74,16 @@ class Preferences:
             c = data['connection']
             return {**data, 'connection': ({k: c[k] for k in ('host', 'port', 'username')} | {'password_saved': True}) if c else None}
 
-    def settings(self, install_sage, use_sage, install_turbo=None, use_turbo=None):
+    def settings(self, install_sage, use_sage, install_turbo=None, use_turbo=None, install_sparse=None, sparse_preset=None):
         with self.lock:
             data = self._load()
             data.update(install_sage=install_sage, use_sage=use_sage)
             if install_turbo is not None: data['install_turbo'] = install_turbo
             if use_turbo is not None: data['use_turbo'] = use_turbo
+            if install_sparse is not None: data['install_sparse'] = install_sparse
+            if sparse_preset is not None:
+                if sparse_preset not in ('off', 'quality', 'balanced', 'draft'): raise ValueError('invalid sparse preference')
+                data['sparse_preset'] = sparse_preset
             self._save(data)
             return self.public()
 

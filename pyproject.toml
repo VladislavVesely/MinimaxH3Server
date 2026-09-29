@@ -29,7 +29,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "h3server.installer" = ["compat/*.whl"]
-"h3server.backends" = ["manifest.json", "LICENSE.h3.txt"]
+"h3server.backends" = ["manifest.json", "LICENSE.h3.txt", "sparse-inventory.json"]
 "h3server" = ["web/*.html", "web/*.js", "web/*.css"]
 
 [tool.pytest.ini_options]

@@ -163,8 +163,20 @@ class GenerationSettings:
     turbo_strength: float = 1.0
     turbo_low_vram: bool = False
     turbo_artifact_digest: str | None = None
+    sparse_preset: str = 'off'
+    sparse_artifact_digest: str | None = None
 
     def __post_init__(self):
+        if self.sparse_preset not in ('off', 'quality', 'balanced', 'draft'):
+            raise ValueError('Unknown sparse attention preset')
+        if self.sparse_preset != 'off':
+            if self.profile != 'h3-convrot-int8' or self.turbo_lora:
+                raise ValueError('Sparse attention requires ConvRot INT8 with Turbo disabled')
+            if self.sparse_artifact_digest is None:
+                from h3server.backends.sparse import DIGEST
+                object.__setattr__(self, 'sparse_artifact_digest', DIGEST)
+        if self.sparse_artifact_digest is not None and (not isinstance(self.sparse_artifact_digest, str) or len(self.sparse_artifact_digest) != 64 or any(c not in '0123456789abcdef' for c in self.sparse_artifact_digest)):
+            raise ValueError('Invalid sparse artifact digest')
         if type(self.turbo_lora) is not bool or type(self.turbo_low_vram) is not bool:
             raise ValueError('Turbo selections must be bool')
         if type(self.turbo_strength) not in (int, float) or not math.isfinite(self.turbo_strength) or not .8 <= self.turbo_strength <= 1.2:

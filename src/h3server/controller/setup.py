@@ -61,7 +61,7 @@ class SetupCoordinator:
                 self._phase_ended = time.monotonic()
             self._status.update(values)
 
-    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False, turbo_lora=False):
+    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False, turbo_lora=False, sparse_attention=False):
         # Serialized with explicit controller operations, but never with worker IO.
         with self.recovery.operations, self._lock:
             selection = profile_document(profile)
@@ -73,7 +73,9 @@ class SetupCoordinator:
             if selection['artifact_set_digest'] != artifact_set_digest:
                 raise ControllerError('selection_changed')
             binding = (profile, artifact_set_digest)
-            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention, turbo_lora)
+            if sparse_attention and profile != 'h3-convrot-int8':
+                raise ControllerError('optional_install_busy_or_unsupported')
+            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention, turbo_lora, sparse_attention)
             if request_id in self._requests:
                 prior_binding, prior_status = self._requests[request_id]
                 if request_binding != prior_binding:
@@ -87,6 +89,7 @@ class SetupCoordinator:
             self._retry_digest = retry_digest
             self._sage_requested = sage_attention
             self._turbo_requested = turbo_lora
+            self._sparse_requested = sparse_attention
             if self._observe_connection()['state'] != 'authenticated':
                 raise ControllerError('authentication_required')
             if self.deployment.release is None:
@@ -95,7 +98,7 @@ class SetupCoordinator:
             self._phase_started, self._phase_ended = time.monotonic(), None
             self._status = {'state': 'running', 'phase': 'planning', 'operation_id': uuid.uuid4().hex,
                             'request_id': request_id, 'profile': profile, 'artifact_set_digest': artifact_set_digest,
-                            'sage_attention': sage_attention, 'turbo_lora': turbo_lora,
+                            'sage_attention': sage_attention, 'turbo_lora': turbo_lora, 'sparse_attention': sparse_attention,
                             'plan_digest': None, 'error': None, 'snapshot': None,
                             'installation_ready': False, 'model_ready': False, 'generation_tested': False}
             self._requests[request_id] = (request_binding, self._status)
@@ -379,6 +382,15 @@ class SetupCoordinator:
                         raise ControllerError('sage_install_failed')
                     self._wait()
                     feature = self._call(lambda: self.sage_request('GET'))
+            if self._sparse_requested:
+                self._publish(phase='sparse_attention')
+                feature = self._call(lambda: self.sparse_request('POST'), mutation=True)
+                while True:
+                    self._publish(sparse_install=feature)
+                    if feature.get('installed') and not feature.get('busy'): break
+                    if feature.get('state') == 'failed': raise ControllerError('sparse_install_failed')
+                    self._wait()
+                    feature = self._call(lambda: self.sparse_request('GET'))
             if self._turbo_requested:
                 self._publish(phase='turbo_lora')
                 feature = self._call(lambda: self.turbo_request('POST'), mutation=True)
@@ -399,7 +411,7 @@ class SetupCoordinator:
                     'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
                     'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost',
                     'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe',
-                    'sage_install_failed', 'turbo_install_failed', 'turbo_selection_changed', 'optional_install_busy_or_unsupported'}
+                    'sage_install_failed', 'turbo_install_failed', 'turbo_selection_changed', 'sparse_install_failed', 'sparse_selection_changed', 'optional_install_busy_or_unsupported'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)

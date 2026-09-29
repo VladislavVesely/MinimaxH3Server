@@ -46,10 +46,10 @@ class ArtifactMismatch(ValueError):
 
 def _verify(stream, entry):
     if os.fstat(stream.fileno()).st_size != entry['size']:
-        raise ArtifactMismatch('Turbo artifact size mismatch')
+        raise ArtifactMismatch('Pinned component artifact size mismatch')
     stream.seek(0)
     if hashlib.file_digest(stream, 'sha256').hexdigest() != entry['sha256']:
-        raise ArtifactMismatch('Turbo artifact checksum mismatch')
+        raise ArtifactMismatch('Pinned component artifact checksum mismatch')
 
 
 def installed(paths, *, verify=False):
@@ -75,51 +75,52 @@ def require(paths, digest=None):
         raise ValueError('Turbo LoRA requested but its pinned files are missing or invalid; install the optional component')
 
 
-def download(paths, *, progress, cancelled=lambda: False):
+def download(paths, *, progress, cancelled=lambda: False, _component=None):
     from h3server._download_transport import DownloadTransport, CHUNK
-    require_consent(paths)
+    component = _component or sys.modules[__name__]
+    component.require_consent(paths)
     completed = 0
-    for entry in FILES:
-        require_consent(paths)
+    for entry in component.FILES:
+        component.require_consent(paths)
         name = entry['name']
-        target = DIRECTORY + '/' + name
-        partial = 'tmp/turbo-' + DIGEST + '/' + name + '.part'
+        target = component.DIRECTORY + '/' + name
+        partial = 'tmp/' + getattr(component, 'COMPONENT', 'turbo') + '-' + component.DIGEST + '/' + name + '.part'
         try:
             with regular_file(paths, target) as stream: _verify(stream, entry)
         except (FileNotFoundError, ArtifactMismatch):
             pass
         else:
-            completed += entry['size']; progress(completed, TOTAL); continue
+            completed += entry['size']; progress(completed, component.TOTAL); continue
         with regular_file(paths, partial, flags=os.O_CREAT | os.O_RDWR, mode='r+b', create_parents=True) as stream:
             offset = os.fstat(stream.fileno()).st_size
             if offset > entry['size']: stream.truncate(0); offset = 0
             if offset < entry['size']:
                 with DownloadTransport(paths, name, offset, timeout=30, deadline=time.monotonic()+6*3600,
-                                       cancelled=cancelled, component='turbo') as response:
+                                       cancelled=cancelled, component=getattr(component, 'COMPONENT', 'turbo')) as response:
                     if response.status == 200:
                         stream.seek(0); stream.truncate(0); offset = 0
                     elif response.status != 206 or not offset or response.headers.get('Content-Range') != f"bytes {offset}-{entry['size']-1}/{entry['size']}":
-                        raise ValueError('Unexpected Turbo resume response')
+                        raise ValueError('Unexpected optional component resume response')
                     remaining = entry['size'] - offset
                     if response.headers.get('Content-Length', str(remaining)) != str(remaining) or response.headers.get('Content-Encoding', 'identity') != 'identity':
-                        raise ValueError('Unexpected Turbo transfer length/encoding')
-                    stream.seek(offset); progress(completed + offset, TOTAL)
+                        raise ValueError('Unexpected optional component transfer length/encoding')
+                    stream.seek(offset); progress(completed + offset, component.TOTAL)
                     while True:
                         chunk = response.read(min(CHUNK, remaining + 1))
                         if not chunk: break
-                        if len(chunk) > remaining: raise ValueError('Turbo transfer exceeds pinned size')
+                        if len(chunk) > remaining: raise ValueError('Optional component transfer exceeds pinned size')
                         stream.write(chunk); remaining -= len(chunk)
-                        progress(completed + entry['size'] - remaining, TOTAL)
-                    if remaining: raise ValueError('Truncated Turbo download; retry to resume')
+                        progress(completed + entry['size'] - remaining, component.TOTAL)
+                    if remaining: raise ValueError('Truncated optional component download; retry to resume')
             stream.flush(); os.fsync(stream.fileno())
             try: _verify(stream, entry)
             except ValueError:
                 stream.truncate(0)
                 raise
-        with directory(paths, str(Path(partial).parent)) as src, directory(paths, DIRECTORY, create=True) as dest:
+        with directory(paths, str(Path(partial).parent)) as src, directory(paths, component.DIRECTORY, create=True) as dest:
             os.replace(Path(partial).name, name, src_dir_fd=src, dst_dir_fd=dest); os.fsync(dest)
-        completed += entry['size']; progress(completed, TOTAL)
-    atomic_json(paths, RECEIPT, BINDING)
+        completed += entry['size']; progress(completed, component.TOTAL)
+    atomic_json(paths, component.RECEIPT, component.BINDING)
 
 
 def load_node(paths, digest=None):

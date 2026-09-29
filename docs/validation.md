@@ -1,5 +1,21 @@
 # Validation and acceptance status
 
+## Optional sparse attention — 2026-09-29
+
+Pinned existing-weight sparse attention installed and numerically GPU-probed on
+RTX 4090 without dependency upgrades. All three presets completed real 512×288,
+124-frame, 20-step generations with SageAttention enabled. Each recorded 2,000
+native sparse kernel calls and produced an independently decoded MP4. A separate
+Turbo-combination probe exposed bypassed QKV LoRA adapters, so that combination is
+blocked in both UI and API rather than silently treated as compatible.
+
+Native checks covered preference restoration, no automatic work, unchanged Sage
+choices/steps, saved inputs and mobile layout. 39 focused component/preferences/
+timing tests, 6 selected transport tests and 3 selected setup tests passed, along
+with JS checks. No full suite, full-resolution benchmark, broad quality comparison,
+other-profile or other-hardware acceptance is claimed. Details and job IDs:
+[sparse implementation record](plans/2026-09-29-sparse-attention.md).
+
 ## Turbo LoRA — 2026-09-29
 
 Pinned v4-600 EMA plus its custom node/grid installed through the native UI.

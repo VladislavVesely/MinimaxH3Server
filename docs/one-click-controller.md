@@ -56,6 +56,40 @@ as text, never HTML. Missing legacy settings are explicitly marked unavailable.
 Images are not yet a supported input; their durable references must join the job
 request when image support is implemented.
 
+## Optional sparse attention
+
+Select **Install optional sparse attention**, then Install. Existing environments
+only acquire the optional component; fresh setup installs it after base models
+and optional SageAttention. About 22 MB is downloaded (archive plus extracted
+files use about 33 MB); no model weights, pip packages or system packages are added.
+The install is idle-only, checksum-bound and GPU-probed. Source/native files are
+verified again before generation. Changed file signatures invalidate fast readiness.
+
+Choose a remembered preset: Off, Quality-first (50%), Balanced (30%) or Fast draft
+(15%). Start with Quality-first, 20 steps and a short clip; compare results before
+lowering the budget. The early ramp starts with at least 50% attention. These are
+video-attention budgets, not claimed speedup percentages. Sparse changes model
+computation and can affect motion, detail, prompt adherence and the joint output.
+Text/audio connections remain dense, but this does not promise identical audio.
+Off bypasses the patch entirely. No preset changes steps, Sage choices or geometry.
+
+SageAttention remains selectable for compatible dense work. Sparse calls use their
+own kernels; this is not two kernels accelerating the same call. Turbo + sparse is
+rejected in both UI and API after a GPU test detected bypassed Turbo QKV adapters.
+Only ConvRot INT8 is enabled; other profiles/hardware are not assumed compatible.
+
+Preferences add `install_sparse` and `sparse_preset`; older documents migrate to
+false/off. `/setup/start` accepts `sparse_attention:true` for installation only.
+Local GET/POST `/remote/features/sparse` proxies the authenticated daemon feature
+endpoint with the controller's exact artifact digest. Generation uses
+`sparse_preset` and `sparse_artifact_digest` (not the legacy `sparse_attention`
+boolean). Published preset meanings are immutable; changed policies require a
+new identity. Stored requests/history contain the selected preset and component
+identity; execution events distinguish actual native launches from an unconfirmed
+sparse/fallback path. Reconnect never starts installation or generation.
+
+See [implementation evidence](plans/2026-09-29-sparse-attention.md).
+
 ## Optional Turbo LoRA
 
 The UI offers independent remembered install/use flags (`install_turbo`,

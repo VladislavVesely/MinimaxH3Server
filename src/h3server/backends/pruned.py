@@ -27,7 +27,7 @@ from h3server.profiles import gpu_family_eligible
 
 CAPABILITIES = Capabilities(
     lora=Capability(CapabilityStatus.UNSUPPORTED, ('Arbitrary LoRAs unsupported; the pinned optional Turbo preset has a separate validated path',)),
-    sparse_attention=Capability(CapabilityStatus.UNSUPPORTED, ('Pinned dense attention only',)))
+    sparse_attention=Capability(CapabilityStatus.SUPPORTED, ('ConvRot INT8 named sparse_preset only; requires pinned optional component; Turbo combination unsupported',)))
 
 
 def parse_request(value):
@@ -42,6 +42,8 @@ def parse_request(value):
     if not isinstance(value['loras'], (tuple, list)):
         raise ValueError('invalid LoRA input')
     request = JobRequest(value['prompt'], tuple(value['loras']), value['sparse_attention'], settings)
+    if request.sparse_attention is not None:
+        raise ValueError('Use a named sparse_preset, not the legacy sparse_attention boolean')
     request.validate_capabilities(CAPABILITIES)
     return request
 
@@ -186,6 +188,10 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False):
                 from h3server.backends.turbo import apply
                 model = apply(model, settings, rt.turbo)
                 emit(Event('loading', StageStatus.RUNNING, 'Turbo v4-600 EMA LoRA applied; custom dual-schedule-aware sampler enabled.'))
+            if settings.sparse_preset != 'off':
+                from h3server.backends.sparse import apply, PRESETS
+                model = apply(model, settings, rt.sparse)
+                emit(Event('loading', StageStatus.RUNNING, f'Sparse {settings.sparse_preset}: {PRESETS[settings.sparse_preset]:.0%} target video budget, denser early ramp; dense attention retains the selected Sage/PyTorch path.'))
             clip = rt.nodes.CLIPLoader().load_clip(files['text_encoder'], 'minimax', 'default')[0]
             video_vae = rt.nodes.VAELoader().load_vae(files['video_vae'])[0]
             audio_vae = rt.nodes.VAELoader().load_vae(files['audio_vae'])[0]
@@ -194,6 +200,9 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False):
                 width=settings.width, height=settings.height, length=settings.num_frames,
                 first_frame=None, last_frame=None).result
         with run_stage('denoising'):
+            if settings.sparse_preset != 'off':
+                from h3server.backends.sparse import trace_execution
+                sparse_counts = trace_execution()
             model = rt.shift.execute(model, 12.0, 3.0)[0]
             if settings.turbo_lora:
                 from h3server.backends.turbo import sample
@@ -202,6 +211,11 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False):
                 sampled = rt.nodes.KSampler().sample(model=model, seed=settings.seed, steps=settings.steps,
                     cfg=1.0, sampler_name='res_multistep', scheduler='simple', positive=positive,
                     negative=[], latent_image=latent, denoise=1.0)[0]
+            if settings.sparse_preset != 'off':
+                calls = sparse_counts['native_sparse_calls']
+                message = (f'Sparse runtime: native Kitchen INT8 executed {calls} sparse kernel calls.' if calls else
+                           'Sparse runtime: no native sparse execution confirmed; a fallback was used. No sparse acceleration is claimed.')
+                emit(Event('denoising', StageStatus.RUNNING, message))
             video_latent, audio_latent = rt.separate.execute(sampled).result
         with run_stage('video_decoding'):
             images = rt.nodes.VAEDecode().decode(video_vae, video_latent)[0]
@@ -278,6 +292,10 @@ def execute_document(request_path, *, emit, profile=None):
     if request.settings.turbo_lora:
         from h3server.backends.turbo import load_node
         rt.turbo = load_node(paths, request.settings.turbo_artifact_digest)
+    if request.settings.sparse_preset != 'off':
+        from h3server.backends.sparse import require, load
+        require(paths, request.settings.sparse_artifact_digest)
+        rt.sparse = load(paths)
     check_gpu(rt, get_artifact_set(profile))
     cancelled = threading.Event()
     old_signal = signal.signal(signal.SIGTERM, lambda *args: cancelled.set())
@@ -316,7 +334,12 @@ def backend(paths, profile):
         if request.settings.turbo_lora:
             from h3server.backends.turbo import require
             require(paths, request.settings.turbo_artifact_digest)
-    return Backend(command=command, readiness=readiness, capabilities=CAPABILITIES,
+        if request.settings.sparse_preset != 'off':
+            from h3server.backends.sparse import require
+            require(paths, request.settings.sparse_artifact_digest)
+    capabilities = CAPABILITIES if profile == 'h3-convrot-int8' else Capabilities(
+        lora=CAPABILITIES.lora, sparse_attention=Capability(CapabilityStatus.UNSUPPORTED, ('Sparse not verified for this profile',)))
+    return Backend(command=command, readiness=readiness, capabilities=capabilities,
         validate_video=validate_media_fd, validate_request=validate, diagnostics=readiness.diagnostics,
         runtime_id=selected.runtime_id, profiles=(profile,))
 

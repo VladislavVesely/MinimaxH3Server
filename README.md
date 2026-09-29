@@ -82,6 +82,15 @@ executable on PATH. To deploy a separately authenticated wheel:
   four-step fast-motion smear and preview audio quality. This is a dedicated
   LoRA + pruned-conditioning + custom-sampler integration, not arbitrary LoRA loading.
   Exact checkpoint/code identities and generation choices are saved in job inputs.
+- **Experimental sparse attention** is optional for ConvRot INT8. Its one-click
+  setup downloads about 22 MB of pinned code/kernels, checks them on the GPU,
+  and needs **no new model weights or dependency upgrades**. Start with
+  **Quality-first (50%), 20 steps and a 5-second clip**. Balanced (30%) and
+  Fast draft (15%) trade more fidelity for less video-attention work; leave Off
+  for the original path. SageAttention stays independent for compatible dense
+  work. **Turbo + sparse is blocked** because the upstream sparse path bypasses
+  some Turbo adapters. Presets are remembered; actual sparse execution/fallback
+  is recorded in job output. See [validation and limitations](docs/plans/2026-09-29-sparse-attention.md).
 - Seconds and frames update each other at 24fps. Seconds snap to the nearest valid
   H3 length (`17*n+5`, 124–345 frames); the effective duration is shown explicitly.
 - macOS saved settings: `~/Library/Application Support/H3Server/preferences.json`.

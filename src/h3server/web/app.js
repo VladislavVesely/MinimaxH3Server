@@ -38,6 +38,7 @@
   let preferencesSave = Promise.resolve();
   let sageState = { installed: false, busy: false, supported: false };
   let turboState = { installed: false, busy: false, supported: false };
+  let sparseState = { installed: false, busy: false, supported: false };
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
 
   function savedTargetMatches() {
@@ -50,6 +51,8 @@
     $('use-sage').checked = value.use_sage;
     $('install-turbo').checked = value.install_turbo;
     $('use-turbo').checked = value.use_turbo;
+    $('install-sparse').checked = value.install_sparse;
+    $('sparse-preset').value = value.sparse_preset || 'off';
     if (value.connection) {
       for (const key of ['host', 'port', 'username']) $(key).value = value.connection[key];
     }
@@ -59,7 +62,8 @@
   function savePreferences() {
     preferencesSave = preferencesSave.catch(() => {}).then(async () => {
       preferences = await request('/preferences', { install_sage: $('install-sage').checked, use_sage: $('use-sage').checked,
-        install_turbo: $('install-turbo').checked, use_turbo: $('use-turbo').checked });
+        install_turbo: $('install-turbo').checked, use_turbo: $('use-turbo').checked,
+        install_sparse: $('install-sparse').checked, sparse_preset: $('sparse-preset').value });
     });
     return preferencesSave;
   }
@@ -71,7 +75,7 @@
     $('sage-install-output').hidden = !sageState.log;
     replaceOutput($('sage-install-output'), sageState.log || '');
     $('sage-generation-note').textContent = sageState.installed
-      ? 'SageAttention 1.0.6 is available. Supported unmasked attention uses Sage; masked/full-precision layers retain PyTorch.'
+      ? 'SageAttention 1.0.6 is available for compatible dense attention; masked/full-precision layers retain PyTorch. Sparse calls use their own kernel without changing this setting.'
       : 'To use SageAttention, select its installation option above and click Install. You can leave it off to use normal attention.';
   }
   function showTurbo(value) {
@@ -88,6 +92,22 @@
     $('turbo-progress').max = turboState.total || 1;
     $('turbo-progress').value = turboState.completed || 0;
   }
+  function showSparse(value) {
+    if (value) {
+      const matching = value.artifact_digest === capabilities.sparse_artifact_digest;
+      sparseState = {...value, installed: value.installed && matching, supported: value.supported && matching,
+        error: matching ? value.error : 'Sparse component pins differ; update the controller and daemon to matching versions.'};
+    }
+    $('sparse-install-state').textContent = sparseState.busy
+      ? `Sparse setup: ${bytes(sparseState.completed || 0)} / ${bytes(sparseState.total)} · download, verification and GPU check`
+      : sparseState.installed ? 'Sparse kernels installed and GPU-verified. No extra model weights required.'
+      : sparseState.error || 'Optional sparse component is not installed.';
+    $('sparse-progress').hidden = !sparseState.busy;
+    $('sparse-progress').max = sparseState.total || 1;
+    $('sparse-progress').value = sparseState.completed || 0;
+    $('sparse-install-output').hidden = !sparseState.log;
+    replaceOutput($('sparse-install-output'), sparseState.log || '');
+  }
   async function installOptional(name, show) {
     let feature = await request('/remote/features/' + name, {});
     show(feature); render();
@@ -96,7 +116,7 @@
       feature = await request('/remote/features/' + name);
       show(feature); render();
     }
-    if (pageActive && !feature.installed) throw { code: name === 'turbo' ? 'turbo_install_failed' : 'sage_install_failed' };
+    if (pageActive && !feature.installed) throw { code: name === 'turbo' ? 'turbo_install_failed' : name === 'sparse' ? 'sparse_install_failed' : 'sage_install_failed' };
     if (pageActive) await dashboard();
   }
   async function afterAuthentication() {
@@ -135,6 +155,8 @@
     saved_connection_missing: 'No saved connection is available. Enter the SSH details and authenticate once.',
     saved_connection_mismatch: 'Saved credentials belong to a different SSH target. Enter the password for this connection.',
     turbo_selection_changed: 'The controller and daemon Turbo pins differ. Update to matching versions; no download was started.',
+    sparse_install_failed: 'Sparse installation or GPU verification failed. See its output above; base models and SageAttention are unchanged. Retry Install to resume.',
+    sparse_selection_changed: 'Sparse pins differ between controller and daemon. No installation was started.',
     turbo_install_failed: 'Optional Turbo download failed. Its status shows the reason; click Install to retry/resume without reinstalling the base model.',
     sage_install_failed: 'Optional SageAttention installation or its GPU check failed. See the component output; model files have not been changed.',
     optional_install_busy_or_unsupported: 'The optional component requires a supported, idle environment. Wait for jobs to finish; Turbo currently supports ConvRot INT8/mixed.',
@@ -260,7 +282,8 @@
       runtimeReady = false;
       sageState = { installed: false, busy: false, supported: false };
       turboState = { installed: false, busy: false, supported: false };
-      showSage(); showTurbo();
+      sparseState = { installed: false, busy: false, supported: false };
+      showSage(); showTurbo(); showSparse();
       resetDashboardPolling();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
@@ -310,21 +333,25 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'turbo_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
+    const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'turbo_install_failed', 'sparse_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
     $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || (setup.state === 'failed' && !optionalOnlyFailure);
     $('install-sage').disabled = !available || sageState.busy || !!pendingInstall || !!pendingRetry;
     $('install-turbo').disabled = !available || sageState.busy || turboState.busy || !!pendingInstall || !!pendingRetry;
+    $('install-sparse').disabled = !available || sageState.busy || turboState.busy || sparseState.busy || !!pendingInstall || !!pendingRetry;
+    const needsSparse = $('install-sparse').checked && !sparseState.installed;
     const needsSage = $('install-sage').checked && !sageState.installed;
     const needsTurbo = $('install-turbo').checked && !turboState.installed;
     const selectedInstall = profileCatalog.find(p => p.profile_name === $('install-profile').value);
     const alreadyInstalled = setup.installation_ready === true && setup.model_ready === true
-      && setup.profile === $('install-profile').value && !needsSage && !needsTurbo;
+      && setup.profile === $('install-profile').value && !needsSage && !needsTurbo && !needsSparse;
     const installReason = !ready ? 'Open a valid local controller session to enable Install.'
       : alreadyInstalled ? 'This environment and its model files are already installed and verified. No installation is needed.'
+      : sparseState.busy ? 'Optional sparse setup is running; download and GPU-check status is shown below.'
+      : $('install-sparse').checked && selectedInstall && selectedInstall.profile_name !== 'h3-convrot-int8' ? 'Sparse currently supports ConvRot INT8 only. Uncheck it for this profile.'
       : turboState.busy ? 'Optional Turbo download is running; actual bytes are shown below.'
       : $('install-turbo').checked && selectedInstall && !turboProfiles.includes(selectedInstall.profile_name) ? 'Turbo currently supports ConvRot INT8/mixed only. Uncheck it for this profile.'
       : sageState.busy ? 'Optional SageAttention installation is running; progress is shown below.'
-      : (needsSage || needsTurbo) && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing optional components. Running jobs will not be cancelled.'
+      : (needsSage || needsTurbo || needsSparse) && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing optional components. Running jobs will not be cancelled.'
       : $('install-sage').checked && selectedInstall && !selectedInstall.runtime_id.startsWith('comfyui-h3-') ? 'SageAttention is available for pruned profiles only. Uncheck it to install a legacy profile.'
       : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
       : busy ? 'An operation is in progress. Wait for it to finish.'
@@ -342,6 +369,7 @@
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
     $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request'
+      : setup.model_ready && needsSparse ? 'Install optional components'
       : setup.model_ready && needsSage && needsTurbo ? 'Install optional components'
       : setup.model_ready && needsTurbo ? 'Install Turbo LoRA'
       : setup.model_ready && needsSage ? 'Install SageAttention' : 'Install';
@@ -350,7 +378,12 @@
     $('setup-refresh').disabled = !usable;
     $('dashboard-refresh').disabled = !available || !authenticated;
     $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
-    $('generate').disabled = sageState.busy || turboState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported))
+    const sparseOn = $('sparse-preset').value !== 'off';
+    $('sparse-generation-state').textContent = $('use-turbo').checked ? 'Turbo selected: keep sparse Off, or turn Turbo off to use sparse (20 steps).'
+      : !sparseState.installed ? 'To use sparse, select its installation option above and click Install.'
+      : !sparseState.supported ? 'Sparse is not verified for this active model profile.' : 'Ready. Quality-first is the recommended starting preset; actual runtime/fallback appears in job output.';
+    $('use-turbo').disabled = sparseOn && !$('use-turbo').checked;
+    $('generate').disabled = sparseState.busy || (sparseOn && (!sparseState.installed || !sparseState.supported || $('use-turbo').checked)) || sageState.busy || turboState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported))
       || ($('use-turbo').checked && (!turboState.installed || !turboState.supported));
     $('steps').min = $('use-turbo').checked ? 4 : 2;
     $('steps').max = $('use-turbo').checked ? 8 : 1000;
@@ -572,6 +605,9 @@
     }
     render(); savePreferences().catch(error => showError(error, false));
   });
+  for (const id of ['install-sparse', 'sparse-preset']) $(id).addEventListener('change', () => {
+    render(); savePreferences().catch(error => showError(error, false));
+  });
   $('duration').addEventListener('input', () => syncDuration('seconds'));
   $('duration').addEventListener('change', () => syncDuration('frames'));
   $('frames').addEventListener('input', () => syncDuration('frames'));
@@ -618,7 +654,7 @@
   }
   const phases = { idle: 'Not started', planning: 'Inspecting and staging', prerequisites: 'Installing prerequisites',
     replanning: 'Rechecking prerequisites', installing: 'Installing environment', rebooting: 'Rebooting',
-    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', sage_attention: 'Installing optional SageAttention', turbo_lora: 'Downloading optional Turbo LoRA', completed: 'Completed' };
+    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'MODEL WEIGHTS · downloading selected files', sage_attention: 'Installing optional SageAttention', turbo_lora: 'Downloading optional Turbo LoRA', sparse_attention: 'Installing and GPU-checking sparse attention', completed: 'Completed' };
   const substages = { 'runtime-source': 'Acquiring runtime source', 'python-packages': 'Installing Python packages', 'runtime-checks': 'Checking runtime' };
   function seconds(value) {
     return typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))}s` : 'not reported';
@@ -652,6 +688,7 @@
     setup = data;
     if (data.sage_install) showSage(data.sage_install);
     if (data.turbo_install) showTurbo(data.turbo_install);
+    if (data.sparse_install) showSparse(data.sparse_install);
     if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see current phase and live output.' : 'Idle · no operation running.';
     if (setup.request_id === pendingInstall?.request_id) pendingInstall = null;
     if (setup.request_id === pendingRetry?.request_id) pendingRetry = null;
@@ -739,7 +776,7 @@
   $('retry-setup').addEventListener('click', () => perform('Retrying the eligible failed stage; completed work is preserved…', async () => {
     if (!setup.retry?.eligible) return;
     pendingRetry ||= {profile: setup.profile, artifact_set_digest: setup.artifact_set_digest,
-      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
     try {
       const result = await request('/setup/retry', pendingRetry);
       inspectedSetup = null;
@@ -792,6 +829,7 @@
         if (!setup.busy) {
           await savePreferences();
           if ($('install-sage').checked && !sageState.installed) await installOptional('sageattention', showSage);
+          if (pageActive && $('install-sparse').checked && !sparseState.installed) await installOptional('sparse', showSparse);
           if (pageActive && $('install-turbo').checked && !turboState.installed) await installOptional('turbo', showTurbo);
         }
         return;
@@ -802,7 +840,7 @@
     // Retain only the public intent ID across an ambiguous response, never secrets.
     await savePreferences();
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest,
-      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, request_id: crypto.randomUUID() };
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, request_id: crypto.randomUUID() };
     try {
       const result = await request('/setup/start', pendingInstall);
       inspectedSetup = null;
@@ -875,9 +913,14 @@
     details.append(node('h5', 'Prompt'), node('p', request.prompt ?? 'Not recorded', 'job-prompt'));
     const fields = node('dl');
     const labels = { profile: 'Model', seed: 'Seed', width: 'Width', height: 'Height', num_frames: 'Frames',
-      steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', loras: 'LoRAs' };
+      steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', sparse_preset: 'Sparse attention preset', sparse_artifact_digest: 'Sparse pinned component', loras: 'LoRAs' };
     const add = (key, value) => fields.append(node('dt', labels[key] || key.replaceAll('_', ' ')), node('dd', inputValue(value)));
-    for (const [key, value] of Object.entries(request.settings || {})) add(key, value);
+    for (const [key, value] of Object.entries(request.settings || {})) {
+      if (key === 'sparse_artifact_digest' && request.settings.sparse_preset === 'off') continue;
+      if (key.startsWith('turbo_') && key !== 'turbo_lora' && !request.settings.turbo_lora) continue;
+      const presetNames = {off: 'Off — original full attention', quality: 'Quality-first — 50%', balanced: 'Balanced — 30%', draft: 'Fast draft — 15%'};
+      add(key, key === 'sparse_preset' ? presetNames[value] || value : value);
+    }
     if (!request.settings) details.append(node('p', 'Generation settings were not recorded for this older job.'));
     const loras = request.settings?.turbo_lora ? ['Turbo v4-600 EMA'] : [];
     for (const lora of request.loras || []) loras.push(inputValue(lora));
@@ -928,7 +971,7 @@
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
-        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · Seed ${inputValue(settings.seed)} · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}${settings.turbo_lora ? ' · Turbo v4-600 EMA' : ''}` : '', 'field-hint');
+        const caption = node('p', settings ? `${settings.width} × ${settings.height} · ${settings.num_frames} frames · ${settings.steps} sampling steps · Seed ${inputValue(settings.seed)} · ${settings.sage_attention ? 'SageAttention' : 'standard attention'}${settings.turbo_lora ? ' · Turbo v4-600 EMA' : ''}${settings.sparse_preset && settings.sparse_preset !== 'off' ? ' · Sparse requested: ' + settings.sparse_preset : ''}` : '', 'field-hint');
         const timing = node('p', undefined, 'job-timing');
         timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
         item.append(heading, caption, jobInputs(job.request), status, timing, meter, detail, output);
@@ -1000,6 +1043,7 @@
     backendCapabilities = capability.adapter_capabilities;
     showSage(capability.optional_features?.sage_attention);
     showTurbo(capability.optional_features?.turbo_lora);
+    showSparse(capability.optional_features?.sparse_attention);
     const profiles = capability.profiles || [];
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
@@ -1035,6 +1079,9 @@
     perform('Submitting local generation job…', async () => {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
+        ...(sparseState.artifact_digest === capabilities.sparse_artifact_digest ? {
+          sparse_preset: $('sparse-preset').value, sparse_artifact_digest: $('sparse-preset').value !== 'off' ? capabilities.sparse_artifact_digest : null
+        } : {}),
         sage_attention: $('use-sage').checked, turbo_lora: $('use-turbo').checked,
         turbo_strength: Number($('turbo-strength').value), turbo_low_vram: $('turbo-low-vram').checked,
         turbo_artifact_digest: $('use-turbo').checked ? capabilities.turbo_artifact_digest : null };

@@ -75,14 +75,15 @@ class RemoteProxy:
             return bytes(data)
         data = asyncio.run(collect())
         if response.status_code >= 400:
-            if json.loads(data).get('detail') == 'turbo_selection_changed':
-                raise ControllerError('turbo_selection_changed')
+            detail = json.loads(data).get('detail')
+            if detail in ('turbo_selection_changed', 'sparse_selection_changed'):
+                raise ControllerError(detail)
             raise ControllerError('optional_install_busy_or_unsupported')
         return json.loads(data)
 
     def request(self, method, path, *, body=None, range_header=None):
-        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:health|capabilities|features/(?:sageattention|turbo)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
-                or method == 'POST' and re.fullmatch(r'/api/v1/(?:features/(?:sageattention|turbo)|jobs(?:/[a-f0-9]{32}/cancel)?)', path)):
+        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:health|capabilities|features/(?:sageattention|turbo|sparse)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
+                or method == 'POST' and re.fullmatch(r'/api/v1/(?:features/(?:sageattention|turbo|sparse)|jobs(?:/[a-f0-9]{32}/cancel)?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
         if range_header is not None and not re.fullmatch(r'bytes=(?:[0-9]{1,20}-[0-9]{0,20}|-[0-9]{1,20})', range_header):
             raise ControllerError('invalid_range', 416)

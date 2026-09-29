@@ -5,7 +5,7 @@ const source = fs.readFileSync(require.resolve('../src/h3server/web/app.js'), 'u
 const start = source.indexOf("  for (const id of ['install-sage', 'use-sage', 'install-turbo', 'use-turbo'])");
 const end = source.indexOf("  $('duration').addEventListener", start);
 assert.ok(start >= 0 && end > start);
-const fields = Object.fromEntries(['install-sage', 'use-sage', 'install-turbo', 'use-turbo', 'steps'].map(id => [id, {
+const fields = Object.fromEntries(['install-sage', 'use-sage', 'install-turbo', 'use-turbo', 'steps', 'install-sparse', 'sparse-preset'].map(id => [id, {
   checked: false, value: '20', addEventListener(event, callback) { this.change = callback; }
 }]));
 vm.runInNewContext(source.slice(start, end), {
@@ -29,4 +29,7 @@ for (const steps of [4, 6, 8]) {
 fields.steps.value = '30';
 fields['use-sage'].change();
 assert.equal(fields.steps.value, '30', 'Other preferences must not reset steps');
+fields['sparse-preset'].value = 'quality';
+fields['sparse-preset'].change();
+assert.equal(fields.steps.value, '30', 'Sparse selection must not change steps');
 console.log('Turbo toggle step regression checks passed');

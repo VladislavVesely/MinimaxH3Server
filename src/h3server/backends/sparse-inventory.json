@@ -1,0 +1,567 @@
+[
+  {
+    "name": "README.md",
+    "size": 36485,
+    "sha256": "9fa168e4e05b9a04ea9975aedd44da5c3cc8b14aa6ad52ac146f40e37382b8bf"
+  },
+  {
+    "name": "h3_optimizations/__init__.py",
+    "size": 120,
+    "sha256": "6d308ea4cad682bfda1b876da7e8e65b0d72938d7b310c9ae3b644745d8006b6"
+  },
+  {
+    "name": "h3_optimizations/aimdo_limiter.py",
+    "size": 8519,
+    "sha256": "bf1de6107cb714f6628b2207c472c9be955d030cb266557e75f9df2dea6bab99"
+  },
+  {
+    "name": "h3_optimizations/amd_policy.py",
+    "size": 6002,
+    "sha256": "47612049c85c249316c8b82d7ae25c958e60dca74321ba774b672375e4dcafee"
+  },
+  {
+    "name": "h3_optimizations/apply.py",
+    "size": 57770,
+    "sha256": "2ff342297106cbf2e683a78de6c3127d7772637bd619f01eedfa36f59b89d165"
+  },
+  {
+    "name": "h3_optimizations/apply_policy.py",
+    "size": 10918,
+    "sha256": "10d01dca2f4cc8d76de3b1528a1bb26f814114712d938c2c5803399f8e1d746b"
+  },
+  {
+    "name": "h3_optimizations/attention/__init__.py",
+    "size": 720,
+    "sha256": "963be7a97b2e732ab8a1fbe9ed13d8082a042c2424320f9771652231e70b315f"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/__init__.py",
+    "size": 792,
+    "sha256": "c06adfbde3ecf23b416fc21e77c3a7c9dd86fecaffe6c5cf8e833277963cf7d9"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/common.py",
+    "size": 18155,
+    "sha256": "c6a8580694003bb97e59c238076bf7515ee4c68993cd40b8c1cb7cd70ce4143a"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/sm12x.py",
+    "size": 5232,
+    "sha256": "d9c4d50474fa52095b79406ea9b5c6c783006162254a535407863365459d7100"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/sm75.py",
+    "size": 291,
+    "sha256": "d155a536f57839d4b21503a398464fc386d47b6f6ab590caaccf0ab81fad789e"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/sm80.py",
+    "size": 4744,
+    "sha256": "2fa0089a598b28cf6526bcda7fd7c86624be643e7cf3187e7855fdad23765026"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/sm86.py",
+    "size": 4741,
+    "sha256": "363b9d60254d2760da945f46e6a7864af799e6c8c29542f6b2446edc2440cfa2"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_arch/sm90.py",
+    "size": 5133,
+    "sha256": "8e6548b45b3d74200540e48f6ab5719645c51ed571f8901d5adf049628f1c2ea"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_mem_eff.py",
+    "size": 13786,
+    "sha256": "00f460e8d9a66d9e5148dc02d6a9bd618070f013338ef7e3772e925068a16bd2"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_v_fp8.py",
+    "size": 9836,
+    "sha256": "41ff18bcbb0baf81a3bb284906465dbc0d1cfe1e6848e3bc0fd0128e812ec745"
+  },
+  {
+    "name": "h3_optimizations/attention/sage_v_staging.py",
+    "size": 8584,
+    "sha256": "8d305a24963c3c3ddf9f643b9f9964fa8e49b45f67ce4ff79c6e4d86ed80d126"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/__init__.py",
+    "size": 3473,
+    "sha256": "09451cc4a0fa79ad68d8bf56680ec4a10c9b5994d9516707bafa2a7a6eec5a52"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/backend.py",
+    "size": 10161,
+    "sha256": "850ba55e4ecd442a64a0f14f2490734567b67902a897d390c40300ef330b23da"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/chunked_qkv.py",
+    "size": 10277,
+    "sha256": "f1a4f84fcd87e7bd50feedb646949b98a8cf129a89609911f887d2ee59ad0b1d"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/config.py",
+    "size": 5922,
+    "sha256": "6b21119eaf6892a4afad74a2a327061db105d89f32ebe2287ae514b66cd740e6"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/existing_dense_sparse.py",
+    "size": 36469,
+    "sha256": "e63a13a234bcf647a573b7212856e32e7f4459df7a33c338dc07f87989701eac"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/fp8_flex.py",
+    "size": 17431,
+    "sha256": "265e90fcbd318b0ee8fa4475ce45ae7e2c06ca25392f9213b68c790cfad9777a"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/fp8_qkv.py",
+    "size": 5908,
+    "sha256": "66641a1ad54825309882361bc92aa430efec216a7cd371bdc5175e7b29452525"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/frost_bf16.py",
+    "size": 13149,
+    "sha256": "e50818a98e2442aa834cc1434f3a75b9c044de61d04a7bc2852e293e9a28c7e6"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/frost_bf16_streamed.py",
+    "size": 10435,
+    "sha256": "55aa809fec5b63cddc393bbe06fa5784aead10cdd47247f77d45cf2788022901"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/frost_loader.py",
+    "size": 6278,
+    "sha256": "0794425355180552cbd7080ebbef1184b628cf9ae74bd442b40594623ffbd815"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/frost_route.py",
+    "size": 5627,
+    "sha256": "493b90471d56d0a95e6a4b32d8c30bb52ae17e77b39422de2ab8943ad77a1f06"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/fused_qkv.py",
+    "size": 32039,
+    "sha256": "c854f53f44dc7e5bdc4343e92ad1e43a6247624b1f9bd3691e10c5228ae3fd12"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/kitchen_sparse.py",
+    "size": 22766,
+    "sha256": "727a0256e62f8cca91079368d4f0ba25343de670be90b39984b66a9f8bbc5719"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/kitchen_streamed_q.py",
+    "size": 21104,
+    "sha256": "905a15f5535f3acfa6eebbddbaae14e574004448d72e93c0ddb8c5ac43fc2513"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/router.py",
+    "size": 14283,
+    "sha256": "41b1d2de2187f6f9a67e20a07f14b1238d6ea59fc6a989801a44094193ac33c1"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/sparse_quant.py",
+    "size": 2814,
+    "sha256": "7aac2d1a801586bb6023154027f1a1b1678cb0836d430c4c044db60acd9c5faa"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/sparse_sage.py",
+    "size": 30044,
+    "sha256": "17bb2976fc0b0d253695f610e9e34427659e89ed1b088a07677ed87ddb112019"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/sparse_sage_streamed.py",
+    "size": 35349,
+    "sha256": "f04cf49f39797999cf3f043f1e9021c69bf902b69d06f07f7ef12c21a96b3f6a"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/triton_bf16.py",
+    "size": 20927,
+    "sha256": "0ab358df522a1c4e05f0b85d69065287d9d50f64dd1a6743624159e7ef0ff039"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/triton_bf16_streamed.py",
+    "size": 12828,
+    "sha256": "d8d0d37d97197b25d3ec5beabf9c50ee53f209569b567ff989b7fe3df1b441b8"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/triton_route.py",
+    "size": 7431,
+    "sha256": "e65ae01e7a6cfc04b003961c5bf230a12527f6218ea904414821980a53893234"
+  },
+  {
+    "name": "h3_optimizations/attention/sparse/triton_sparse.py",
+    "size": 3037,
+    "sha256": "36455b7d2ceb9e4a58b819724895bdfa169594b4d652d5d55649e696bd4b2c7f"
+  },
+  {
+    "name": "h3_optimizations/attention/stats.py",
+    "size": 848,
+    "sha256": "ce18fdda9cd90d8d11fdd877669fd77c95d88bbacc38e623dc9fe6eec21140b4"
+  },
+  {
+    "name": "h3_optimizations/attention/triton_i64.py",
+    "size": 13153,
+    "sha256": "3ba23d53770c08b68e881925875e39cdecbaffb403ffae928367a183f62fe47e"
+  },
+  {
+    "name": "h3_optimizations/attention/v_snapshot_compat.py",
+    "size": 4569,
+    "sha256": "07fc146f94d737ee0a98ce8a8caca8fe1ac062ae5dc624a8fadceceb09684024"
+  },
+  {
+    "name": "h3_optimizations/attention_forward.py",
+    "size": 17626,
+    "sha256": "fb18330d7d81d9b4ae08a0ed92691230ad09b8b666fb362cf2750748610ff97a"
+  },
+  {
+    "name": "h3_optimizations/cube_order.py",
+    "size": 15745,
+    "sha256": "605f4c3fe3ee94c21b756cc243fe5b4ce16fcc2f5b13a2a7cf00493c6d8db492"
+  },
+  {
+    "name": "h3_optimizations/dense_backend.py",
+    "size": 4417,
+    "sha256": "c66fc67bfab5ee64ba8dfc17583f86115fed9bcf9eb37475647be2f84ac45500"
+  },
+  {
+    "name": "h3_optimizations/dense_fused_qkv.py",
+    "size": 14490,
+    "sha256": "7b1336f6ffbc06b01d93ca5a56f6cba71cfb9e110c3d78fc90b23e13e5947114"
+  },
+  {
+    "name": "h3_optimizations/dense_fused_qkv_contract.py",
+    "size": 2690,
+    "sha256": "d53d93682a601e2090d80378dc3dff916a69da0ae664bbb668cfd4aca4f02dd9"
+  },
+  {
+    "name": "h3_optimizations/dense_fused_qkv_kernel.py",
+    "size": 9845,
+    "sha256": "1f946b981e543214e66655812b8ba3a5f1f6b2fea2bb8361b3f2466d50595985"
+  },
+  {
+    "name": "h3_optimizations/dense_resolver.py",
+    "size": 11787,
+    "sha256": "dc35d3eb1577c4c39f085dfc00c398ac038b73eb29881677f78a3a9408ac0b70"
+  },
+  {
+    "name": "h3_optimizations/dense_streamed_sage.py",
+    "size": 13852,
+    "sha256": "b1c989e26687da83b9b65d897edbdc756aceddc1d664baf3ceffa96b6aadf6bd"
+  },
+  {
+    "name": "h3_optimizations/diagnostics.py",
+    "size": 2633,
+    "sha256": "d2e65d7f700d7952facc9b77b6eac7f9bac209025faeb37d933f9f5f96654615"
+  },
+  {
+    "name": "h3_optimizations/environment.py",
+    "size": 3460,
+    "sha256": "cb65fe8de98d099295dfef8143943aefda7107da02b9fc171bdc795f0e41e1f7"
+  },
+  {
+    "name": "h3_optimizations/external_consumer.py",
+    "size": 1802,
+    "sha256": "f142f2f0a9ddeaed088de22440b5635dccc6812402291badefc0a485f6690206"
+  },
+  {
+    "name": "h3_optimizations/kitchen_qkv.py",
+    "size": 26807,
+    "sha256": "3a4b96fe6280d0a9b4da29007ec933d852b37b2800bfbc6ccfc905b1da619de9"
+  },
+  {
+    "name": "h3_optimizations/memory/__init__.py",
+    "size": 447,
+    "sha256": "4787870f601f19775c587849f54203e32fb5784708a9f62d8ce329dc6245297c"
+  },
+  {
+    "name": "h3_optimizations/memory/chunks.py",
+    "size": 5541,
+    "sha256": "c7cbcdfefaa40b387fa40fa7b889ea12e5086e2327e9a48e3d634d86d49a2b44"
+  },
+  {
+    "name": "h3_optimizations/memory/config.py",
+    "size": 2022,
+    "sha256": "69d6e89aaa21a9dc7c2f721c62a13199e008c77d5ed7dbf9a7c071a066afc6c1"
+  },
+  {
+    "name": "h3_optimizations/memory/embedding.py",
+    "size": 15514,
+    "sha256": "0be72747964f57814813b983d8a70bd30d62ce60e7788cbb2521e9d3a31e6a29"
+  },
+  {
+    "name": "h3_optimizations/memory/final_layer.py",
+    "size": 12720,
+    "sha256": "1ccfa774109006285a0dd9bc270600eb1b31fce168b4a5fc06a26278bcba892f"
+  },
+  {
+    "name": "h3_optimizations/memory/forward.py",
+    "size": 10872,
+    "sha256": "d16824112b9c2bc390da4b5058007cbb52197326dbb40f01d990a79943a813f6"
+  },
+  {
+    "name": "h3_optimizations/memory/linear.py",
+    "size": 19904,
+    "sha256": "8a5ed7ae8dfc70b835b1efc7361b303dcfb96b6014b07eb753210cc739cc89c6"
+  },
+  {
+    "name": "h3_optimizations/memory/patch.py",
+    "size": 3613,
+    "sha256": "5c5edf9a1a29d0b61320c43e310acb254971642283236cabbb9664b32c2cec78"
+  },
+  {
+    "name": "h3_optimizations/memory_migration_node.py",
+    "size": 14447,
+    "sha256": "a4af0fca5803b3efa07bea7067682339a7e7cbd484dd2197ad217b0edfc19d5d"
+  },
+  {
+    "name": "h3_optimizations/model.py",
+    "size": 1119,
+    "sha256": "6e3101becf1366a5af7753fb6f0e88ad9aa50cf74f0484a62bcdb6c02c9d13cb"
+  },
+  {
+    "name": "h3_optimizations/native/__init__.py",
+    "size": 3002,
+    "sha256": "d7801c57330987a7f62e90685303bd6dcf68022e131ac41dd02cf788e4ff09ee"
+  },
+  {
+    "name": "h3_optimizations/native/artifacts.py",
+    "size": 482,
+    "sha256": "74897dc3777a72ffc446f2bb4617404b18a7429dbc82dd7ec0c73d6d8fb5481d"
+  },
+  {
+    "name": "h3_optimizations/native/bootstrap.py",
+    "size": 3428,
+    "sha256": "f6c8697524638602be01126319fbe65602e2d3afedadb59100f5c9ead269ff31"
+  },
+  {
+    "name": "h3_optimizations/native/convrot.py",
+    "size": 1939,
+    "sha256": "a1ac240750bcb98f97d461d9b0a28f0dfb73666cc006bc92d6e90c341209ce0a"
+  },
+  {
+    "name": "h3_optimizations/native/fused_q.py",
+    "size": 5421,
+    "sha256": "74cc0cbd2a5808464129c8f087d260b31214c783cb6e941386c021dbd1999b98"
+  },
+  {
+    "name": "h3_optimizations/native/hip_int8_attention.py",
+    "size": 10045,
+    "sha256": "524f3a3e4415ecaf0c07335bb514b4b140f098a270a284c52e976382bdf05b67"
+  },
+  {
+    "name": "h3_optimizations/native/hip_loader.py",
+    "size": 4999,
+    "sha256": "ec551d302843f0230acc0c22fe614e65318b8b72bc424a448231cde9ba698d50"
+  },
+  {
+    "name": "h3_optimizations/native/hip_selftest.py",
+    "size": 7014,
+    "sha256": "a3dc1acaa8917067c3e522660b19c61f40f8d0d86bc1c481fc23a29a29617f29"
+  },
+  {
+    "name": "h3_optimizations/native/int8_attention.py",
+    "size": 22304,
+    "sha256": "eab90cc1ca1a33c4a44926947b4289c8b1448214dd6a64112256c5960b7bbeb7"
+  },
+  {
+    "name": "h3_optimizations/native/loader.py",
+    "size": 10608,
+    "sha256": "2e46098cf64a8b60a1fbe47563c47c5ed8ab19b6c511e7b72a1d82dbf64b6440"
+  },
+  {
+    "name": "h3_optimizations/native/producer.py",
+    "size": 19802,
+    "sha256": "cbc5d9f484104e99ee754da496caeda10ffc34e79281a5a226755c3d36bda910"
+  },
+  {
+    "name": "h3_optimizations/native/selftest.py",
+    "size": 20087,
+    "sha256": "b3392048499e05eb517fb718e753f36f7cefacf2a3336b57478ec10f39b3873d"
+  },
+  {
+    "name": "h3_optimizations/native/sparse_sage.py",
+    "size": 5286,
+    "sha256": "a283b2ceda80f1ebcfd7ea30a908fc77994c2c3259ebe7b671ffe5cba72159c0"
+  },
+  {
+    "name": "h3_optimizations/native/v_staging.py",
+    "size": 7594,
+    "sha256": "23116e8973729f83b06eca3b0e39b40af250b8281dcf5b412c8e83c6fd2c7ea6"
+  },
+  {
+    "name": "h3_optimizations/node_constants.py",
+    "size": 75,
+    "sha256": "abd77bcd4f050df7813ae315fff3f58015a67f369958b9a8aa1208c43eaa9df0"
+  },
+  {
+    "name": "h3_optimizations/nodes.py",
+    "size": 14918,
+    "sha256": "6285984dc0eeaac5e30c260b3327db923a2511baa89c2560b5a54e150796f0c9"
+  },
+  {
+    "name": "h3_optimizations/normalized_rows.py",
+    "size": 6514,
+    "sha256": "5f855995cfdfdedb478d899a6039e1af06b97f36355bbf25e7854c792bb2dfe7"
+  },
+  {
+    "name": "h3_optimizations/ordering_probe.py",
+    "size": 592,
+    "sha256": "1b8f53baf9cdc3d0ddce2ac5f0a1306804d9e3e4f9d42eaebb0aefb92f3bd5da"
+  },
+  {
+    "name": "h3_optimizations/patch.py",
+    "size": 6469,
+    "sha256": "5b9c20d6ecd9457c33eac233c208569d7462dea0f46ba61de3a1225d7a5ee6de"
+  },
+  {
+    "name": "h3_optimizations/plan.py",
+    "size": 13869,
+    "sha256": "f5f51ce5cf683183603a4e1b2f0b67d859458ad97744f5c1b14b6988aaf4f275"
+  },
+  {
+    "name": "h3_optimizations/public_nodes.py",
+    "size": 1343,
+    "sha256": "a0ee40115bce86db4c8d2206f2374220178d51dfa557e42a1b843df0a1c61940"
+  },
+  {
+    "name": "h3_optimizations/qkv/__init__.py",
+    "size": 997,
+    "sha256": "2ed4f2864d1eb8bcfe1d17dcf2b92400a8f64baf95bb453a7a1293670adb8baa"
+  },
+  {
+    "name": "h3_optimizations/qkv/bf16.py",
+    "size": 18674,
+    "sha256": "5da0ddccc3c2fc659feeee9fa00aaab0da9cdd43a95b5b1b75e8ca7f208162e3"
+  },
+  {
+    "name": "h3_optimizations/qkv/chunked.py",
+    "size": 412,
+    "sha256": "51633a9c7fbea7a5107e6c40899c5171346e50559b3d1232da45b7c7dd1469a0"
+  },
+  {
+    "name": "h3_optimizations/qkv/formats.py",
+    "size": 8497,
+    "sha256": "4dd7f4ee6db534fc7e23b57ed0bfec84c8d93e5f6adf2057aaa87e64acdd31df"
+  },
+  {
+    "name": "h3_optimizations/qkv/fp8.py",
+    "size": 14599,
+    "sha256": "ef4db5955ea69fe2fbe7f658200831dd6924ac443ebf248485022dfc0d88ea2d"
+  },
+  {
+    "name": "h3_optimizations/qkv/fused_q.py",
+    "size": 5056,
+    "sha256": "d3207c9b0af1fa18e5e09a2ea58ded1eb37e6de56b4bccbdca77866902ba024d"
+  },
+  {
+    "name": "h3_optimizations/qkv/int8.py",
+    "size": 11866,
+    "sha256": "585f1d74f95f3c70bc799dc20ebde1f856549f0eadb912b74361596f2e0a7a83"
+  },
+  {
+    "name": "h3_optimizations/qkv/policy.py",
+    "size": 16362,
+    "sha256": "dc3b59667fdedb0fa0e59ca00c946ee44a2419139b7dc33ddffacdcaaca94e4f"
+  },
+  {
+    "name": "h3_optimizations/qkv/projectors.py",
+    "size": 10972,
+    "sha256": "5b07bcdf370f9768a9ef536fe66619e125c7f475e99bcb6931d3d94819792ed2"
+  },
+  {
+    "name": "h3_optimizations/qkv/providers.py",
+    "size": 20229,
+    "sha256": "c0a6bcff3b9f7c7049f577672338d97f3f2357b5bef46d2a7272216c5a2f40bc"
+  },
+  {
+    "name": "h3_optimizations/qkv/streamed.py",
+    "size": 3265,
+    "sha256": "aa3f56cd57fd8cb19d220257f8e717012113eae9a7cfd36e23b2bd236cee9e73"
+  },
+  {
+    "name": "h3_optimizations/qkv/w4a8.py",
+    "size": 6918,
+    "sha256": "947ade2df2fbd23b14fdcb7b9422c2990e49235d57c68016f64db4a3dd8b930d"
+  },
+  {
+    "name": "h3_optimizations/runtime/__init__.py",
+    "size": 293,
+    "sha256": "67d9d3520c408cf72e52fa1785b694a5a1d689297e350568632d6b5368be9bc7"
+  },
+  {
+    "name": "h3_optimizations/runtime/context.py",
+    "size": 11271,
+    "sha256": "dbcdbccae93aad4a936d2d8f6d9b005b1159c1abb5a9b8e2ee1689e4a0c5e647"
+  },
+  {
+    "name": "h3_optimizations/runtime/layout.py",
+    "size": 5859,
+    "sha256": "6f578901b1e96f8ba1840fc4e92ab4dcdec8f2525a37b2f7d8bbaa8d18af5b13"
+  },
+  {
+    "name": "h3_optimizations/status.py",
+    "size": 17852,
+    "sha256": "cac9160dd4755d9b73a8fbc6f2132ab6502216d67ebddb1a42b8202838946088"
+  },
+  {
+    "name": "h3_optimizations/universal_sparse_fallback.py",
+    "size": 15147,
+    "sha256": "9cf36463364af061779db058b9e95313bb49a478c9901f426595fa2a66a69bfb"
+  },
+  {
+    "name": "h3_optimizations/vsa/__init__.py",
+    "size": 77,
+    "sha256": "0dd522cd51f1fb0b0ac4ebd00940367ebc5e49507e1b2cce281aaeecb3a5849a"
+  },
+  {
+    "name": "h3_optimizations/vsa/attention.py",
+    "size": 8722,
+    "sha256": "f88d363264196abd78c3dbc1e3c80ba8011c7c05b324346a104c649556edcf57"
+  },
+  {
+    "name": "h3_optimizations/vsa/kernel.py",
+    "size": 6419,
+    "sha256": "af3e3e8c0b663b26b99e034e2550379ddd671fdf76f95ac6411396689e5661d7"
+  },
+  {
+    "name": "h3_optimizations/vsa/node.py",
+    "size": 14939,
+    "sha256": "6ace6e71552382d6b241330858d1977b76c6b42f7ac42dcf0a3facf467007b39"
+  },
+  {
+    "name": "h3_optimizations/vsa/streamed.py",
+    "size": 10876,
+    "sha256": "f397589690a07a1bdbc6728746e36fa5ca0c14ce9744c456584c20fe681aa80b"
+  },
+  {
+    "name": "h3_optimizations/vsa/tiling.py",
+    "size": 4835,
+    "sha256": "c048a492c40fe3713f446bdf1420b1a013f6985bac47b3a30cbb52cc9cd5b170"
+  },
+  {
+    "name": "native/LICENSE",
+    "size": 11364,
+    "sha256": "cd1c9ea1573c9047e9b5a3676ecc1c8f755e56f249ac1ebd8b5ceda7899037da"
+  },
+  {
+    "name": "native/NOTICE.upstream",
+    "size": 5898,
+    "sha256": "8fee3e9e9a54050364c05220230f5bcb140e38f96ff43c23fe06ec49d96e94af"
+  },
+  {
+    "name": "native/bin/BUILD_ID",
+    "size": 11,
+    "sha256": "d73cc263630e03ee46bc992c366265a6974e68cde5f1147f444444f2280b336b"
+  },
+  {
+    "name": "native/bin/libh3_int8_attention.so",
+    "size": 9846872,
+    "sha256": "af6ffdcb77756ff4ce53fdd0fd5fa0dff45e435f53b176eb30f8523ef2fe8ecf"
+  },
+  {
+    "name": "pyproject.toml",
+    "size": 615,
+    "sha256": "1e6eb84b7b0c44eb127a54da2267fb0a81c7b267fb2c3b95683bbedc35c496f0"
+  }
+]
