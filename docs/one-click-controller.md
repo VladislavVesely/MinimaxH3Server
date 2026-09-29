@@ -154,3 +154,28 @@ Deployment, staging and host-key/reconnect handling with controlled SSH command 
 SFTP fixtures. Other focused tests cover the actual fixed sudo transport and
 operation-ID-bound target cancellation. No real server, package install, reboot,
 model download or GPU operation is used by these tests.
+
+
+## Browser integration
+
+The primary page removes step03 comparison and the old approval controls entirely.
+Step04 renders the selected profile's bytes, GPU guidance, unknown memory fit and
+auxiliary components; pinned license/provenance/technical details are collapsed.
+`GET /profiles` and `/scan` now include verified `license_text` and `license_sha256`
+for disclosure before Install, without staging or any target mutation.
+
+Authentication sends `reuse_for_setup:true` next to the memory-only inline notice.
+Only Install sends `/setup/start`; an ambiguous request keeps its public ID in
+page memory until reconciliation or a same-ID retry. No browser storage is used.
+Selection and duplicate Install are disabled while setup owns the target. The page
+polls `/status` for the setup document even during SSH recovery. Reload restores
+that progress and exact selection without a plan/install/restore mutation.
+Completed/failed/cancelled workflows explain credential clearing and reauthentication;
+sudo rejection has a specific policy/password message, not a normal second field.
+
+`tests/browser/generation_fixture.py` and `target_fixture.py` compose real controller,
+installer, target authorization/activation and durable store logic while controlling
+SSH, native process/service and model-download boundaries. Browser tests preserve
+host verification/CSRF, low-level digest rejection and generation/video regressions.
+Native smoke additionally checks that obsolete approval fields are absent and the
+embedded application source/resources equal the current checkout.

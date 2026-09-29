@@ -1,5 +1,51 @@
 # Validation and acceptance status
 
+## One-click integration — current main source
+
+Application source revision: `fd2cb3ab4719caaf076f4f178d49d94f6b116113` on **main**
+(includes backend `a5d4c6f6679f7863b4fbbbb5af50483b15313ad1`). No new branch or
+worktree was created. This section supersedes the historical approval UI and
+request-scoped-sudo description below; historical results are not new acceptance.
+
+Executed locally on macOS arm64, Python 3.14.5:
+
+| Check | Result |
+| --- | --- |
+| `.venv/bin/python -m pytest -q -Werror` | **842 passed, 10 skipped** |
+| `cd tests/browser && npx playwright test --reporter=line` | **31 passed** (Chromium) |
+| `.venv/bin/python -m pip check` | No broken requirements |
+| `.venv/bin/python scripts/build_controller.py` | Native root `dist/h3-controller` rebuilt |
+| `.venv/bin/python scripts/smoke_controller.py dist/h3-controller` | Both ordinary and `deploy` launch modes passed |
+
+Native executable SHA256:
+`b165c9dc01f78170ad86d89b2e466a49fb7c6a661c4971b59043bee1c6aeb228`.
+Embedded wheel SHA256:
+`602bf560c49169eb26f19e2cf0503d2dc3b1ffa3f6afe3ef3f66dd631ef4a198`.
+Smoke verifies the embedded wheel equals every current application source/resource,
+including the one-click coordinator, catalog and UI; actual loopback bootstrap,
+Host/Origin/CSRF, catalog/license, idle setup, assets and shutdown all pass.
+The familiar launcher is `./dist/h3-controller` in the main checkout.
+
+Browser regressions exercise real authenticated controller routes, Deployment,
+installer/store, target authorization/activation and selected download records,
+with only SSH/native/runtime/download IO controlled. They cover prerequisite
+replan, required reboot/reconnect, activation, selected acquisition, reload during
+work, cancel/reload, exact pruned digest rejection, sudo rejection, lost/undelivered
+responses, stable public retry IDs, stale observations and target reset. Host-trust,
+CSRF and generation/video preservation checks remain. These fixture bytes are not
+weights or a generated/playable H3 video. No real server was contacted and no
+remote packages, drivers, reboot, model download or GPU execution occurred.
+
+TDD failures preceded fixes: obsolete retention checkbox; missing pre-Install
+catalog license fields; lost accepted response failing to resume polling. The last
+was corrected by scheduling observation after status reconciliation. Independent
+read-only review of the integrated committed diff is **pending**, not claimed here.
+Ten platform/opt-in Python tests remain skipped. Live Linux setup/reboot/GPU,
+Windows native acceptance and Python physical-memory zeroization remain unproven;
+offline cancellation cannot guarantee detached remote work stopped.
+
+## Historical validation (prior design/revision)
+
 Validated implementation revision: `7e74cc9cf99be5a74376e385c5b15a636198a208` on `feature/h3-server`.
 
 ## Executed checks

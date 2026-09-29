@@ -84,7 +84,13 @@ def smoke(command):
             status, _, body = request(api + '/profiles')
             assert status == 200 and json.loads(body) == json.loads(json.dumps(profile_catalog()))
             assert b'31,550,953,118' not in html  # totals are catalog-derived, not stale HTML literals
-            assert b'id="download-selection"' in html
+            assert b'id="selected-profile"' in html and b'id="install-scope"' in html
+            for obsolete in (b'id="review-panel"', b'id="sudo-password"', b'id="license-check"', b'id="retain-recovery"'):
+                assert obsolete not in html
+            assert b'reuse_for_setup: true' in request('/assets/app.js')[2]
+            status, _, setup_body = request(api + '/setup/status')
+            assert status == 200 and json.loads(setup_body)['state'] == 'idle'
+            assert request(api + '/setup/start', {}, {'Origin': origin})[0] == 403
             print('Native authenticated catalog equals source: both Abiray collections, exact totals/digests, no target IO')
             assert request(api + '/disconnect', {}, {'Origin': origin})[0] == 403
             assert request(api + '/disconnect', {}, {'Origin': origin, 'X-CSRF-Token': csrf})[0] == 200

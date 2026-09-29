@@ -31,36 +31,36 @@ wrappers `scripts/deploy.sh` and `scripts/deploy.ps1` use `H3_CONTROLLER` or the
 executable on PATH. To deploy a separately authenticated wheel:
 `h3-controller deploy --wheel PATH --sha256 TRUSTED_SHA256`. No password arguments.
 
-### Setup and approvals
-
-With memory-retention consent, the running controller automatically reconnects
-for up to 120 seconds after an approved reboot or lost setup SSH connection,
-verifies the known host key, restores the same target/plan digest, and replays
-progress. The remote bootstrap continues independently; automatic recovery never
-reissues installation, sudo or reboot commands. Disconnect, opt-out, session
-expiry or controller shutdown clears retained credentials. Restarting requires
-fresh authentication. Unknown/changed keys and authentication failures stop
-retries; no automatic host-key approval occurs.
+### One-click setup
 
 1. Enter SSH host/port/user. Verify and approve its SHA256 host fingerprint using
    a separate trusted channel; a changed key **blocks**, not silently re-enrolls.
-2. Authenticate, then scan hardware. The clearly labelled authentication checkbox
-   authorizes keeping the SSH password in **local controller memory only** for
-   setup recovery (checked by default in the UI; the API requires explicit consent).
-   Uncheck for manual reconnection. No password is written to disk/browser storage;
-   sudo passwords remain request-scoped.
-   SSH agents/private-key login are **not implemented**; no account SSH config or
-   `server.txt` is imported. Never paste a private key into the password field.
-3. Choose an experimental profile (smaller pruned GGUF Q4_K_M is the default)
-   and **Stage release & review plan**. Both requested Abiray collections are
-   selectable. Review the diffusion model, shared INT4 encoder, both VAEs, exact
-   total bytes and source/license disclosures; changing selection clears approvals. This
-   approval stages application files, not OS changes. Review exact package,
-   environment and service-registration changes; approve license eligibility,
-   installation and sudo separately. Driver replacement is never unconditional.
-4. Reboot, if needed, requires **separate** digest-bound approval. Model download
-   requires its own license/eligibility and download approval after activation.
-5. Inspect live setup/download progress and diagnostics, then submit a real job.
+2. Authenticate, then scan hardware. The inline authentication notice explains
+   that your SSH password is reused for setup, sudo and reconnection on this
+   target/session in **controller memory only**. No second normal sudo field or
+   retention checkbox. Nothing is saved to disk/browser storage. Completion,
+   failure, cancellation, disconnect, expiry and shutdown clear the credential.
+   SSH agents/private-key login are not implemented; no account SSH configuration
+   or credential file is imported. Never paste a private key into the password field.
+3. Select a model in **04 / Install & validate**. The old 03 comparison is removed.
+   Review selected bytes, GPU guidance, unknown host-memory fit, auxiliary files,
+   and collapsed pinned license/provenance details. Smaller pruned GGUF Q4_K_M is
+   the default experimental choice, not a verified RTX 4090 memory fit.
+4. Click **Install** once. Its inline scope covers required packages/drivers/user
+   services, possible reboot/reconnect, activation and the selected model download,
+   with license/eligibility terms. Exact digest approvals are enforced internally;
+   the UI has no separate install/reboot/activation/download approval wizard.
+   Existing busy jobs are rejected, never cancelled automatically.
+5. Watch actual phases/checkpoints and indeterminate progress. Reload restores
+   the running controller's progress without submitting another Install. Cancel
+   stops further automatic actions, not rollback: remote package/detached work
+   may continue, especially offline. Wait until setup stops before changing target.
+   Sudo rejection shows a specific administrator/password-policy explanation.
+   To retry after resolving a failure, disconnect, reconnect, authenticate, scan
+   and Install again. Unknown remote outcomes require inspection, not repeated
+   installation. Controller restart requires fresh authentication. Unknown/changed
+   host keys always stop recovery; no automatic trust approval occurs.
+6. Refresh the dashboard, inspect diagnostics, then submit a real job when ready.
    Environment ready, daemon healthy, verified weights, model loaded and a real
    playable video are distinct milestones. A successful scan proves none of them.
 
@@ -145,11 +145,11 @@ Korea and USA absent separate authorization; commercial products/services above
 USD 20 million annual revenue require prior written authorization; commercial UI
 must prominently display “MiniMax H3”. Redistribution needs the Agreement, required
 NOTICE/modification marking and downstream obligations. AUP/safeguard/reporting
-duties and restrictions on improving unrelated AI models also apply. A checkbox
+duties and restrictions on improving unrelated AI models also apply. An Install action
 cannot cure ineligibility. Both Abiray cards declare MiniMax H3 Community License
 (`other`); Winnougan encoder publisher metadata says Apache-2.0 but does **not**
 remove upstream MiniMax/Qwen derivative obligations. The UI presents these
-provenance disclosures with the full upstream license before separate approvals.
+provenance disclosures with the full upstream license before the single Install action.
 Review runtime/component licenses independently. The
 controller distribution contains the license, **not weights**, and does not infer
 user eligibility or grant rights to third-party software.

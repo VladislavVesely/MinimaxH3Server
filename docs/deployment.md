@@ -39,47 +39,46 @@ CI. Their existence and POSIX test results are not Windows certification.
 
 Bootstrap the exact loopback origin with its single-use fragment token; all
 controller API routes retain cookie, exact Host/Origin, CSRF and body limits.
-SSH passwords are memory-only, never persisted. Authentication may explicitly
-consent to retention in the local controller for setup recovery; the UI presents
-a checked, clearly explained checkbox and submits that consent. API callers must
-opt in. Sudo credentials remain request-scoped and are never retained for recovery.
-Disconnect, target switching, opt-out, session expiry and shutdown clear retained
-credentials. Python cannot reliably zeroize strings; bounded in-flight IO may
-hold references until cancellation completes. Restarting the controller, or
-opting out, requires manual authentication and **Restore saved setup**.
+SSH passwords are memory-only, never persisted. The UI's inline authentication
+notice discloses target/session-bound reuse for setup, sudo and reconnection and
+submits `reuse_for_setup:true`. API consent defaults remain false. Completion,
+failure, cancellation, disconnect/target change, session expiry and shutdown clear
+retained credentials. Python cannot reliably zeroize strings; bounded in-flight
+IO may hold references until cancellation completes. A restarted controller
+requires authentication again. See [the composite contract](one-click-controller.md)
+for exact lifecycle, request IDs, cancellation and conservative recovery limits.
 
-1. Connect, explicitly approve the fingerprint, authenticate, and scan.
-2. Select an experimental profile and **Stage release & review plan**. This
-   explicitly transfers a verified wheel and immutable versioned `daemon.json`
-   over SFTP, using private directories/files and refusing path aliases. It
-   inspects prerequisite changes without executing them.
-3. Review the complete license/eligibility restrictions, installation plan and
-   separate service-registration document. `setup/install` requires matching
-   plan/service digests and explicit attestations/system consent. Sudo is stdin
-   only. General installation approval does not authorize reboot or downloads.
-4. Python/selector prerequisite rounds use the fixed SSH transaction guardian.
-   Their durable status is readable over SFTP even before Python exists. Successful
-   rounds automatically inspect again and request fresh approvals in the same
-   wizard. Restore also replans a completed prerequisite round. Failed prerequisite
-   rounds need renewed approval/credentials, not a Python resume command.
-5. Environment work is detached through the existing recovery/user-systemd
-   contract. Restore/replay after reconnect uses remote checkpoints; reboot is
-   separately digest-approved and requires the durable waiting-for-reboot state.
-   With memory-retention consent, the live controller automatically reconnects
-   after reboot or setup SSH loss (120-second budget, 0.5–8 second backoff),
-   verifies known-host pins and the same target/root/release/plan digest, then
-   replays progress. It never reissues install, resume, sudo or reboot. Unknown/
-   changed keys, authentication failures and binding mismatches stop retries;
-   explicit connection operations cancel/join the previous worker.
-6. Activate only after environment verification, then separately approve model
-   acquisition. Model downloads emit real byte/file progress, resume pinned partial
-   files, and support cooperative cancellation without claiming completion.
-7. Refresh the dashboard, review actual diagnostics, submit source-valid settings,
-   and inspect/cancel queued jobs or preview/download completed output.
+1. Connect, explicitly verify the host fingerprint, authenticate, and scan.
+2. Select an experimental model in step04. Details change with the selection:
+   exact selected bytes, GPU guidance, unknown memory fit, auxiliary components,
+   full pinned license and provenance. Selection alone starts nothing; step03's
+   comparison and the separate approval controls are removed, not CSS-hidden.
+3. **Install** authorizes the disclosed source-owned composite workflow. It stages
+   the verified wheel/private immutable configuration, inspects prerequisites,
+   internally binds exact plan/service/artifact/license digests, installs required
+   OS/runtime/user-service prerequisites, performs bounded replans, reboots if
+   required, reconnects with normal host verification, activates, and downloads
+   only the selected artifacts. The SSH password is also used for fixed sudo
+   operations via stdin, never argv. No arbitrary command or package input exists.
+4. Observe real phases/checkpoints/events; no timer-derived percentage. Reload
+   restores controller-memory progress; restart requires authentication again.
+   The target's durable bootstrap/launch markers prevent ambiguous privileged
+   replay. Unknown outcomes stop for inspection, not repeated Install clicks.
+5. **Cancel setup** stops subsequent actions and requests cancellation only of
+   this setup's owned download. It is not rollback or a guarantee detached remote
+   work stopped offline. Wait for `busy:false` before target changes or retry.
+   Sudo/password-policy rejection is explicit, not a second normal password form.
+6. Refresh the dashboard and inspect actual diagnostics, then submit source-valid
+   generation settings and inspect/cancel jobs or preview/download completed output.
+
+Advanced low-level plan/install/reboot/activation/download routes remain available
+with their original independent explicit authorization. Their approvals are not
+removed globally. Composite activation always rejects existing busy jobs.
 
 `setup/events?after=N` returns durable setup snapshots plus exclusive-cursor event
 pages and retention resets. `remote/events?after=N` proxies finite SSE replay pages;
-the UI polls for additional real events, never advances synthetic progress.
+the generation UI polls for additional real events. Setup uses `/setup/status`
+(or the `setup` document in `/status`) with real checkpoint events, never synthetic progress.
 Generation/media requests use SSH `direct-tcpip` to remote `127.0.0.1:8765`, without
 a public listener or even a local forwarding port. The controller reads the
 private daemon token via SFTP and injects it server-side only. Browser URLs/logs

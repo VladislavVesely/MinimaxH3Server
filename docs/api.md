@@ -32,10 +32,14 @@ suppress arbitrary Paramiko/remote exception text.
 | GET `/status`, `/fingerprint` | SSH state, challenge fingerprint; status includes capabilities and release availability |
 | POST `/connect` | `{host, port:22, username}`; handshake only, no auth |
 | POST `/approve` | `{fingerprint}`; exact pending SHA256 challenge, expires in 120s |
-| POST `/authenticate` | `{password, retain_for_setup_recovery:false}` only after host-key verification; explicit memory-only retention consent |
+| POST `/authenticate` | `{password, reuse_for_setup:false, retain_for_setup_recovery:false}` after host-key verification; setup reuse must be explicitly disclosed |
 | POST `/disconnect` | `{}`; cancel/join recovery, clear retained credentials and close SSH |
 | POST `/recovery/forget` | `{}`; opt out, clear retained SSH credentials and cancel/join recovery |
 | POST `/scan` | `{}`; real read-only probes and experimental profile recommendations |
+| GET `/profiles` | Catalog selection/digests, verified full `license_text` and `license_sha256`; no target IO |
+| POST `/setup/start` | `{profile, artifact_set_digest, request_id}`; HTTP 202, single disclosed Install intent |
+| GET `/setup/status` | Nonblocking composite phases, safe error, rolling real events/checkpoints and independent readiness |
+| POST `/setup/cancel` | `{}`; HTTP 202, clear credential, stop subsequent automatic actions; not rollback |
 | POST `/setup/plan` | `{profile, sudo_password_available:false}`; explicit release staging and plan inspection |
 | POST `/setup/install` | Matching `plan_digest`, `service_digest`; explicit `license_acknowledged`, `eligibility_confirmed`, `privileged`; optional request-only `sudo_password` |
 | POST `/setup/restore` | `{}`; reauthenticate first, restore durable plan/state |
@@ -53,7 +57,13 @@ suppress arbitrary Paramiko/remote exception text.
 | GET `/remote/jobs/{id}/video[?download=true]` | Preview/download; allowlisted Range header forwarded |
 | GET `/openapi.json` | Actual request schemas; same session auth |
 
-`/status` includes safe `recovery: {state, error, cycle, credential_retained}`.
+`/status` includes `setup` and safe `recovery: {state, error, cycle, credential_retained, setup_credential_retained}`.
+The primary UI uses [the composite controller contract](one-click-controller.md),
+not the separate low-level approval sequence. While composite setup is busy,
+mutations reject with `setup_in_progress`; connect/disconnect/forget also signal
+cancellation. Retry the connection action only after `busy:false`.
+
+The underlying reconnect observer remains bounded and observation-only:
 States are `idle`, `connecting`, `backoff`, `recovered`, `failed`; `cycle` changes
 for each recovery attempt so clients can replay once after a rapid recovery.
 Recovery runs for at most 120 seconds including restore; it observes the original
@@ -63,9 +73,12 @@ disconnect and opt-out cancel/join the worker. Terminal trust/authentication,
 timeout or binding failures clear the credential and require manual intervention.
 `setup/reboot` returns `reauthentication_required` plus safe `recovery` status.
 
-Booleans default false where consent is involved (the UI visibly preselects the
-memory-only retention checkbox and explicitly submits its value). A plan digest binds approval to
-exact changes; approving a different/replanned digest is mandatory. `installer` or
+Booleans default false where consent is involved. The UI discloses memory-only
+reuse inline at authentication and sends `reuse_for_setup:true`; there is no
+retention checkbox or second normal sudo field. A plan digest binds approval to
+exact changes. The composite coordinator supplies fresh exact-digest approvals
+only within the original selected Install intent; low-level callers must still
+supply each route’s explicit approvals. `installer` or
 `generation` capability means that the controller has the path implemented, not
 that a target runtime/model is ready. The controller reads `config/remote-token`
 over SFTP and injects it server-side; browser code never receives the remote token.
