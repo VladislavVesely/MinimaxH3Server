@@ -734,7 +734,7 @@ class SSHConnection:
         from h3server.installer.planner import ReleaseArtifact
         if (not isinstance(artifact, ReleaseArtifact) or not _absolute_path(root) or '..' in root.split('/')
                 or not re.fullmatch('[a-f0-9]{64}', digest)
-                or action not in {'snapshot', 'activate', 'download', 'cancel-download', 'repair', 'install-update'}):
+                or action not in {'snapshot', 'activate', 'download', 'cancel-download', 'repair', 'install-update', 'retry-stage'}):
             raise ValueError('invalid deployment operation')
         wheel = root + '/releases/' + artifact.release_id + '/' + artifact.filename
         argv = ['env', '-u', 'PYTHONHOME', '-u', 'PYTHONSTARTUP', 'PYTHONNOUSERSITE=1', 'PYTHONPATH=' + wheel,

@@ -8,6 +8,7 @@ import subprocess
 import codecs
 import selectors
 import time
+import math
 
 from h3server.installer.diagnostics import safe_log, bounded, retry_reason
 
@@ -31,6 +32,8 @@ class ProcessIO:
     lock_fd = None
 
     def __init__(self, command_timeout=3600):
+        if not isinstance(command_timeout, (int, float)) or not math.isfinite(command_timeout) or not 0 < command_timeout <= 86400:
+            raise ValueError('command deadline must be finite and in (0, 86400] seconds')
         self.command_timeout = command_timeout
 
     def run(self, argv, *, env, log, capture=False):
@@ -65,12 +68,15 @@ class ProcessIO:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 try:
                     while True:
+                        notify('flush')
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise CommandFailure('command deadline exceeded')
                         if not selector.select(min(remaining, .5)):
                             continue
                         chunk = os.read(process.stdout.fileno(), 4096)
+                        if chunk:
+                            notify('activity')
                         text = decoder.decode(chunk, final=not chunk)
                         for part in text.splitlines(keepends=True):
                             if not dropping:
@@ -92,9 +98,11 @@ class ProcessIO:
                     if pending:
                         emit(pending)
                     code = process.wait(timeout=max(.01, deadline - time.monotonic()))
-                except BaseException:
+                except BaseException as error:
                     process.kill()
                     process.wait()
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        raise CommandFailure('command deadline exceeded') from None
                     raise
             if code:
                 raise CommandFailure(f'command {label} exited {code}: {tail.strip() or "no output"}')
@@ -184,6 +192,11 @@ class Steps:
     def acquire(self, *argv):
         # Only git fetch and pip install enter this boundary. No APT, sudo,
         # checkout, verification or environment mutations are auto-retried.
+        pip_install = argv[:4] == (self.python, '-m', 'pip', 'install')
+        git_fetch = (len(argv) > 6 and argv[:2] == ('git', '-C')
+                     and argv[3:6] == ('-c', 'core.hooksPath=/dev/null', 'fetch'))
+        if not (pip_install or git_fetch):
+            raise ValueError('only fixed dependency acquisition commands may be retried')
         fresh = False
         for attempt in range(3):
             try:
@@ -193,7 +206,7 @@ class Steps:
                 if reason is None or attempt == 2 or (reason == 'fresh-index' and fresh):
                     raise
                 if reason == 'fresh-index':
-                    if 'pip' not in argv:
+                    if not pip_install:
                         raise
                     fresh = True
                     # Bypass HTTP/index cache once without deleting wheel caches,
@@ -274,12 +287,22 @@ class Steps:
             "artifact": self.plan["artifact"],
         }, sort_keys=True) + "\n")
 
+    def pip_install(self, *arguments):
+        # Rich terminal bars suppress intermediate updates on pipes. Newer pip
+        # offers newline-delimited measured bytes; older supported pip still
+        # emits verbose package/source activity without a made-up percentage.
+        self.phase('python-packages', 'Inspect pip progress output capability')
+        help_text = self.run(self.python, '-m', 'pip', 'help', 'install', capture=True)
+        progress = 'raw' if re.search(r'\braw\b', help_text) else 'off'
+        self.phase('python-packages', 'Install Python packages: ' + ', '.join(self.plan['requirements']))
+        self.acquire(self.python, '-m', 'pip', 'install', '--progress-bar', progress,
+                     '--verbose', '--timeout', '30', '--retries', '0', *arguments)
+
     def dependencies(self):
         if self.plan.get('runtime') is not None:
             return self.pruned_dependencies()
         wheel = artifact_path(self.paths, self.plan)
-        self.phase("python-packages", "Install Python packages: " + ", ".join(self.plan["requirements"]))
-        self.acquire(self.python, "-m", "pip", "install", "--progress-bar", "on", "--timeout", "30", "--retries", "0", "--index-url", "https://pypi.org/simple",
+        self.pip_install("--index-url", "https://pypi.org/simple",
                  "--only-binary=:all:", "--report", str(self.directory / "resolution.json"), str(wheel), *self.plan["requirements"])
         self.phase("runtime-checks", "Verify installed Python packages (pip check)")
         self.run(self.python, "-m", "pip", "check")
@@ -306,6 +329,7 @@ class Steps:
                      'fetch', '--progress', '--depth=1', '--no-tags', 'https://github.com/' + source['repository'] + '.git', source['revision'])
             self.run('git', '-C', str(dest), '-c', 'core.hooksPath=/dev/null',
                      'checkout', '--detach', source['revision'])
+        self.phase('runtime-checks', 'Verify pinned runtime source files')
         verify_sources(self.directory, self.plan['profile'])
         args = []
         for source in contract['sources']:
@@ -314,8 +338,7 @@ class Steps:
         if resolved.exists():
             args.extend(('-c', str(resolved)))
         wheel = artifact_path(self.paths, self.plan)
-        self.phase("python-packages", "Install Python packages: " + ", ".join(self.plan["requirements"]))
-        self.acquire(self.python, '-m', 'pip', 'install', "--progress-bar", "on", "--timeout", "30", "--retries", "0", '--index-url', 'https://pypi.org/simple',
+        self.pip_install('--index-url', 'https://pypi.org/simple',
                  '--only-binary=:all:', '--report', str(self.directory / 'resolution.json'),
                  str(wheel), *self.plan['requirements'], *args)
         self.phase('runtime-checks', 'Verify installed Python packages (pip check)')

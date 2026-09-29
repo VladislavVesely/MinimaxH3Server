@@ -227,13 +227,13 @@ def test_composite_recovery_security_failure_never_replays(flow, monkeypatch, fa
 
 
 @pytest.mark.parametrize('existing', ['ready', 'failed'])
-def test_ready_and_resumable_checkpoints_do_not_repeat_privileged_install(flow, existing):
+def test_existing_checkpoints_never_repeat_privilege_or_implicitly_retry_failure(flow, existing):
     app, client, headers, calls, passwords, state, _ = flow
     state['setup'] = existing
     assert start(client, headers).status_code == 202
-    assert finished(app)['state'] == 'completed'
+    assert finished(app)['state'] == ('completed' if existing == 'ready' else 'failed')
     assert 'prepare' not in calls and not passwords
-    assert calls.count('resume') == (1 if existing == 'failed' else 0)
+    assert 'resume' not in calls and 'retry-stage' not in calls
 
 
 def test_running_foreign_operation_is_rejected_not_cancelled(flow):

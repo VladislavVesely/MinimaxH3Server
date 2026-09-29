@@ -196,6 +196,10 @@ class SetupStartRequest(StrictRequest):
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{8,64}$')
 
 
+class SetupRetryRequest(SetupStartRequest):
+    plan_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class PlanRequest(StrictRequest):
     profile: str = Field(min_length=1, max_length=100)
     sudo_password_available: bool = False
@@ -428,6 +432,18 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @app.post(API + '/setup/start', status_code=202)
     def setup_start(body: SetupStartRequest):
         return setup.start(body.profile, body.artifact_set_digest, body.request_id)
+
+    @app.post(API + '/setup/retry', status_code=202)
+    def retry_setup(body: SetupRetryRequest):
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest)
+
+    @app.post(API + '/setup/restore-compatible')
+    @observed
+    def restore_compatible(body: EmptyRequest):
+        document = deployment.restore_compatible_failure()
+        if document is None:
+            raise ControllerError('matching_release_required')
+        return {**document, 'snapshot': deployment.snapshot()}
 
     @app.get(API + '/setup/status')
     def setup_status():

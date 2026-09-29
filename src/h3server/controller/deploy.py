@@ -141,9 +141,11 @@ class Deployment:
         self.connection, self.release = connection, release
         self.plan = self.service = None
         self.root = None
+        self.compatible = False
 
     def reset(self):
         self.plan = self.service = self.root = None
+        self.compatible = False
 
     def _authenticated(self):
         if self.connection.status()['state'] != 'authenticated':
@@ -264,6 +266,55 @@ class Deployment:
                 if not result.succeeded:
                     raise ControllerError('service_plan_unavailable', 502)
                 self.service = json.loads(result.stdout)
+            return self.document()
+
+    def restore_compatible_failure(self):
+        """Explicit Install/retry discovery only; normal restore remains exact-release.
+
+        Stage only locally trusted worker/payload bytes, never execute the wheel
+        named by a remote discovery record. No checkpoint, approval or units are
+        rewritten and the original environment digest remains authoritative.
+        """
+        from h3server.installer.compatibility import compatible_plan, previous_payload, PREVIOUS_ARTIFACT
+        from h3server.controller.discovery import record as read_record, directory, strict_json
+        with self.connection.lock:
+            self._authenticated()
+            if self.compatible and self.plan is not None:
+                return self.document()
+            with self.connection.private_sftp() as sftp:
+                try:
+                    _, record, _ = read_record(sftp, self.root)
+                except FileNotFoundError:
+                    return None
+                except (ValueError, TypeError, KeyError, ControllerError):
+                    raise ControllerError('stale_discovery_unproven') from None
+                if record.get('artifact') != asdict(PREVIOUS_ARTIFACT) or record['artifact'] == asdict(self.release.artifact):
+                    return None
+                digest = record.get('digest')
+                if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):
+                    raise ControllerError('invalid_checkpoint')
+                try:
+                    directory(sftp, f'{self.root}/bootstrap/{digest}')
+                    directory(sftp, f'{self.root}/releases/{PREVIOUS_ARTIFACT.release_id}')
+                    plan = strict_json(_read(sftp, f'{self.root}/bootstrap/{digest}/plan.json'))
+                    compatible_plan(plan)
+                    if canonical_plan_digest(plan) != digest or plan.get('deployment_config') != {'port': 8765, 'root': self.root}:
+                        raise ValueError()
+                except (OSError, ValueError, TypeError, KeyError, ControllerError):
+                    raise ControllerError('compatible_retry_contract_changed') from None
+            with self.connection.staging_transaction(self.root) as check:
+                with self.connection.private_sftp() as sftp:
+                    if json.loads(_read(sftp, self.root + '/config/deployment.json')) != record:
+                        raise ControllerError('selection_changed')
+                    for artifact, data in ((self.release.artifact, self.release.data), (PREVIOUS_ARTIFACT, previous_payload())):
+                        check()
+                        _write(sftp, f'{self.root}/releases/{artifact.release_id}/{artifact.filename}', data, immutable=True)
+                observed = self.connection.deployment_action(root=self.root, artifact=self.release.artifact,
+                    digest=digest, action='snapshot', data={'after': 0})
+                if not observed.get('retry', {}).get('eligible') or observed.get('active_release'):
+                    raise ControllerError('compatible_retry_not_safe')
+                check()
+            self.plan, self.service, self.compatible = plan, None, True
             return self.document()
 
     def document(self):
@@ -446,7 +497,15 @@ class Deployment:
                 if not result.succeeded:
                     raise ControllerError('reboot_launch_failed', 502)
                 return {'state': 'accepted', 'reauthentication_required': True}
+            if action == 'retry-stage':
+                snapshot = self.snapshot()
+                if not snapshot.get('retry', {}).get('eligible'):
+                    raise ControllerError('setup_retry_not_safe')
+                return self.connection.deployment_action(root=self.root, artifact=self.release.artifact,
+                    digest=digest, action=action, data={'plan_digest': digest})
             if action == 'resume':
+                if self.compatible:
+                    raise ControllerError('setup_retry_not_safe')
                 if self.plan['purpose'] == 'prerequisites':
                     raise ControllerError('fresh_prerequisite_approval_required')
                 snapshot = self.snapshot()

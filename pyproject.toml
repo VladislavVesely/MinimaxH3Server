@@ -28,6 +28,7 @@ packaging = ["build>=1.2,<2", "pyinstaller>=6.12,<7"]
 where = ["src"]
 
 [tool.setuptools.package-data]
+"h3server.installer" = ["compat/*.whl"]
 "h3server.backends" = ["manifest.json", "LICENSE.h3.txt"]
 "h3server" = ["web/*.html", "web/*.js", "web/*.css"]
 

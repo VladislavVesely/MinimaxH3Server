@@ -54,14 +54,14 @@ class SetupCoordinator:
         with self._lock:
             self._status.update(values)
 
-    def start(self, profile, artifact_set_digest, request_id):
+    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None):
         # Serialized with explicit controller operations, but never with worker IO.
         with self.recovery.operations, self._lock:
             selection = profile_document(profile)
             if selection['artifact_set_digest'] != artifact_set_digest:
                 raise ControllerError('selection_changed')
             binding = (profile, artifact_set_digest)
-            request_binding = (self.recovery.target(), binding)
+            request_binding = (self.recovery.target(), binding, retry_digest)
             if request_id in self._requests:
                 prior_binding, prior_status = self._requests[request_id]
                 if request_binding != prior_binding:
@@ -71,7 +71,8 @@ class SetupCoordinator:
                 raise ControllerError('setup_in_progress')
             if len(self._requests) >= 32:
                 raise ControllerError('setup_session_limit')
-            target = self.recovery.setup_target()
+            target = self.recovery.setup_target() if retry_digest is None else self.recovery.target()
+            self._retry_digest = retry_digest
             if self._observe_connection()['state'] != 'authenticated':
                 raise ControllerError('authentication_required')
             if self.deployment.release is None:
@@ -123,6 +124,12 @@ class SetupCoordinator:
         if time.monotonic() >= self._deadline:
             raise ControllerError('setup_timeout')
         # Every operation is bound to the consenting authenticated target/session.
+        if self._retry_digest is not None:
+            if self.recovery.target() != self._target:
+                raise ControllerError('recovery_binding_changed')
+            if self.connection.status()['state'] != 'authenticated':
+                raise ControllerError('setup_reauthentication_required')
+            return
         try:
             self.recovery.setup_password(self._target)
         except ControllerError:
@@ -172,7 +179,7 @@ class SetupCoordinator:
         document = self.deployment.document()
         if ((document['plan']['profile'], document['selection']['artifact_set_digest']) != self._selection
                 or self.deployment.release.artifact != self._release
-                or document['plan']['artifact'] != asdict(self._release)
+                or (document['plan']['artifact'] != asdict(self._release) and not self.deployment.compatible)
                 or (self._root is not None and self.deployment.root != self._root)):
             raise ControllerError('selection_changed')
         if document['plan'].get('artifact_set_digest') != self._selection[1]:
@@ -185,7 +192,8 @@ class SetupCoordinator:
         self._binding()
         self._cursor = snapshot['cursor']
         self._events = (self._events + snapshot['events'])[-100:]
-        self._publish(snapshot={**snapshot, 'events': self._events})
+        self._publish(snapshot={**snapshot, 'events': self._events},
+                      diagnostics=snapshot.get('diagnostics'), retry=snapshot.get('retry'))
         return snapshot
 
     def _action(self, action, **values):
@@ -194,6 +202,15 @@ class SetupCoordinator:
             'plan_digest': document['plan_digest'], **values}), mutation=True)
 
     def _initial_plan(self):
+        compatible = self._call(self.deployment.restore_compatible_failure)
+        if compatible is not None:
+            return compatible
+        if self._retry_digest is not None:
+            if self.deployment.plan is None:
+                self._call(lambda: self.deployment.restore(observation_only=True))
+            if canonical_plan_digest(self.deployment.plan) != self._retry_digest:
+                raise ControllerError('selection_changed')
+            return self._binding()
         fresh = self._call(lambda: self.deployment.rediscover_stale_plan(self._selection[0]), mutation=True)
         if fresh is not None:
             return fresh
@@ -226,7 +243,11 @@ class SetupCoordinator:
         self._download_operation = None
         try:
             self._initial_plan()
+            if self._retry_digest is not None and canonical_plan_digest(self.deployment.plan) != self._retry_digest:
+                raise ControllerError('selection_changed')
             self._root = self.deployment.root
+            if self._retry_digest is not None and not self._snapshot().get('retry', {}).get('eligible'):
+                raise ControllerError('setup_retry_not_safe')
             while True:
                 document = self._binding()
                 digest, plan = document['plan_digest'], document['plan']
@@ -250,15 +271,16 @@ class SetupCoordinator:
                 if state == 'ready':
                     break
                 if state == 'failed':
-                    # Resume only unprivileged environment stages with durable receipt.
-                    if plan['purpose'] != 'environment' or digest in submitted:
+                    if digest in resumed:
+                        operation = snapshot.get('operation')
+                        if (operation and operation.get('action') == 'retry-stage' and operation.get('state') in {'failed', 'interrupted'}) or time.monotonic() - resumed[digest] > 30:
+                            raise ControllerError('setup_install_failed')
+                    elif self._retry_digest != digest or not snapshot.get('retry', {}).get('eligible') or digest in submitted:
                         raise ControllerError('setup_install_failed')
-                    if digest not in resumed:
+                    else:
                         resumed[digest] = time.monotonic()
                         self._publish(phase='installing')
-                        self._action('resume')
-                    elif time.monotonic() - resumed[digest] > 30:
-                        raise ControllerError('setup_install_failed')
+                        self._action('retry-stage')
                 elif state == 'waiting_for_reboot':
                     self._publish(phase='rebooting')
                     if digest not in rebooted:
@@ -319,7 +341,8 @@ class SetupCoordinator:
                     'setup_credential_check_failed', 'setup_credential_required', 'setup_reauthentication_required',
                     'authentication_failed', 'host_key_changed', 'trust_required', 'reconnect_timeout',
                     'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
-                    'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost'}
+                    'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost',
+                    'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)

@@ -331,7 +331,7 @@ def _detach(keep_fd):
     return True
 
 
-def snapshot(paths, store, after):
+def snapshot(paths, store, after, digest=None):
     from h3server.events import ReplayGap
     try:
         result = Recovery(paths, store).snapshot(after=after)
@@ -350,6 +350,23 @@ def snapshot(paths, store, after):
                 result['operation']['state'] = 'interrupted'
         except BlockingIOError:
             pass
+    if digest is not None:
+        selected = [s for s in store.list_setups(limit=1000) if s.plan_digest == digest]
+        if len(selected) > 1:
+            raise ValueError('ambiguous selected setup')
+        result['setups'] = [asdict(s) for s in selected]
+        ids = {s.setup_id for s in selected}
+        result['events'] = [e for e in result['events'] if e['subject_id'] in ids]
+        if selected:
+            from h3server.installer.diagnostics import read_diagnostics
+            result['diagnostics'] = read_diagnostics(paths, selected[0])
+            result['retry'] = Recovery(paths, store).retry_eligibility(selected[0])
+            if result['operation'] and result['operation']['state'] in {'running', 'interrupted'}:
+                result['retry'] = {'eligible': False, 'stage': None, 'reason': 'deployment_busy',
+                                   'next_action': 'Wait for the deployment operation or repair its interrupted checkpoint.'}
+        else:
+            result['diagnostics'] = None
+            result['retry'] = {'eligible': False, 'stage': None, 'reason': 'no_failed_setup', 'next_action': 'Install the selected plan.'}
     return result
 
 
@@ -357,7 +374,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', required=True)
     parser.add_argument('--digest', required=True)
-    parser.add_argument('action', choices=('snapshot', 'activate', 'download', 'cancel-download', 'repair', 'install-update'))
+    parser.add_argument('action', choices=('snapshot', 'activate', 'download', 'cancel-download', 'repair', 'install-update', 'retry-stage'))
     args = parser.parse_args()
     os.umask(0o077)
     if os.geteuid() == 0 or not re.fullmatch('[a-f0-9]{64}', args.digest):
@@ -369,7 +386,7 @@ def main():
         raise ValueError('stale plan')
     store = Store(paths.state / 'setup.sqlite3')
     if args.action == 'snapshot':
-        print(json.dumps(snapshot(paths, store, data['after'])))
+        print(json.dumps(snapshot(paths, store, data['after'], args.digest)))
         return
     if args.action == 'cancel-download':
         record = read_json(paths, 'state/operation.json')
@@ -403,6 +420,12 @@ def main():
         setup = setups[0]
         if args.action in {'activate', 'download'} and setup.state != SetupState.READY:
             raise ValueError('verified environment required')
+        if args.action == 'retry-stage':
+            if not Recovery(paths, store).retry_eligibility(setup)['eligible']:
+                raise ValueError('failed stage is not eligible for safe retry')
+            previous = snapshot(paths, store, 0, args.digest).get('operation')
+            if previous and previous['state'] in {'running', 'interrupted'}:
+                raise ValueError('conflicting deployment operation')
         operation = uuid.uuid4().hex
         record = {'operation': operation, 'action': args.action, 'state': 'running', 'plan_digest': args.digest}
         atomic_json(paths, 'state/operation.json', record)
@@ -410,7 +433,9 @@ def main():
             print(json.dumps({'state': 'accepted', 'operation': operation}))
             return
         try:
-            if args.action == 'activate':
+            if args.action == 'retry-stage':
+                Recovery(paths, store).retry_stage(setup.setup_id, args.digest)
+            elif args.action == 'activate':
                 with Installer(paths, store).lock():
                     Activation(paths).run(plan, operation, policy=data['policy'], cancel_confirmed=data.get('cancel_confirmed', False))
             elif args.action == 'repair':

@@ -449,7 +449,8 @@ class Recovery:
     def _receipt(self, setup, digest):
         if digest != setup.plan_digest:
             raise ApprovalRequired('stale recovery digest')
-        record = json.loads(self._receipt_path(digest).read_text())
+        from h3server.backends.base import read_json, regular_file
+        record = read_json(self.paths, f'bootstrap/{digest}/recovery.json')
         approval = Approval(**record['approval'])
         validate_approval(setup.plan, approval)
         if approval.privileged is not True:
@@ -458,8 +459,9 @@ class Recovery:
         if record['setup_id'] != setup.setup_id or record['service_plan'] != expected or record['service_digest'] != canonical_plan_digest(expected):
             raise ApprovalRequired('service approval mismatch; reapprove registration')
         for name, text in render_units(self.paths, setup.plan).items():
-            if _unit_path(self.paths, name).read_text() != text:
-                raise ApprovalRequired('registered unit changed; reapprove registration')
+            with regular_file(self.paths, 'config/systemd/' + name) as stream:
+                if stream.read(65537).decode('utf-8') != text:
+                    raise ApprovalRequired('registered unit changed; reapprove registration')
         return approval
 
     def prepare(self, setup_id, approval, *, service_digest):
@@ -504,6 +506,44 @@ class Recovery:
         approval = self._receipt(setup, digest)
         runner = self._runner(setup.plan, unprivileged=True)
         return runner.run(setup_id, approval, unprivileged=True)
+
+    def retry_eligibility(self, setup, *, check_lock=True):
+        """Declare only failed unprivileged stages with intact privileged receipt."""
+        from h3server.installer.runner import InstallerBusy
+        def blocked(reason, action):
+            return {'eligible': False, 'reason': reason, 'next_action': action, 'stage': None}
+        if setup.state != SetupState.FAILED:
+            return blocked('setup_not_failed', 'Wait for the active stage or inspect its final status.')
+        statuses = [(s.name, s.status) for s in setup.stages]
+        failed = [name for name, status in statuses if status == StageStatus.FAILED]
+        if failed not in (['dependencies'], ['verify']):
+            return blocked('stage_not_safe', 'Inspect the failed prerequisite/environment stage; no automatic privileged retry.')
+        index = [s.name for s in setup.stages].index(failed[0])
+        if (any(s.status != StageStatus.COMPLETED for s in setup.stages[:index])
+                or any(s.status != StageStatus.PENDING for s in setup.stages[index + 1:])):
+            return blocked('checkpoint_inconsistent', 'Inspect the saved stage sequence before repair.')
+        try:
+            self._receipt(setup, setup.plan_digest)
+            if check_lock:
+                with self._runner(setup.plan, unprivileged=True).lock():
+                    pass
+        except InstallerBusy:
+            return blocked('installer_busy', 'Wait for the existing installer and its children to exit.')
+        except (OSError, ValueError, KeyError, TypeError, ApprovalRequired):
+            return blocked('recovery_receipt_invalid', 'Restore the approved service receipt and unchanged units before retry.')
+        return {'eligible': True, 'reason': 'failed_unprivileged_stage', 'stage': failed[0],
+                'next_action': 'Retry failed stage with unchanged pins; completed privileged work and caches are preserved.'}
+
+    def retry_stage(self, setup_id, digest):
+        setup = self.store.get_setup(setup_id)
+        runner = self._runner(setup.plan, unprivileged=True)
+        with runner.lock():
+            setup = self.store.get_setup(setup_id)
+            if digest != setup.plan_digest or not self.retry_eligibility(setup, check_lock=False)['eligible']:
+                raise ApprovalRequired('failed stage is not eligible for safe retry')
+            approval = self._receipt(setup, digest)
+            runner.inherited_lock_fd = runner.io.lock_fd
+            return runner.run(setup_id, approval, unprivileged=True)
 
     def request_reboot(self, setup_id, approval):
         setup = self.store.get_setup(setup_id)

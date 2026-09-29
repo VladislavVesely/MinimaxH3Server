@@ -54,7 +54,7 @@ def test_installer_provisions_only_approved_runtime_and_records_freeze(tmp_path,
     calls=[c for c,e in io.calls]
     fetches=[c for c in calls if 'fetch' in c]
     assert [c[-2:] for c in fetches] == [('https://github.com/'+s['repository']+'.git',s['revision']) for s in p['runtime']['sources']]
-    pip=next(c for c in calls if 'install' in c and 'pip' in c)
+    pip=next(c for c in calls if c[1:4] == ('-m', 'pip', 'install'))
     assert '--only-binary=:all:' in pip and not any('diffusers' in v for v in pip)
     assert str(env/'ComfyUI/requirements.txt') in pip
     assert str(env/'ComfyUI-GGUF/requirements.txt') in pip

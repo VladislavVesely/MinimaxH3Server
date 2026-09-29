@@ -71,3 +71,45 @@ def test_diagnostics_reject_symlink_and_legacy_tail_is_confined(tmp_path):
 def test_retry_classification(text, expected):
     from h3server.installer.diagnostics import retry_reason
     assert retry_reason(text) == expected
+
+
+@pytest.mark.parametrize('deadline', [0, -1, float('inf'), float('nan'), 86401])
+def test_command_deadline_must_be_finite(deadline):
+    with pytest.raises(ValueError):
+        ProcessIO(command_timeout=deadline)
+
+
+def test_closed_output_child_deadline_never_exposes_python_argv():
+    script = "import os,time; os.close(1); os.close(2); time.sleep(10) # SECRET-ARGV"
+    with pytest.raises(CommandFailure, match='deadline') as failure:
+        ProcessIO(command_timeout=.1).run((sys.executable, '-c', script), env={}, log=io.StringIO())
+    assert 'SECRET-ARGV' not in str(failure.value)
+
+
+def test_secret_values_and_bearer_headers_are_redacted_across_chunks():
+    stream = io.StringIO()
+    script = "import sys; sys.stdout.write('x'*4090 + 'Authorization: Bearer TOKEN-VALUE\\n'); print('opaque ENV-SECRET')"
+    ProcessIO().run((sys.executable, '-c', script), env={**os.environ, 'MY_SECRET': 'ENV-SECRET'}, log=stream)
+    assert 'TOKEN-VALUE' not in stream.getvalue()
+    assert 'ENV-SECRET' not in stream.getvalue()
+
+
+def test_persisted_diagnostics_are_schema_filtered_and_symlink_confined(tmp_path):
+    from h3server.installer.diagnostics import Diagnostics, read_diagnostics
+    paths, plan, store = prepared(tmp_path)
+    setup = store.create_setup(plan)
+    log = Diagnostics(paths, setup.setup_id, setup.plan_digest)
+    log.write('ordinary output\n')
+    path = paths.logs / f'installer-{setup.setup_id}.diagnostics.json'
+    record = json.loads(path.read_text())
+    record['arbitrary_secret'] = 'NEVER-FORWARD'
+    record['stage'] = '<script>'
+    path.write_text(json.dumps(record))
+    public = read_diagnostics(paths, setup)
+    assert 'NEVER-FORWARD' not in json.dumps(public)
+    assert '<script>' not in json.dumps(public)
+    saved = paths.logs / 'saved.json'
+    path.rename(saved)
+    path.symlink_to(saved)
+    with pytest.raises((OSError, ValueError)):
+        read_diagnostics(paths, setup)
