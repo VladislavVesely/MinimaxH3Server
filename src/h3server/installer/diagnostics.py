@@ -17,8 +17,8 @@ TAIL_BYTES = 32 * 1024
 def safe_log(text):
     text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
     text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
-    text = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', text)
-    text = re.sub(r'(https?://[^\s?#]+)[?#][^\s]*', r'\1[redacted]', text)
+    text = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', text, flags=re.IGNORECASE)
+    text = re.sub(r'(https?://[^\s?#]+)[?#][^\s]*', r'\1[redacted]', text, flags=re.IGNORECASE)
     text = re.sub(r'(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+[^\s]+', 'Authorization: [redacted]', text)
     text = re.sub(r'(?i)\b([a-z0-9_-]*(?:authorization|password|passwd|token|secret|api[_-]?key))(\s*[:=]\s*)[^\s]+', r'\1\2[redacted]', text)
     # Keep plain text safe even for accidental HTML rendering. ESC/format/bidi

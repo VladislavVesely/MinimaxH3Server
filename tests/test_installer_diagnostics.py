@@ -142,3 +142,22 @@ def test_legacy_oversized_line_without_boundary_is_not_exposed(tmp_path):
     file = paths.logs / f'installer-{setup.setup_id}.log'
     file.write_text('Authorization: Bearer ' + 's' * (TAIL_BYTES + 10))
     assert read_diagnostics(paths, setup)['tail'] == ''
+
+
+@pytest.mark.parametrize('scheme', ['HTTPS', 'HtTpS', 'HTTP', 'hTtP'])
+def test_url_secrets_are_redacted_for_case_insensitive_schemes(tmp_path, scheme):
+    from h3server.installer.diagnostics import Diagnostics, read_diagnostics, safe_log
+    paths, plan, store = prepared(tmp_path)
+    setup = store.create_setup(plan)
+    line = f'{scheme}://alice:LEAKME@example.test/wheel?sig=QUERYLEAK#FRAGMENTLEAK\n'
+    assert all(secret not in safe_log(line) for secret in ('LEAKME', 'QUERYLEAK', 'FRAGMENTLEAK'))
+    legacy = paths.logs / f'installer-{setup.setup_id}.log'
+    legacy.write_text(line)
+    replay = read_diagnostics(paths, setup)
+    assert 'example.test/wheel' in replay['tail']
+    assert all(secret not in json.dumps(replay) for secret in ('LEAKME', 'QUERYLEAK', 'FRAGMENTLEAK'))
+    log = Diagnostics(paths, setup.setup_id, setup.plan_digest)
+    ProcessIO().run((sys.executable, '-c', 'print(' + repr(line) + ')'), env={}, log=log)
+    exported = json.dumps(read_diagnostics(paths, setup))
+    assert 'example.test/wheel' in exported
+    assert all(secret not in exported for secret in ('LEAKME', 'QUERYLEAK', 'FRAGMENTLEAK'))
