@@ -201,10 +201,12 @@ class Deployment:
                 raise ControllerError('installer_launch_failed', 502)
             return {'state': 'accepted', 'installation_ready': False, 'model_ready': False, 'generation_tested': False}
 
-    def restore(self):
-        """Reopen without saved credentials; discover only after fresh SSH auth."""
+    def restore(self, *, expected_digest=None, expected_root=None, observation_only=False):
+        """Discover authenticated state; automatic recovery may only observe its binding."""
         with self.connection.lock:
             self._authenticated()
+            if expected_root is not None and self.root != expected_root:
+                raise ControllerError('recovery_binding_changed')
             with self.connection.private_sftp() as sftp:
                 record = json.loads(_read(sftp, self.root + '/config/deployment.json'))
                 artifact = ReleaseArtifact(**record['artifact'])
@@ -213,11 +215,14 @@ class Deployment:
                     raise ControllerError('matching_release_required')
                 if not re.fullmatch('[a-f0-9]{64}', record['digest']):
                     raise ControllerError('invalid_checkpoint')
-                self.plan = json.loads(_read(sftp, f"{self.root}/bootstrap/{record['digest']}/plan.json"))
-                if canonical_plan_digest(self.plan) != record['digest']:
+                if expected_digest is not None and record['digest'] != expected_digest:
+                    raise ControllerError('recovery_binding_changed')
+                plan = json.loads(_read(sftp, f"{self.root}/bootstrap/{record['digest']}/plan.json"))
+                if canonical_plan_digest(plan) != record['digest']:
                     raise ControllerError('invalid_checkpoint')
+                self.plan = plan
             self.service = None
-            if self.plan['purpose'] == 'prerequisites' and self.snapshot()['setups'][0]['state'] == 'waiting_for_replan':
+            if not observation_only and self.plan['purpose'] == 'prerequisites' and self.snapshot()['setups'][0]['state'] == 'waiting_for_replan':
                 return self.make_plan(self.plan['profile'])
             if self.plan['purpose'] == 'environment':
                 result = self.connection.recovery(root=self.root, artifact=artifact, digest=record['digest'], action='service-plan')

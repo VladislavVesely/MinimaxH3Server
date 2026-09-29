@@ -39,9 +39,14 @@ CI. Their existence and POSIX test results are not Windows certification.
 
 Bootstrap the exact loopback origin with its single-use fragment token; all
 controller API routes retain cookie, exact Host/Origin, CSRF and body limits.
-SSH passwords and sudo credentials are request-scoped, never persisted. Closing
-or losing SSH requires fresh authentication; there is no promise of retained
-passwords or automatic unattended controller reconnection.
+SSH passwords are memory-only, never persisted. Authentication may explicitly
+consent to retention in the local controller for setup recovery; the UI presents
+a checked, clearly explained checkbox and submits that consent. API callers must
+opt in. Sudo credentials remain request-scoped and are never retained for recovery.
+Disconnect, target switching, opt-out, session expiry and shutdown clear retained
+credentials. Python cannot reliably zeroize strings; bounded in-flight IO may
+hold references until cancellation completes. Restarting the controller, or
+opting out, requires manual authentication and **Restore saved setup**.
 
 1. Connect, explicitly approve the fingerprint, authenticate, and scan.
 2. Select an experimental profile and **Stage release & review plan**. This
@@ -60,6 +65,12 @@ passwords or automatic unattended controller reconnection.
 5. Environment work is detached through the existing recovery/user-systemd
    contract. Restore/replay after reconnect uses remote checkpoints; reboot is
    separately digest-approved and requires the durable waiting-for-reboot state.
+   With memory-retention consent, the live controller automatically reconnects
+   after reboot or setup SSH loss (120-second budget, 0.5–8 second backoff),
+   verifies known-host pins and the same target/root/release/plan digest, then
+   replays progress. It never reissues install, resume, sudo or reboot. Unknown/
+   changed keys, authentication failures and binding mismatches stop retries;
+   explicit connection operations cancel/join the previous worker.
 6. Activate only after environment verification, then separately approve model
    acquisition. Model downloads emit real byte/file progress, resume pinned partial
    files, and support cooperative cancellation without claiming completion.

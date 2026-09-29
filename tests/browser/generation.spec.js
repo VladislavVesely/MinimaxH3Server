@@ -340,3 +340,51 @@ test.describe('rejected setup action preserves installation observation', () => 
     await expect(page.locator('#setup-status')).toContainText('Launch delayed: no running checkpoint observed within 30 seconds.');
   });
 });
+
+test.describe('automatic setup connection recovery', () => {
+  test.use({ controlledSetup: 'planned' });
+  test('delayed transport restoration replays the same setup without another install', async ({ page, controller }) => {
+    const posts = [], errors = [];
+    page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
+    page.on('pageerror', error => errors.push(error.message));
+    await approveControlledSetup(page, controller);
+    await controller.control({ action: 'start-setup' });
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
+    const plan = await page.locator('#plan-document').textContent();
+    await controller.control({ action: 'lose-setup-connection' });
+    await expect(page.locator('#setup-status')).toContainText('Automatic setup recovery', { timeout: 8000 });
+    await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
+    await controller.control({ action: 'finish-setup' });
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 12000 });
+    await expect(page.locator('#plan-document')).toHaveText(plan);
+    await expect(page.locator('#setup-events')).toContainText('completed');
+    expect(posts.filter(url => url.endsWith('/setup/install'))).toHaveLength(1);
+    expect(posts.filter(url => /\/setup\/(resume|reboot|restore)$/.test(url))).toHaveLength(0);
+    expect(posts.filter(url => url.endsWith('/authenticate'))).toHaveLength(1);
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+    await expect(page.locator('body')).not.toContainText('TEST-ONLY-secret');
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe('approved reboot observation recovery', () => {
+  test.use({ controlledSetup: 'reboot' });
+  test('reconnects automatically while the independent bootstrap completes without duplicate commands', async ({ page, controller }) => {
+    const posts = [], errors = [];
+    page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
+    page.on('pageerror', error => errors.push(error.message));
+    await approveControlledSetup(page, controller);
+    await expect(page.locator('#setup-status')).toContainText('waiting_for_reboot');
+    const plan = await page.locator('#plan-document').textContent();
+    await page.getByLabel('Separately approve reboot of this server for this plan').check();
+    await page.getByRole('button', { name: 'Request approved reboot', exact: true }).click();
+    await expect(page.locator('#setup-status')).toContainText('Automatic setup recovery');
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 12000 });
+    await expect(page.locator('#plan-document')).toHaveText(plan);
+    await expect(page.locator('#setup-events')).toContainText('completed');
+    for (const action of ['install', 'reboot']) expect(posts.filter(url => url.endsWith('/setup/' + action))).toHaveLength(1);
+    expect(posts.filter(url => /\/setup\/(resume|restore)$/.test(url))).toHaveLength(0);
+    expect(posts.filter(url => url.endsWith('/authenticate'))).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+});

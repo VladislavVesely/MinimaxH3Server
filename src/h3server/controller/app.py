@@ -4,12 +4,14 @@ Supply the exact listener origin (including its port). Launch the browser at
 ``origin + '/#token=' + app.state.session.bootstrap_token``; the fragment never
 enters HTTP access logs, and the bundled UI removes it before consumption.
 Deployment uses digest-bound approvals; the remote API travels over SSH only.
-Credentials remain request-scoped and never enter URLs or stored setup records.
+SSH credentials may be retained with consent in local controller memory for setup
+recovery. Sudo credentials remain request-scoped; neither enters stored records.
 """
 
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from functools import wraps
 from importlib.resources import files
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
@@ -28,6 +30,7 @@ from starlette.exceptions import HTTPException
 from h3server.backends import load_profiles
 from h3server.controller.deploy import Deployment
 from h3server.controller.proxy import RemoteProxy
+from h3server.controller.reconnection import SetupRecovery
 from h3server.installer.planner import Approval
 from h3server.controller.session import BrowserSession
 from h3server.controller.ssh import ControllerError, SSHConnection
@@ -177,6 +180,7 @@ class ApprovalRequest(StrictRequest):
 
 
 class AuthenticationRequest(StrictRequest):
+    retain_for_setup_recovery: bool = False
     password: SecretStr = Field(min_length=1, max_length=4096)
 
 
@@ -229,21 +233,45 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     connection = connection if connection is not None else SSHConnection(
         state_dir, socket_factory=socket_factory, transport_factory=transport_factory)
 
+    async def expire_credentials():
+        while True:
+            recovery.expire()
+            await run_in_threadpool(recovery.observe)
+            await asyncio.sleep(.1)
+
     @asynccontextmanager
     async def lifespan(app):
+        expiry = asyncio.create_task(expire_credentials())
         try:
             yield
         finally:
             session.invalidate()
+            recovery.expire()
+            expiry.cancel()
+            await run_in_threadpool(recovery.close)
             await run_in_threadpool(connection.close)
 
     deployment = Deployment(connection, release)
+    recovery = SetupRecovery(connection, deployment, lambda: session.active)
     proxy = RemoteProxy(connection)
+
+    def observed(function):
+        @wraps(function)
+        def call(*args, **kwargs):
+            with recovery.operation():
+                try:
+                    return function(*args, **kwargs)
+                except Exception:
+                    if connection.status()['state'] == 'disconnected':
+                        recovery.start()
+                    raise
+        return call
     app = FastAPI(title="H3 local controller", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=API + "/openapi.json")
     app.state.session = session
     app.state.connection = connection
     app.state.deployment = deployment
+    app.state.recovery = recovery
     app.add_middleware(LocalSecurity, origin=origin, session=session)
 
     @app.exception_handler(ControllerError)
@@ -289,31 +317,61 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.get(API + "/status")
     def status():
-        return {**connection.status(), "csrf_token": session.csrf_token, "capabilities": {**CAPABILITIES, 'release_available': release is not None}}
+        with recovery.operations:
+            recovery.expire()
+            if recovery.active():
+                state = {'state': 'disconnected'}
+                recovery_state = recovery.status()
+                if recovery_state['state'] == 'recovered':
+                    recovery_state['state'] = 'connecting'  # worker is finishing cleanup
+            else:
+                state = connection.status()
+                if state['state'] == 'disconnected':
+                    recovery.start()
+                recovery_state = recovery.status()
+                if recovery_state['state'] == 'recovered':
+                    state = connection.status()
+            return {**state, 'recovery': recovery_state, "csrf_token": session.csrf_token,
+                    "capabilities": {**CAPABILITIES, 'release_available': release is not None}}
 
     @app.get(API + "/fingerprint")
     def fingerprint():
-        return connection.status()
+        return status()
 
     @app.post(API + "/connect")
     def connect(body: ConnectRequest):
-        deployment.reset()
-        return connection.connect(body.host, body.port, body.username)
+        with recovery.operation(replace=True):
+            deployment.reset()
+            recovery.set_target(None)
+            result = connection.connect(body.host, body.port, body.username)
+            recovery.set_target((body.host, body.port, body.username))
+            return result
 
     @app.post(API + "/approve")
+    @observed
     def approve(body: ApprovalRequest):
         return connection.approve(body.fingerprint)
 
     @app.post(API + "/authenticate")
     def authenticate(body: AuthenticationRequest):
-        return connection.authenticate(body.password.get_secret_value())
+        with recovery.operation(replace=True):
+            result = connection.authenticate(body.password.get_secret_value())
+            recovery.remember(body.password.get_secret_value(), enabled=body.retain_for_setup_recovery)
+            return {**result, 'recovery': recovery.status()}
 
     @app.post(API + "/disconnect")
     def disconnect(body: EmptyRequest | None = Body(default=None)):
-        deployment.reset()
-        return connection.close()
+        with recovery.operation(replace=True):
+            deployment.reset()
+            return connection.close()
+
+    @app.post(API + '/recovery/forget')
+    def forget_recovery(body: EmptyRequest):
+        with recovery.operation(replace=True):
+            return recovery.status()
 
     @app.post(API + "/scan")
+    @observed
     def scan(body: EmptyRequest | None = Body(default=None)):
         with connection.lock:
             home = connection.remote_home()
@@ -326,60 +384,75 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 "capabilities": CAPABILITIES}
 
     @app.post(API + '/setup/plan')
+    @observed
     def setup_plan(body: PlanRequest):
         return deployment.make_plan(body.profile, sudo_password_available=body.sudo_password_available)
 
     @app.post(API + '/setup/install')
+    @observed
     def setup_install(body: InstallRequest):
         return deployment.install(body.approval(), service_digest=body.service_digest,
             sudo_password=body.sudo_password.get_secret_value() if body.sudo_password else None)
 
     @app.post(API + '/setup/restore')
+    @observed
     def setup_restore(body: EmptyRequest):
         return deployment.restore()
 
     @app.get(API + '/setup/events')
+    @observed
     def setup_events(after: int = Query(default=0, ge=0, le=2**63-1)):
         return deployment.snapshot(after)
 
     @app.post(API + '/setup/reboot')
+    @observed
     def setup_reboot(body: InstallRequest):
         data = body.model_dump(exclude={'service_digest', 'sudo_password'})
         data['sudo_password'] = body.sudo_password.get_secret_value() if body.sudo_password else None
-        return deployment.action('reboot', data)
+        result = deployment.action('reboot', data)
+        automatic = recovery.start()
+        return {**result, 'reauthentication_required': not automatic, 'recovery': recovery.status()}
 
     @app.post(API + '/setup/{action}')
+    @observed
     def setup_action(action: str, body: ActionRequest):
         if action not in {'activate', 'download', 'cancel-download', 'repair', 'resume'}:
             raise ControllerError('unknown_action', 404)
         return deployment.action(action, body.model_dump())
 
     @app.get(API + '/remote/health')
+    @observed
     def remote_health():
         return proxy.request('GET', '/api/v1/health')
 
     @app.get(API + '/remote/capabilities')
+    @observed
     def remote_capabilities():
         return proxy.request('GET', '/api/v1/capabilities')
 
     @app.get(API + '/remote/jobs')
+    @observed
     def remote_jobs():
         return proxy.request('GET', '/api/v1/jobs?limit=1000')
 
     @app.get(API + '/remote/events')
+    @observed
     def remote_events(after: int = Query(default=0, ge=0, le=2**63-1)):
         return proxy.request('GET', f'/api/v1/events?after={after}&follow=false')
 
     @app.post(API + '/remote/jobs')
+    @observed
     def remote_submit(body: dict = Body()):
         # Remote GenerationInput is authoritative; never forward auth/origin headers.
         return proxy.request('POST', '/api/v1/jobs', body=body)
 
     @app.post(API + '/remote/jobs/{job_id}/cancel')
+    @observed
     def remote_cancel(job_id: str, body: EmptyRequest):
         return proxy.request('POST', f'/api/v1/jobs/{job_id}/cancel', body={})
 
     @app.get(API + '/remote/jobs/{job_id}/video')
+    @observed
     def remote_video(job_id: str, request: Request, download: bool = False):
         return proxy.request('GET', f'/api/v1/jobs/{job_id}/video' + ('?download=true' if download else ''), range_header=request.headers.get('range'))
 

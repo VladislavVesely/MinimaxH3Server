@@ -49,12 +49,14 @@
             <button id="approve" class="primary" type="button" disabled>Trust this fingerprint</button>
           </section>
           <form id="auth-form" class="auth-panel" hidden>
-            <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication, never saved by this app, and cleared from this form on submission.</p>
+            <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication, never saved to disk or browser storage, and cleared from this form on submission.</p>
             <div class="field"><label for="password">SSH password</label><input id="password" name="password" type="password" required maxlength="4096" autocomplete="off" aria-describedby="password-note"></div>
-            <p class="field-hint" id="password-note">Reconnecting requires you to enter your password again.</p>
+            <label class="check-label"><input id="retain-recovery" type="checkbox" checked> Keep my SSH password in LOCAL CONTROLLER MEMORY only for automatic setup recovery</label>
+             <p class="field-hint" id="password-note">With consent, this running controller reconnects for up to 120 seconds after an approved reboot or lost setup connection and replays the same saved setup. No sudo password is retained and no installation or reboot is repeated. Disconnect, session expiry, opt-out or controller shutdown clears retained credentials. A restarted controller requires authentication again. Uncheck to reconnect manually.</p>
             <button class="primary" id="authenticate" type="submit">Authenticate</button>
           </form>
-          <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>
+          <button id="forget-recovery" class="text-button" type="button" hidden>Forget retained SSH password / stop automatic recovery</button>
+           <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>
         </section>
         <section class="panel" id="scan-panel" aria-labelledby="scan-heading">
           <div class="panel-heading"><div><p class="eyebrow">02 / DISCOVER</p><h2 id="scan-heading">A closer look at your hardware</h2></div><span class="outline-pill">Read-only</span></div>

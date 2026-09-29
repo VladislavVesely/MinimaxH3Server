@@ -52,6 +52,11 @@ class BrowserSession:
         return self._equal(token, self._csrf)
 
     @property
+    def active(self) -> bool:
+        with self._lock:
+            return self._consumed and self._clock() < self._session_expires
+
+    @property
     def csrf_token(self) -> str:
         return self._csrf
 

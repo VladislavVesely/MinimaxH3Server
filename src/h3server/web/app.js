@@ -19,6 +19,9 @@
   let runtimeReady = false;
   let backendCapabilities = {};
   let setupTimer = null;
+  let recoveryTimer = null;
+  let recoveryEpoch = 0;
+  let recoveredCycle = 0;
   let jobTimer = null;
   let setupEpoch = 0;
   let setupRequest = 0;
@@ -53,14 +56,18 @@
     approval_expired: 'The fingerprint challenge expired. Reconnect and compare the new challenge before approving.',
     fingerprint_mismatch: 'Fingerprint approval did not match. Refresh the connection and verify the server again.',
     approval_not_pending: 'No fingerprint approval is pending. Refresh the connection state.',
-    trust_required: 'Verify and approve the server fingerprint before authenticating.',
+    trust_required: 'The host key is unknown. Automatic recovery stopped. Reconnect and verify the fingerprint with a trusted source before approving it.',
+    recovery_in_progress: 'Automatic setup recovery is in progress. You can disconnect to cancel.',
+    reconnect_timeout: 'Automatic reconnection timed out after 120 seconds. Reconnect, authenticate and restore saved setup manually. No operation was repeated.',
+    recovery_failed: 'Setup recovery failed. Reconnect and restore the saved checkpoint; no operation was repeated.',
+    recovery_binding_changed: 'The saved target or setup digest changed. Automatic recovery stopped. Review the target and restore manually.',
     authentication_failed: 'Authentication failed. The password was cleared. Reconnect and enter your credentials again.',
     authentication_required: 'SSH authentication is required. Reconnect and sign in again.',
     authentication_not_pending: 'Authentication is not pending. Refresh the connection state.',
     invalid_credentials: 'The password is invalid. Enter a nonempty password without null characters.',
     already_connected: 'A connection already exists. Refresh its state, or disconnect before changing servers.',
     invalid_remote_home: 'The server’s home directory could not be read. Check the SSH account and retry the scan.',
-    fresh_prerequisite_approval_required: 'Prerequisite recovery requires fresh approval. Review the restored plan and re-enter a sudo password if required; no password was retained.',
+    fresh_prerequisite_approval_required: 'Prerequisite recovery requires fresh approval. Review the restored plan and re-enter a sudo password if required; no sudo password was retained.',
     release_unavailable: 'Launch deployment with a verified release wheel and trusted SHA256 pin. No artifact is bundled in this source-only session.',
     approval_required: 'Fresh, exact plan, license, eligibility and service approvals are required. Review the plan again.',
     remote_unavailable: 'Remote daemon unavailable. Reauthenticate after disconnect or reboot, then restore setup and replay progress. No readiness assumed.',
@@ -137,8 +144,28 @@
 
   function setConnection(data) {
     if (data.state !== connection.state || data.fingerprint !== connection.fingerprint) $('trust-check').checked = false;
-    connection = data;
-    if (data.state !== 'authenticated') {
+    const recovering = ['connecting', 'backoff'].includes(data.recovery?.state);
+    clearTimeout(recoveryTimer);
+    connection = recovering ? { ...data, state: 'recovering' } : data;
+    $('forget-recovery').hidden = !data.recovery?.credential_retained;
+    if (recovering) {
+      resetSetupPolling(); resetDashboardPolling();
+      runtimeReady = false;
+      $('sudo-password').value = '';
+      $('setup-status').textContent = `Automatic setup recovery: ${data.recovery.state}. Retrying for up to 120 seconds with the SSH credential in local controller memory. No install or reboot command is repeated.`;
+      const epoch = recoveryEpoch;
+      recoveryTimer = setTimeout(async () => {
+        try {
+          const status = await request('/status');
+          if (epoch === recoveryEpoch) setConnection(status);
+        } catch (error) {
+          if (epoch === recoveryEpoch) { showError(error, false); setConnection({ state: 'disconnected' }); }
+        }
+      }, 1000);
+    } else {
+      recoveryEpoch++;
+    }
+    if (!recovering && data.state !== 'authenticated') {
       clearScan();
       runtimeReady = false;
       resetSetupPolling(); resetDashboardPolling();
@@ -146,10 +173,17 @@
       planReview = null; setupCursor = 0; jobCursor = 0;
       $('plan-review').hidden = true;
       $('sudo-password').value = '';
-      $('readiness').textContent = 'SSH disconnected. Reauthenticate and restore saved setup; credentials were not retained.';
+      $('readiness').textContent = 'SSH disconnected. Reauthenticate and restore saved setup; automatic recovery is unavailable.';
       $('setup-status').textContent = 'Setup observation stopped. Reauthenticate and restore saved setup to replay durable progress.';
     }
     if (data.state !== 'awaiting_authentication') $('password').value = '';
+    if (data.recovery?.state === 'failed') showError({ code: data.recovery.error }, false);
+    if (data.state === 'authenticated' && data.recovery?.state === 'recovered' && data.recovery.cycle !== recoveredCycle && planReview) {
+      recoveredCycle = data.recovery.cycle;
+      setupCursor = 0; $('setup-events').replaceChildren();
+      $('setup-status').textContent = 'SSH recovered. Replaying the same durable setup; no operation repeated.';
+      setupProgress().catch(error => showError(error, false));
+    }
     render();
   }
 
@@ -160,7 +194,7 @@
     const authPending = state === 'awaiting_authentication';
     const trustPending = state === 'awaiting_approval';
     const authenticated = state === 'authenticated';
-    const labels = { disconnected: 'SSH disconnected', awaiting_approval: 'Fingerprint verification needed', awaiting_authentication: 'Host trusted · sign in', authenticated: 'SSH authenticated' };
+    const labels = { recovering: 'Automatically reconnecting SSH', disconnected: 'SSH disconnected', awaiting_approval: 'Fingerprint verification needed', awaiting_authentication: 'Host trusted · sign in', authenticated: 'SSH authenticated' };
     $('ssh-state').textContent = labels[state] || 'SSH state unknown';
     $('ssh-state').dataset.state = state;
     $('target-fields').disabled = !usable || !disconnected;
@@ -177,6 +211,7 @@
     $('reconnect').disabled = !usable || !disconnected || lastTarget === null;
     // Also lets an interrupted controller request be reconciled without resending it.
     $('refresh').disabled = busy;
+    $('forget-recovery').disabled = busy;
     $('scan').disabled = !usable || !authenticated || capabilities.scan !== true;
     $('scan-hint').textContent = authenticated
       ? (capabilities.scan === true ? 'Read-only observations only. No installation or CUDA runtime test is performed.' : 'Scanning is unavailable in this controller.')
@@ -320,7 +355,7 @@
     event.preventDefault();
     if (busy || !ready) return;
     // Do not retain credentials in state. Clear even if authentication fails.
-    const pending = request('/authenticate', { password: $('password').value });
+    const pending = request('/authenticate', { password: $('password').value, retain_for_setup_recovery: $('retain-recovery').checked });
     $('password').value = '';
     perform('Authenticating with SSH…', async () => {
       setConnection(await pending);
@@ -329,6 +364,11 @@
       $('scan-heading').focus();
     });
   });
+  $('forget-recovery').addEventListener('click', () => perform('Clearing retained SSH credential…', async () => {
+    await request('/recovery/forget', {});
+    await refresh();
+    log('Setup recovery credential cleared. Reconnection now requires manual authentication.');
+  }));
   $('disconnect').addEventListener('click', () => perform('Disconnecting SSH…', async () => {
     $('password').value = '';
     setConnection(await request('/disconnect', {}));
@@ -381,7 +421,15 @@
     const epoch = setupEpoch;
     const sequence = ++setupRequest;
     const current = () => epoch === setupEpoch && sequence === setupRequest && connection.state === 'authenticated';
-    const data = await request('/setup/events?after=' + setupCursor);
+    let data;
+    try {
+      data = await request('/setup/events?after=' + setupCursor);
+    } catch (error) {
+      if (epoch !== setupEpoch || sequence !== setupRequest) return;
+      await refresh();
+      if (connection.state === 'recovering' || epoch !== setupEpoch || sequence !== setupRequest) return;
+      throw error;
+    }
     if (!current()) return;
     if (data.reset) { setupCursor = 0; $('setup-events').replaceChildren(); }
     for (const record of data.events) $('setup-events').append(node('li', eventLine(record)));
@@ -435,8 +483,14 @@
   $('install').addEventListener('click', () => perform('Launching explicitly approved installation…', () => setupAction('install', approval())));
   $('reboot').addEventListener('click', () => perform('Requesting separately approved reboot…', async () => {
     const data = approval(); data.reboot = $('reboot-check').checked;
-    await request('/setup/reboot', data);
-    $('setup-status').textContent = 'Reboot request accepted, not completion. Reconnect, authenticate and restore saved setup after the server returns.';
+    const result = await request('/setup/reboot', data);
+    if (result.reauthentication_required) {
+      $('setup-status').textContent = 'Reboot request accepted, not completion. Memory retention is off: reconnect, authenticate and restore saved setup manually after the server returns.';
+    } else {
+      // The controller owns reconnection and digest-bound restore. Only replay
+      // durable events here; never resend installation, resume or reboot.
+      await refresh();
+    }
   }));
   $('resume-setup').addEventListener('click', () => perform('Resuming previously approved stages…', () => setupAction('resume', { plan_digest: planReview.plan_digest })));
   $('activate').addEventListener('click', () => perform('Requesting release activation with rollback…', () => setupAction('activate', {
@@ -552,7 +606,7 @@
       await request('/remote/jobs', body); await dashboard();
     });
   });
-  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; resetSetupPolling(); resetDashboardPolling(); clearTimeout(recoveryTimer); recoveryEpoch++; });
 
   async function start() {
     busy = true;

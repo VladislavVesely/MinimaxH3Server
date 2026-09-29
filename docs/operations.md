@@ -104,9 +104,24 @@ private; never attach configs, `known_hosts`, logs containing operator data, or
 
 Installation/reboot/service approval are separate. The approved bootstrap unit
 survives SSH loss, checkpoints before reboot and resumes remote work through the
-systemd user service/approved lingering registration. A lost controller/password
-requires fresh SSH authentication. Reopen, reconnect and restore/replay checkpoints;
-there is no promise of unattended passwordless controller reconnection. Firmware,
+systemd user service/approved lingering registration. At authentication, a clearly
+labelled checkbox offers local-controller-memory-only SSH password retention for
+setup recovery. With consent, the live controller automatically reconnects after
+approved reboot or setup transport loss for up to 120 seconds (0.5–8 second
+backoff), restores only the same target/root/release/digest, and the web UI polls
+connecting/backoff/recovered/failed states and replays durable events. This is
+observation, not permission to repeat installation, resume, sudo or reboot.
+
+Unknown/changed keys, authentication failure and changed setup binding stop
+retries. Verify identity out of band; reconnect/authenticate and restore manually.
+Timeout is also terminal: inspect the server/network and reconnect manually.
+**Forget retained SSH password / stop automatic recovery**, disconnect, target
+switch, session expiry and controller shutdown clear retained credentials. Only
+SSH credentials can be retained, never sudo credentials; neither is written to
+disk/browser storage or exposed in status/logs. Python strings cannot be reliably
+zeroized; cancellation releases in-flight references after bounded IO finishes.
+A closed/restarted controller or declined retention requires fresh authentication:
+reopen, reconnect and **Restore saved setup**. Firmware,
 Secure Boot/MOK interaction, disk encryption, network/login failure and host-key
 changes may require console access. Prerequisite rounds before target Python exists
 re-inspect/replan with fresh approvals rather than invoking Python resume blindly.
@@ -164,7 +179,8 @@ maintenance record before releasing that specific operation.
 Reboot records boot identity and refuses without `--disposable-vm` plus the distinct
 `REBOOT DISPOSABLE VM <hostname>` phrase. `verify-reboot` checks a new boot and healthy
 authenticated daemon, **not installer resume**. Separately exercise the wizard's
-waiting-for-reboot checkpoint, approve that plan's reboot, reauthenticate after boot,
+waiting-for-reboot checkpoint, approve that plan's reboot, observe automatic
+reconnection with memory consent (or reauthenticate manually after opt-out),
 and verify the persisted setup events complete/resume correctly. Record OS/kernel,
 GPU/driver/CUDA, exact resolved environment and revisions, plan digests, commands,
 MP4 hash, playback and recovery evidence without passwords/tokens. No GPU or native

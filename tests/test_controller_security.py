@@ -265,3 +265,40 @@ def test_malformed_unicode_tokens_are_rejected_not_server_errors(controller):
                            headers={**headers, "content-type": "application/json"})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_memory_recovery_consent_optout_disconnect_and_shutdown(controller, tmp_path, caplog):
+    app, client, network = controller
+    headers = bootstrap(app, client)
+    fingerprint = connect(client, headers).json()['fingerprint']
+    client.post(API + '/approve', json={'fingerprint': fingerprint}, headers=headers)
+    result = client.post(API + '/authenticate', json={'password': 'MEMORY-ONLY-SECRET',
+        'retain_for_setup_recovery': True}, headers=headers)
+    assert result.json()['recovery']['credential_retained']
+    assert 'MEMORY-ONLY-SECRET' not in result.text + repr(app.state.recovery) + caplog.text
+    assert all(b'MEMORY-ONLY-SECRET' not in p.read_bytes() for p in tmp_path.rglob('*') if p.is_file())
+    assert client.post(API + '/recovery/forget', json={}, headers=headers).json()['credential_retained'] is False
+    assert client.post(API + '/disconnect', json={}, headers=headers).status_code == 200
+    connect(client, headers)
+    result = client.post(API + '/authenticate', json={'password': 'MEMORY-ONLY-SECRET'}, headers=headers)
+    assert result.json()['recovery']['credential_retained'] is False  # old clients must opt in
+    client.post(API + '/disconnect', json={}, headers=headers)
+    connect(client, headers)
+    client.post(API + '/authenticate', json={'password': 'MEMORY-ONLY-SECRET',
+        'retain_for_setup_recovery': True}, headers=headers)
+    app.state.session.invalidate()
+    from test_controller_reconnection import eventually
+    eventually(lambda: not app.state.recovery.status()['credential_retained'])
+    assert client.get(API + '/status').status_code == 401
+
+
+def test_failed_target_switch_cannot_bind_retained_password_to_another_host(controller):
+    app, client, network = controller
+    headers = bootstrap(app, client)
+    fingerprint = connect(client, headers).json()['fingerprint']
+    client.post(API + '/approve', json={'fingerprint': fingerprint}, headers=headers)
+    assert client.post(API + '/connect', json={'host': 'other.example', 'username': 'test'}, headers=headers).status_code == 409
+    result = client.post(API + '/authenticate', json={'password': 'SECRET',
+        'retain_for_setup_recovery': True}, headers=headers)
+    assert result.status_code == 200
+    assert not result.json()['recovery']['credential_retained']

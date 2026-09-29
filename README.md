@@ -33,9 +33,22 @@ executable on PATH. To deploy a separately authenticated wheel:
 
 ### Setup and approvals
 
+With memory-retention consent, the running controller automatically reconnects
+for up to 120 seconds after an approved reboot or lost setup SSH connection,
+verifies the known host key, restores the same target/plan digest, and replays
+progress. The remote bootstrap continues independently; automatic recovery never
+reissues installation, sudo or reboot commands. Disconnect, opt-out, session
+expiry or controller shutdown clears retained credentials. Restarting requires
+fresh authentication. Unknown/changed keys and authentication failures stop
+retries; no automatic host-key approval occurs.
+
 1. Enter SSH host/port/user. Verify and approve its SHA256 host fingerprint using
    a separate trusted channel; a changed key **blocks**, not silently re-enrolls.
-2. Authenticate with a password (request-scoped, never saved), then scan hardware.
+2. Authenticate, then scan hardware. The clearly labelled authentication checkbox
+   authorizes keeping the SSH password in **local controller memory only** for
+   setup recovery (checked by default in the UI; the API requires explicit consent).
+   Uncheck for manual reconnection. No password is written to disk/browser storage;
+   sudo passwords remain request-scoped.
    SSH agents/private-key login are **not implemented**; no account SSH config or
    `server.txt` is imported. Never paste a private key into the password field.
 3. Choose an experimental profile and **Stage release & review plan**. This
