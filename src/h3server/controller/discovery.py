@@ -6,6 +6,7 @@ unknown evidence fail closed. Old controllers without the staging lock must be
 stopped for this one-time handoff; a final comparison is not mixed-version race
 exclusion.
 """
+from dataclasses import asdict
 import json
 from pathlib import PurePosixPath
 import re
@@ -15,7 +16,7 @@ import stat
 import tempfile
 
 from h3server.controller.ssh import ControllerError
-from h3server.installer.planner import ReleaseArtifact, validate_plan
+from h3server.installer.planner import Approval, ReleaseArtifact, validate_approval, validate_plan
 from h3server.store import canonical_plan_digest, _SCHEMA, _SCHEMA_VERSION
 
 
@@ -147,13 +148,12 @@ def prove_unlaunched(sftp, root, expected):
         stages = directory(sftp, root + '/bootstrap')
         if saved['digest'] not in stages:
             raise ValueError('missing discovery')
-        plans = {}
+        records = {}
         for digest in stages:
             if not re.fullmatch('[a-f0-9]{64}', digest):
                 raise ValueError('invalid bootstrap directory')
             stage = root + '/bootstrap/' + digest
-            if directory(sftp, stage) != {'plan.json'}:
-                raise ValueError('launch evidence exists')
+            names = directory(sftp, stage)
             data = _read(sftp, stage + '/plan.json')
             plan = strict_json(data)
             validate_plan(plan)
@@ -161,7 +161,31 @@ def prove_unlaunched(sftp, root, expected):
                 raise ValueError('invalid staged discovery')
             if digest == saved['digest'] and ReleaseArtifact(**plan['artifact']) != artifact:
                 raise ValueError('artifact mismatch')
-            plans[digest] = data
-        return (raw, database, plans)
+            evidence = {'plan.json': data}
+            if names != {'plan.json'}:
+                # Only history may carry completed prerequisite receipts. The
+                # current pointer must still identify a never-launched plan.
+                required = {'plan.json', 'approval.json', 'status'}
+                if (digest == saved['digest'] or plan['purpose'] != 'prerequisites'
+                        or plan['reboot_required'] or not required <= names
+                        or names - (required | {'composite-install.json'})):
+                    raise ValueError('launch evidence exists')
+                evidence['approval.json'] = _read(sftp, stage + '/approval.json', 16384)
+                approval = strict_json(evidence['approval.json'])
+                if (type(approval) is not dict or set(approval) != set(asdict(Approval(digest)))
+                        or any(type(value) is not bool for key, value in approval.items() if key != 'plan_digest')):
+                    raise ValueError('invalid historical approval')
+                validate_approval(plan, Approval(**approval))
+                evidence['status'] = _read(sftp, stage + '/status', 64)
+                # PrerequisiteProtocol publishes this only on finish after
+                # Steps.system_packages succeeds; unfinished/EOF paths fail.
+                if evidence['status'] != b'waiting_for_replan\n':
+                    raise ValueError('prerequisites not completed')
+                if 'composite-install.json' in names:
+                    evidence['composite-install.json'] = _read(sftp, stage + '/composite-install.json', 1024)
+                    if strict_json(evidence['composite-install.json']) != {'plan_digest': digest}:
+                        raise ValueError('invalid historical launch marker')
+            records[digest] = evidence
+        return (raw, database, records)
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, ControllerError):
         raise ControllerError(ERROR) from None

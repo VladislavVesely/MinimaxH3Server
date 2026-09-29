@@ -248,9 +248,9 @@ class Deployment:
                     with self.connection.private_sftp() as sftp:
                         after = prove_unlaunched(sftp, self.root, raw)
                         # The only added evidence may be our new immutable plan.
-                        plans = dict(proof[2])
-                        plans[canonical_plan_digest(plan)] = json.dumps(plan, sort_keys=True).encode()
-                        if after != (proof[0], proof[1], plans):
+                        records = dict(proof[2])
+                        records[canonical_plan_digest(plan)] = {'plan.json': json.dumps(plan, sort_keys=True).encode()}
+                        if after != (proof[0], proof[1], records):
                             raise ControllerError(ERROR)
                         check()
                         _write(sftp, self.root + '/config/deployment.json', json.dumps({

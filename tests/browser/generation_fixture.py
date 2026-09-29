@@ -3,7 +3,7 @@
 Never connects SSH, installs packages, downloads weights, or claims H3 output.
 The fixture 'video' bytes are not a playable/generated MP4.
 """
-from dataclasses import replace
+from dataclasses import asdict, replace
 import hashlib
 from importlib.resources import files
 import json
@@ -253,7 +253,8 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                 if command['action'] == 'calls':
                     print(json.dumps({'calls': connection.calls}), flush=True); continue
                 elif command['action'] == 'stage-stale-release':
-                    from h3server.controller.deploy import Deployment, ReleaseBundle
+                    from h3server.controller.deploy import Deployment, ReleaseBundle, _write
+                    from h3server.installer.planner import build_plan
                     from test_deploy import wheel
                     old_dir = Path(temporary)/'old-release'; old_dir.mkdir()
                     old_wheel = wheel(old_dir, 'h3server/old_only.py')
@@ -261,11 +262,24 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                     assert old.artifact != app.state.deployment.release.artifact
                     prior = Deployment(connection, old)
                     prior.make_plan('h3-convrot-int8', sudo_password_available=True)
+                    # Match the target's completed prerequisite history without
+                    # performing packages or changing its unlaunched env pointer.
+                    history = build_plan(facts(python_ready=False, packages=('python3-venv=1',),
+                        package_changes=('Inst python3-venv (1 Ubuntu [amd64])',)),
+                        profile='h3-convrot-int8', artifact=old.artifact)
+                    history['deployment_config'] = {'port': 8765, 'root': prior.root}
+                    digest = canonical_plan_digest(history)
+                    with connection.private_sftp() as sftp:
+                        stage = f'{prior.root}/bootstrap/{digest}'
+                        _write(sftp, stage + '/plan.json', json.dumps(history, sort_keys=True).encode())
+                        _write(sftp, stage + '/approval.json', json.dumps(asdict(Approval(digest, True, True, True, False))).encode())
+                        _write(sftp, stage + '/status', b'waiting_for_replan\n')
                     Store(paths.state/'setup.sqlite3')
                     (paths.state/'setup.sqlite3').chmod(0o600)
                     connection.calls.clear()
                     print(json.dumps({'old_release':old.artifact.sha256,
-                        'current_release':app.state.deployment.release.artifact.sha256}), flush=True)
+                        'current_release':app.state.deployment.release.artifact.sha256,
+                        'staged_history_count':len(list(paths.bootstrap.iterdir()))}), flush=True)
                     continue
                 elif command['action'] == 'finish-download': (paths.root/'fixture-download-finish').touch()
                 elif command['action'] == 'start-setup': connection.start_setup.set()

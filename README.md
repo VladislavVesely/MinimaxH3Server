@@ -67,10 +67,14 @@ executable on PATH. To deploy a separately authenticated wheel:
 When replacing a rebuilt controller, **quit other controller versions first**.
 On the next explicit Install, an older release's staging-only discovery can be
 rediscovered with the current release and selected model, without deleting old
-artifacts. This requires a verified plan/root and no launch, approval, checkpoint,
-active-release or operation evidence. Ambiguous/malformed state stays blocked;
-actual interrupted work still needs its matching release. Scan, selection and
-reconnect never perform this replacement. Current controllers serialize staging;
+artifacts. The current discovery must have a verified plan/root and no launch or
+approval evidence, and no checkpoints, active release or operations may exist.
+Older prerequisite history is preserved only with validated digest-bound approval,
+terminal `waiting_for_replan` status and no required reboot; any composite launch
+marker must match that historical digest exactly. Launched environment stages and
+ambiguous/malformed history stay blocked; actual interrupted work still needs its
+matching release. Scan, selection and reconnect never perform this replacement.
+Current controllers serialize staging;
 older versions do not share that lock, so mixed-version concurrent staging is
 not supported. Remote Python is not needed for this proof (a bounded, sidecar-free
 SQLite copy, if present, is checked read-only by the local controller).

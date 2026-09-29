@@ -342,3 +342,138 @@ def test_waiting_old_controller_cannot_approve_superseded_discovery(stale, metho
     assert not calls
     assert (root / 'config/deployment.json').read_bytes() == pointer
     assert sorted(p.name for p in (root / 'bootstrap' / old['plan_digest']).iterdir()) == ['plan.json']
+
+
+@pytest.fixture
+def completed_prerequisite_history(stale):
+    """Exact target layout: completed old prerequisites + unlaunched old environment."""
+    from h3server.controller.deploy import _write
+    from h3server.installer.planner import Approval, build_plan
+    from h3server.store import canonical_plan_digest
+    from test_install_plan import facts
+    flow, prior, root = stale
+    sftp = flow[-1]
+    plan = build_plan(facts(python_ready=False, packages=('python3-venv=1',),
+        package_changes=('Inst python3-venv (1 Ubuntu [amd64])',)),
+        profile='h3-convrot-int8', artifact=prior.release.artifact)
+    plan['deployment_config'] = {'port': 8765, 'root': prior.root}
+    digest = canonical_plan_digest(plan)
+    stage = f'{prior.root}/bootstrap/{digest}'
+    _write(sftp, stage + '/plan.json', json.dumps(plan, sort_keys=True).encode())
+    _write(sftp, stage + '/approval.json', json.dumps(asdict(Approval(digest, True, True, True, False))).encode())
+    _write(sftp, stage + '/status', b'waiting_for_replan\n')
+    assert len(list((root / 'bootstrap').iterdir())) == 2
+    assert json.loads((root / 'config/deployment.json').read_bytes())['digest'] == prior.document()['plan_digest']
+    return stale, sftp.path(stage)
+
+
+@pytest.mark.parametrize('composite_marker', [False, True])
+def test_completed_prerequisite_history_allows_current_unlaunched_discovery(completed_prerequisite_history, composite_marker):
+    (flow, prior, root), stage = completed_prerequisite_history
+    app, client, headers, calls, _, _, _ = flow
+    if composite_marker:
+        marker = stage / 'composite-install.json'
+        marker.write_text(json.dumps({'plan_digest': stage.name})); marker.chmod(0o600)
+        # Composite Install consents to reboot, but this completed plan requires
+        # none: consent alone is not evidence of a pending reboot.
+        approval_path = stage / 'approval.json'
+        approval = json.loads(approval_path.read_bytes()); approval['reboot'] = True
+        approval_path.write_text(json.dumps(approval))
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    selected = get_artifact_set('h3-convrot-int8')
+    assert start(client, headers, profile=selected.profile_name, artifact_set_digest=selected.digest).status_code == 202
+    result = finished(app)
+    assert result['state'] == 'completed', result
+    assert calls == ['service-plan', 'prepare', 'activate', 'download']
+    document = app.state.deployment.document()
+    assert document['plan']['artifact'] == asdict(app.state.deployment.release.artifact)
+    assert document['plan']['profile'] == selected.profile_name
+    assert document['selection']['artifact_set_digest'] == selected.digest
+    for path, data in before.items():
+        if str(path) != 'config/deployment.json':
+            assert (root / path).read_bytes() == data
+
+
+@pytest.mark.parametrize('fault', ['missing-approval', 'malformed-approval', 'incomplete-approval', 'approval-list',
+    'wrong-approval-digest', 'no-consent', 'nonboolean-approval', 'missing-status', 'failed', 'running',
+    'unknown', 'partial-status', 'unexpected-file', 'partial-marker', 'wrong-marker',
+    'environment-history', 'pending-reboot', 'current-pointer', 'approval-symlink'])
+def test_unproven_prerequisite_history_blocks_without_mutation(completed_prerequisite_history, fault):
+    from h3server.installer.planner import validate_plan
+    from h3server.store import canonical_plan_digest
+    (flow, _, root), stage = completed_prerequisite_history
+    app, client, headers, calls, _, _, _ = flow
+    approval_path = stage / 'approval.json'
+    approval = json.loads(approval_path.read_bytes())
+    if fault == 'missing-approval':
+        approval_path.unlink()
+    elif fault == 'malformed-approval':
+        approval_path.write_bytes(b'{')
+    elif fault == 'approval-list':
+        approval_path.write_text(json.dumps(list(approval)))
+    elif fault in {'incomplete-approval', 'wrong-approval-digest', 'no-consent', 'nonboolean-approval'}:
+        if fault == 'incomplete-approval': del approval['reboot']
+        elif fault == 'wrong-approval-digest': approval['plan_digest'] = '0' * 64
+        elif fault == 'no-consent': approval['privileged'] = False
+        else: approval['reboot'] = 'false'
+        approval_path.write_text(json.dumps(approval))
+    elif fault == 'approval-symlink':
+        approval_path.unlink(); approval_path.symlink_to(stage / 'plan.json')
+    elif fault == 'missing-status':
+        (stage / 'status').unlink()
+    elif fault in {'failed', 'running', 'unknown', 'partial-status'}:
+        (stage / 'status').write_bytes(b'' if fault == 'partial-status' else (fault + '\n').encode())
+    elif fault in {'unexpected-file', 'partial-marker', 'wrong-marker'}:
+        name = 'boot.json' if fault == 'unexpected-file' else 'composite-install.json'
+        (stage / name).write_bytes(json.dumps({'plan_digest': '0' * 64}).encode() if fault == 'wrong-marker' else b'')
+        (stage / name).chmod(0o600)
+    elif fault == 'current-pointer':
+        pointer = root / 'config/deployment.json'
+        record = json.loads(pointer.read_bytes()); record['digest'] = stage.name
+        pointer.write_text(json.dumps(record))
+    else:
+        plan = json.loads((stage / 'plan.json').read_bytes())
+        if fault == 'environment-history':
+            plan['purpose'] = 'environment'
+            plan['stages'] = ['system-packages', 'environment', 'dependencies', 'verify']
+        else:
+            plan.update(driver_action='install', driver_package='nvidia-driver-580', reboot_required=True)
+            plan['packages'].append('nvidia-driver-580=1')
+            plan['package_changes'].append('Inst nvidia-driver-580 (1 Ubuntu [amd64])')
+            approval['reboot'] = True
+        validate_plan(plan)
+        digest = canonical_plan_digest(plan)
+        (stage / 'plan.json').write_text(json.dumps(plan))
+        approval['plan_digest'] = digest; approval_path.write_text(json.dumps(approval))
+        stage.rename(stage.parent / digest)
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert start(client, headers).status_code == 202
+    result = finished(app)
+    assert result['state'] == 'failed' and result['error'] == 'stale_discovery_unproven', result
+    assert not calls
+    assert before == {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('timing', ['inspection', 'after-staging'])
+@pytest.mark.parametrize('filename', ['plan.json', 'approval.json', 'status', 'composite-install.json'])
+def test_completed_prerequisite_history_bytes_are_bound_between_proofs(completed_prerequisite_history, monkeypatch, filename, timing):
+    (flow, _, root), stage = completed_prerequisite_history
+    app, client, headers, calls, _, _, _ = flow
+    marker = stage / 'composite-install.json'
+    marker.write_text(json.dumps({'plan_digest': stage.name})); marker.chmod(0o600)
+    pointer = (root / 'config/deployment.json').read_bytes()
+    target = app.state.connection if timing == 'inspection' else app.state.deployment
+    method = 'inspect_install' if timing == 'inspection' else '_stage'
+    original = getattr(target, method)
+    def changed(**kwargs):
+        result = original(**kwargs)
+        path = stage / filename
+        # JSON remains semantically valid: the comparison must bind actual bytes.
+        path.write_bytes(path.read_bytes() + b'\n' if filename != 'status' else b'running\n')
+        return result
+    monkeypatch.setattr(target, method, changed)
+    assert start(client, headers).status_code == 202
+    assert finished(app)['error'] == 'stale_discovery_unproven'
+    assert (root / 'config/deployment.json').read_bytes() == pointer
+    assert len(list((root / 'bootstrap').iterdir())) == (2 if timing == 'inspection' else 3)
+    assert not calls

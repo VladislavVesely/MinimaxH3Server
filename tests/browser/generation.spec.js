@@ -427,10 +427,11 @@ test('retry of an undelivered Install preserves its public id and selection with
 
 test.describe('stale unlaunched release discovery', () => {
   test.use({ controlledSetup: 'stale-release', prunedProfile: 'h3-convrot-int8' });
-  test('one Install replaces only discovery and prepares the current ConvRot release once', async ({ page, controller }) => {
+  test('one Install preserves completed prerequisites and prepares the current ConvRot release once', async ({ page, controller }) => {
     await login(page, controller);
     const release = await controller.control({ action: 'stage-stale-release' });
     expect(release.old_release).not.toEqual(release.current_release);
+    expect(release.staged_history_count).toBe(2);
     await page.locator('#scan').click();
     await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
     await page.locator('#install-profile').selectOption('h3-convrot-int8');
