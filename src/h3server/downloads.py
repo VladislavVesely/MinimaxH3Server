@@ -17,15 +17,15 @@ import os
 from pathlib import Path
 import re
 import time
-from urllib.parse import quote, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler
+
+from h3server._download_transport import CHUNK, DownloadTransport
 
 from h3server.backends import load_manifest
 from h3server.backends.base import atomic_json, directory, parts, read_json, regular_file
 from h3server.domain import Event, Progress, StageStatus
 from h3server.paths import AppPaths
-
-CHUNK = 1024 * 1024
 
 
 class DownloadCancelled(RuntimeError):
@@ -178,12 +178,18 @@ def _lock(paths):
         yield
 
 
-def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, opener=None,
+def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, transport=None,
                    timeout=30, file_timeout=6 * 3600):
     """Explicit injectable IO boundary; default uses bounded HTTPS, no auth tokens.
 
-    One response per artifact per call, <=30s socket wait, <=6h per file. Reinvoke
-    after transport failure to resume. No implicit retry loop or download on load.
+    One response per artifact per call, <=30s socket inactivity wait and <=6h
+    absolute transport deadline, including child startup, DNS, TLS and headers.
+    Production transport polls cancellation every 50ms and terminates/reaps its
+    IO child on failure (200ms terminate grace, then kill). Only the parent writes
+    files. Reinvoke to resume; no implicit retries or downloads on model load.
+    transport is a trusted Python response-context factory for boundary tests,
+    not an arbitrary-URL API. Its arguments are paths, pinned name, offset and
+    keyword timeout/deadline/cancelled; blocking IO belongs in its supervised child.
     """
     if not 0 < timeout <= 30 or not 0 < file_timeout <= 6 * 3600:
         raise ValueError("invalid download time limit")
@@ -193,7 +199,7 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, o
     revision = manifest["model"]["revision"]
     destination = f"models/h3-{revision}"
     staging = f"tmp/downloads/{revision}"
-    opener = opener or build_opener(_Redirects()).open
+    transport = transport or DownloadTransport
     completed, total = 0, manifest["model"]["total_bytes"]
     def event(status):
         emit(Event("model_download", status, progress=Progress(completed, "bytes", total)))
@@ -224,12 +230,8 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, o
                         stream.truncate(0)
                         offset = 0
                     if offset < entry["size"]:
-                        headers = {"Accept-Encoding": "identity", "User-Agent": "h3server-pinned-downloader/1"}
-                        if offset:
-                            headers["Range"] = f"bytes={offset}-"
-                        url = f"https://huggingface.co/MiniMaxAI/MiniMax-H3/resolve/{revision}/{quote(name, safe='/')}"
                         deadline = time.monotonic() + file_timeout
-                        with opener(Request(url, headers=headers), timeout=timeout) as response:
+                        with transport(paths, name, offset, timeout=timeout, deadline=deadline, cancelled=cancelled) as response:
                             status = response.status
                             if status == 200:
                                 stream.seek(0)
