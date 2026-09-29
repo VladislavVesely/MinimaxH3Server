@@ -437,6 +437,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def retry_setup(body: SetupRetryRequest):
         return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest)
 
+    @app.post(API + '/setup/observe')
+    @observed
+    def observe_setup(body: EmptyRequest):
+        return deployment.observe_saved()
+
     @app.post(API + '/setup/restore-compatible')
     @observed
     def restore_compatible(body: EmptyRequest):

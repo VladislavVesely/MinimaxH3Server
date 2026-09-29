@@ -268,6 +268,54 @@ class Deployment:
                 self.service = json.loads(result.stdout)
             return self.document()
 
+    def observe_saved(self):
+        """Attach read-only observation, without acquiring a worker's locks.
+
+        Only immutable locally trusted observer bytes may be added. Never change
+        discovery, approvals, service units, checkpoints or operation ownership.
+        Observation does not authorize installation or cross-release retry.
+        """
+        from h3server.installer.compatibility import compatible_plan, PREVIOUS_ARTIFACT
+        from h3server.controller.discovery import strict_json
+        with self.connection.lock:
+            self._authenticated()
+            with self.connection.private_sftp() as sftp:
+                try:
+                    record = strict_json(_read(sftp, self.root + '/config/deployment.json'))
+                except FileNotFoundError:
+                    raise ControllerError('setup_not_found') from None
+                digest = record.get('digest')
+                if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):
+                    raise ControllerError('invalid_checkpoint')
+                plan = strict_json(_read(sftp, f'{self.root}/bootstrap/{digest}/plan.json'))
+                if (canonical_plan_digest(plan) != digest or record.get('artifact') != plan.get('artifact')
+                        or plan.get('deployment_config') != {'port': 8765, 'root': self.root}):
+                    raise ControllerError('invalid_checkpoint')
+                if plan['artifact'] != asdict(self.release.artifact):
+                    if plan['artifact'] != asdict(PREVIOUS_ARTIFACT):
+                        raise ControllerError('matching_release_required')
+                    try:
+                        compatible_plan(plan)
+                    except (ValueError, TypeError, KeyError):
+                        raise ControllerError('compatible_retry_contract_changed') from None
+                # This content-addressed observer is not a deployment publication.
+                # An active download must not prevent adding identical trusted
+                # bytes. Concurrent immutable publication can only win with the
+                # same verified bytes; no mutable pointer is written here.
+                path = f'{self.root}/releases/{self.release.artifact.release_id}/{self.release.artifact.filename}'
+                try:
+                    _write(sftp, path, self.release.data, immutable=True)
+                except OSError:
+                    if _read(sftp, path, len(self.release.data)) != self.release.data:
+                        raise
+            observed = self.connection.deployment_action(root=self.root, artifact=self.release.artifact,
+                digest=digest, action='snapshot', data={'after': 0, 'latest': True})
+            with self.connection.private_sftp() as sftp:
+                if strict_json(_read(sftp, self.root + '/config/deployment.json')) != record:
+                    raise ControllerError('selection_changed')
+            return {'plan': plan, 'plan_digest': digest, 'selection': profile_document(plan['profile']),
+                    'snapshot': observed}
+
     def restore_compatible_failure(self):
         """Explicit Install/retry discovery only; normal restore remains exact-release.
 

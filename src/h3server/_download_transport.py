@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, build_opener
 
@@ -36,7 +37,15 @@ class DownloadTransport:
                          "revision": manifest["model"]["revision"]}
         if "profile_name" in manifest:
             self.document.update(profile_name=profile_name, artifact_set_digest=manifest["artifact_set_digest"])
-        self.command = command or (sys.executable, "-m", "h3server._download_transport")
+        # SSH workers may import us from an explicitly trusted release wheel,
+        # not an installed package. The child's scrubbed environment deliberately
+        # drops PYTHONPATH; carry only this loaded package's import root instead.
+        self.command = command or (
+            sys.executable, "-c",
+            'import runpy,sys;sys.path.insert(0,sys.argv[1]);'
+            'runpy.run_module("h3server._download_transport",run_name="__main__")',
+            str(Path(__file__).resolve().parent.parent),
+        )
         self.process = self.selector = None
         self.pending = b""
 

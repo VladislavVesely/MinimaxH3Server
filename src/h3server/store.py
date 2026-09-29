@@ -325,6 +325,13 @@ class Store:
         with self._transaction(write=True) as db:
             return self._append(db, subject_type, subject_id, event)
 
+    def recent_event_cursor(self, limit: int = 100) -> int:
+        """Start a bounded live tail rather than replaying old progress forever."""
+        _bounded_int(limit, 1, 1000)
+        with self._transaction() as db:
+            last, floor = self._event_bounds(db)
+            return max(floor, last - limit)
+
     def read_events(self, *, after: int = 0, limit: int = 100) -> EventPage:
         """Global exclusive cursor. Retained history never silently hides a gap.
 

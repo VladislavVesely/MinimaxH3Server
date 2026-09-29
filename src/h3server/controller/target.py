@@ -397,7 +397,8 @@ def main():
         raise ValueError('stale plan')
     store = Store(paths.state / 'setup.sqlite3')
     if args.action == 'snapshot':
-        print(json.dumps(snapshot(paths, store, data['after'], args.digest)))
+        after = store.recent_event_cursor() if data.get('latest') is True else data['after']
+        print(json.dumps(snapshot(paths, store, after, args.digest)))
         return
     if args.action == 'cancel-download':
         record = read_json(paths, 'state/operation.json')

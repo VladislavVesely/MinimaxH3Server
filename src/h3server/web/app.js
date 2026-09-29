@@ -43,6 +43,8 @@
   const messages = {
     invalid_checkpoint: 'The saved setup record is incomplete or inconsistent. Keep the checkpoint files and inspect the original plan and deployment record; nothing was started or retried.',
     setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
+    saved_operation_interrupted: 'The server operation stopped unexpectedly (for example after a reboot). Downloaded partial files are preserved. No new installation or retry was started.',
+    saved_operation_failed: 'The saved server operation failed. Its latest measured progress and recorded diagnostics are shown below; downloaded partial files are preserved.',
     matching_release_required: 'This saved setup belongs to an unsupported release. Recovery is blocked; keep its checkpoints and use its matching trusted controller. Nothing was retried.',
     compatible_retry_contract_changed: 'Saved setup cannot be safely recovered: its approved contract or target binding changed. Keep the checkpoints and inspect the original trusted release; nothing was retried.',
     compatible_retry_not_safe: 'Saved setup recovery is blocked: completed-stage receipts, service units, active release or worker locks do not permit safe retry. Stop other controllers, wait for running work and inspect the saved records; nothing was retried.',
@@ -223,7 +225,7 @@
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
     $('install').textContent = pendingInstall ? 'Retry Install request' : 'Install';
-    $('cancel-setup').hidden = !setup.busy;
+    $('cancel-setup').hidden = !setup.busy || setup.observing === true;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
     $('setup-refresh').disabled = !usable;
     $('dashboard-refresh').disabled = !available || !authenticated;
@@ -418,6 +420,10 @@
       setConnection(await pending);
       log('SSH authentication succeeded. Scanning hardware with read-only commands; no installation starts.');
       if (capabilities.scan === true && !setup.busy) await scanHardware();
+      if (!setup.busy && capabilities.release_available === true) {
+        try { await observeSavedSetup(); }
+        catch (error) { if (error.code !== 'setup_not_found') throw error; }
+      }
     });
   });
   $('forget-recovery').addEventListener('click', () => perform('Clearing retained SSH credential…', async () => {
@@ -499,6 +505,11 @@
       showSelection();
     }
     $('setup-progress').hidden = !setup.busy;
+    const downloadProgress = (setup.snapshot?.events || []).filter(r => r.event.stage === 'model_download' && r.event.progress).slice(-1)[0]?.event.progress;
+    if (setup.phase === 'downloading' && downloadProgress?.total > 0) {
+      $('setup-progress').max = downloadProgress.total;
+      $('setup-progress').value = downloadProgress.completed;
+    } else $('setup-progress').removeAttribute('value');
     $('setup-events').replaceChildren();
     for (const record of setup.snapshot?.events || []) $('setup-events').append(node('li', eventLine(record)));
     const checkpoint = setup.snapshot?.setups?.find(item => item.plan_digest === setup.plan_digest);
@@ -509,14 +520,18 @@
       ? 'Installation, model and generation readiness have not been verified.'
       : `${phase} · ${setup.state}. Installation ready: ${setup.installation_ready === true}. Model files ready: ${setup.model_ready === true}. Generation tested: not proven.`;
     $('setup-phase-time').hidden = setup.state === 'idle';
-    $('setup-phase-time').textContent = `Phase elapsed (controller observation): ${seconds(setup.phase_elapsed_seconds)}. No percentage or ETA is assumed.`;
+    $('setup-phase-time').textContent = setup.observing
+      ? 'Attached to saved server operation. Progress refreshes automatically; no installation was restarted.'
+      : `Phase elapsed (controller observation): ${seconds(setup.phase_elapsed_seconds)}. No percentage or ETA is assumed.`;
     showDiagnostics(diagnostic);
     const recovery = $('setup-recovery');
     recovery.hidden = !setup.error && !['cancelled', 'cancelling', 'completed'].includes(setup.state);
     recovery.textContent = setup.error
       ? (messages[setup.error] || `Setup stopped (${setup.error}). No completion is assumed. Inspect saved setup before another action.`)
       : 'Cancellation stops further automatic actions, not rollback. Already-started OS/package or detached work may continue, especially offline. Wait for setup to stop before disconnecting and authenticating again.';
-    if (setup.state === 'completed') recovery.textContent = 'Setup completed; the password was cleared from controller memory. Generation is still untested. To install another selection, disconnect, reconnect and authenticate again, then click Install.';
+    if (setup.state === 'completed') recovery.textContent = setup.observing
+      ? 'The saved model download completed and verified its files. Generation is still untested.'
+      : 'Setup completed; the password was cleared from controller memory. Generation is still untested. To install another selection, disconnect, reconnect and authenticate again, then click Install.';
     if (setup.blockers?.length) recovery.textContent += ' ' + setup.blockers.join(' ');
     if (setup.state === 'failed' && setup.retry) recovery.textContent += ` ${setup.retry.eligible ? 'Safe stage retry available.' : 'Retry unavailable: ' + setup.retry.reason + '.'} ${setup.retry.next_action || ''}`;
     if (setup.state === 'failed' && connection.state !== 'authenticated') recovery.textContent += ' Reconnect and authenticate, then inspect saved setup.';
@@ -524,7 +539,31 @@
     if (setup.busy) { runtimeReady = false; resetDashboardPolling(); }
     render();
   }
+  async function observeSavedSetup(current = () => true) {
+    const document = await request('/setup/observe', {});
+    if (!current()) return;
+    const snapshot = document.snapshot;
+    const checkpoint = snapshot.setups.find(item => item.plan_digest === document.plan_digest);
+    const operation = snapshot.operation?.plan_digest === document.plan_digest ? snapshot.operation : null;
+    const running = operation?.state === 'running';
+    const downloading = operation?.action === 'download';
+    const completed = downloading && operation.state === 'completed';
+    const failed = ['failed', 'interrupted'].includes(operation?.state) || checkpoint?.state === 'failed';
+    inspectedSetup = { observing: true, busy: running, state: running ? 'running' : completed ? 'completed' : failed ? 'failed' : 'observed',
+      phase: downloading ? 'downloading' : operation?.action === 'activate' ? 'activating' : 'installing',
+      profile: document.plan.profile, artifact_set_digest: document.selection.artifact_set_digest,
+      plan_digest: document.plan_digest, snapshot, diagnostics: snapshot.diagnostics || {}, retry: snapshot.retry,
+      installation_ready: checkpoint?.state === 'ready', model_ready: completed,
+      error: failed ? (operation?.state === 'interrupted' ? 'saved_operation_interrupted' : 'saved_operation_failed') : null };
+    showSetup(inspectedSetup);
+    if (running) {
+      clearTimeout(setupTimer);
+      setupTimer = setTimeout(() => setupProgress(), 2000);
+    }
+  }
   async function inspectSetup() {
+    await observeSavedSetup();
+    if (setup.busy || setup.installation_ready) return;
     let document;
     try {
       document = await request('/setup/restore', {});
@@ -575,12 +614,16 @@
       const data = await request('/status');
       if (!current()) return;
       setConnection(data);
+      if (inspectedSetup?.observing && connection.state === 'authenticated') await observeSavedSetup(current);
     } catch (error) {
       if (!current()) return;
       showError(error, false);
       if (!ready) return;
     }
-    if (current() && setup.busy) setupTimer = setTimeout(() => setupProgress(), 700);
+    if (current() && setup.busy) {
+      clearTimeout(setupTimer);
+      setupTimer = setTimeout(() => setupProgress(), setup.observing ? 2000 : 700);
+    }
   }
   $('generation-profile').addEventListener('change', render);
   $('install').addEventListener('click', () => perform('Starting selected automatic setup…', async () => {
@@ -729,7 +772,11 @@
       await refresh();
       renderCatalog(await request('/profiles'));
       if (setup.busy) await setupProgress();
-      $('operation').textContent = 'Ready for a secure SSH connection.';
+      else if (connection.state === 'authenticated' && capabilities.release_available === true) {
+        try { await observeSavedSetup(); }
+        catch (error) { if (error.code !== 'setup_not_found') showError(error, false); }
+      }
+      if (!setup.busy) $('operation').textContent = 'Ready for a secure SSH connection.';
       log('Local browser session secured. Authenticate, scan, select a model and click Install to begin.');
     } catch (error) {
       ready = false;
