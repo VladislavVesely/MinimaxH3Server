@@ -6,7 +6,7 @@ ConditionPathExists=@READINESS@
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env @PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
+ExecStart=/usr/bin/python3 -c "import os,sys;os.execv(sys.argv[1],sys.argv[1:])" @PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
 Environment=@ENVIRONMENT@
 WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure

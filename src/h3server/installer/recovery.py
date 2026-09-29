@@ -61,8 +61,9 @@ Restart=no
 [Install]
 WantedBy=default.target
 '''
-# systemd restricts executable paths; env keeps the absolute Python path an
-# escaped argument (including quotes and dollars), without a shell or PATH lookup.
+# systemd restricts executable paths, and env treats paths containing '=' as
+# assignments. A fixed Python trampoline execs the absolute path argument without
+# a shell or PATH lookup; execv preserves the daemon PID for systemd supervision.
 DAEMON_UNIT = '''[Unit]
 Description=H3 loopback user daemon
 After=network-online.target h3-bootstrap.service
@@ -71,7 +72,7 @@ ConditionPathExists=@READINESS@
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env @PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
+ExecStart=/usr/bin/python3 -c "import os,sys;os.execv(sys.argv[1],sys.argv[1:])" @PYTHON@ -m h3server.remote --root @ROOT@@CONFIG@
 Environment=@ENVIRONMENT@
 WorkingDirectory=@WORKINGDIRECTORY@
 Restart=on-failure

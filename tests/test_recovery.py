@@ -546,7 +546,7 @@ def test_service_environment_symlink_cannot_escape_root(tmp_path):
         recovery.render_units(paths, p)
 
 
-@pytest.mark.parametrize('name', ['ordinary', 'space % dollar$ quote" slash\\segment'])
+@pytest.mark.parametrize('name', ['ordinary', 'space % dollar$ quote" equals= slash\\segment'])
 def test_systemd_scalar_paths_are_not_exec_arguments(tmp_path, name):
     paths, p, _ = prepared(tmp_path / name)
     unit = recovery.render_units(paths, p)['h3server.service']
@@ -560,8 +560,35 @@ def test_systemd_scalar_paths_are_not_exec_arguments(tmp_path, name):
         for path in (python, paths.root)
     )
     assert values['ExecStart'] == (
-        f'/usr/bin/env "{escaped_python}" -m h3server.remote --root "{escaped_root}"'
+        '/usr/bin/python3 -c "import os,sys;os.execv(sys.argv[1],sys.argv[1:])" '
+        f'"{escaped_python}" -m h3server.remote --root "{escaped_root}"'
     )
+
+
+@pytest.mark.parametrize('name', ['ordinary', 'equals=', 'space % dollar$ quote" equals= slash\\segment'])
+def test_daemon_launcher_executes_absolute_python_and_preserves_pid(tmp_path, name):
+    import shlex
+    import sys
+    paths, p, _ = prepared(tmp_path / name)
+    python = paths.environments / canonical_plan_digest(p) / 'bin/python'
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    # Tokenize only the fixed launcher, not systemd's dynamic argument escaping.
+    # The native parser test below independently checks the rendered unit syntax.
+    command = next(line.removeprefix('ExecStart=') for line in recovery.DAEMON_UNIT.splitlines()
+                   if line.startswith('ExecStart='))
+    launcher = shlex.split(command.split(' @PYTHON@', 1)[0])
+    probe = 'import json,os,sys;print(json.dumps([os.getpid(),sys.executable,sys.argv]))'
+    arguments = ['-c', probe, '-m', 'h3server.remote', '--root', str(paths.root)]
+    with subprocess.Popen([*launcher, str(python), *arguments], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, env={'PATH': ''}) as process:
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, stderr
+        assert stderr == ''
+        pid, executable, argv = json.loads(stdout)
+        assert pid == process.pid
+        assert Path(executable).resolve() == python.resolve()
+        assert argv == ['-c', *arguments[2:]]
 
 
 def test_native_systemd_parser_without_activation(tmp_path):
@@ -569,7 +596,7 @@ def test_native_systemd_parser_without_activation(tmp_path):
     import sys
     if sys.platform != 'linux' or not shutil.which('systemd-analyze'):
         pytest.skip('native systemd parser unavailable; this is not Linux unit validation')
-    paths, p, _ = prepared(tmp_path / 'space % dollar$ quote"')
+    paths, p, _ = prepared(tmp_path / 'space % dollar$ quote" equals= slash\\segment')
     directory = paths.environments / canonical_plan_digest(p)
     (directory / 'bin').mkdir(parents=True)
     (directory / 'bin/python').symlink_to(sys.executable)
