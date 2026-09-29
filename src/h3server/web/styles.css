@@ -137,4 +137,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 #setup-events, #job-events { max-height: 18rem; overflow: auto; padding-left: 1.25rem; font-size: .8rem; overflow-wrap: anywhere; }
 .job-card { border-top: 1px solid #d9ddd8; padding: 1rem 0; overflow-wrap: anywhere; }
 .job-card video { display: block; width: 100%; max-height: 28rem; margin: .75rem 0; }
-#readiness, #setup-status { overflow-wrap: anywhere; }
+#readiness, #setup-status, #selected-profile, #plan-selection, #download-selection, #license-disclosures, #unavailable-variants { overflow-wrap: anywhere; }
+#selected-profile ul, #download-selection ul { padding-left: 1.25rem; }

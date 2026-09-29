@@ -70,15 +70,18 @@
         <section class="panel" id="installation" aria-labelledby="installation-heading">
           <p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Review before you install</h2>
           <p id="install-note">Choose a profile after scanning. Staging transfers only the verified application wheel and plan, not model weights. No system mutation occurs until approval.</p>
-          <label for="install-profile">Installation profile</label><select id="install-profile"><option value="h3-bf16-cpu-offload-experimental">BF16 CPU offload · experimental</option><option value="h3-int8-group-offload-experimental">INT8 group offload · experimental</option></select>
+          <label for="install-profile">Installation profile</label><select id="install-profile" disabled></select>
+          <p class="field-hint">Smaller pruned choices first; GGUF Q4_K_M is the default experimental choice for RTX 4090, not a guaranteed memory fit. Legacy profiles remain explicit alternatives. NVFP4 needs positively identified Blackwell, never Ada/RTX 4090.</p>
+          <div id="selected-profile"></div><ul id="unavailable-variants" class="notice"></ul>
           <label class="check-label"><input id="sudo-available" type="checkbox"> I can supply a sudo password for approved operations</label>
           <button id="plan" class="primary" type="button" disabled>Stage release &amp; review plan</button>
           <button id="restore-setup" class="secondary" type="button" disabled>Restore saved setup</button>
           <div id="plan-review" hidden>
-            <h3>Exact proposed changes</h3><pre id="plan-document"></pre>
+            <h3>Exact proposed changes</h3><div id="plan-selection"></div><pre id="plan-document"></pre>
             <details><summary>Full pinned MiniMax H3 license and Exhibit A</summary><pre id="license-document"></pre></details>
+            <ul id="license-disclosures" class="notice"></ul>
             <p class="notice">MiniMax H3 has territorial and commercial restrictions. Acknowledgement does not grant eligibility or override required written authorization. These profiles and native runtime remain experimental.</p>
-            <label class="check-label"><input id="license-check" type="checkbox"> I read and acknowledge the complete pinned license and Exhibit A</label>
+            <label class="check-label"><input id="license-check" type="checkbox"> I read and acknowledge the complete pinned license and Exhibit A, and the auxiliary provenance/license disclosures above</label>
             <label class="check-label"><input id="eligibility-check" type="checkbox"> I confirm eligibility, including any necessary separate written authorization</label>
             <label class="check-label"><input id="system-check" type="checkbox"> I approve the listed system changes, user services and privileged lingering registration</label>
             <div class="field"><label for="sudo-password">Sudo password (optional, memory only)</label><input id="sudo-password" type="password" autocomplete="off" maxlength="4096"></div>
@@ -91,7 +94,7 @@
             <label class="check-label"><input id="cancel-check" type="checkbox"> I explicitly approve cancellation of all accepted jobs</label>
             <button id="activate" class="primary" type="button">Approve activation / update</button>
             <button id="repair" class="secondary" type="button">Approve interrupted activation recovery</button><p class="field-hint">Recovery rolls back before commit; after a durable healthy commit it releases the maintenance gate without discarding newly accepted jobs.</p>
-            <h3>Model acquisition · 144,051,160,615 bytes</h3><p>Model download consent is separate. Files are pinned, resumable and verified; model files being ready does not prove a generated video.</p>
+            <h3>Selected model acquisition</h3><div id="download-selection"></div><p>Model download consent is separate. Files are pinned, resumable and verified; model files being ready does not prove a generated video.</p>
             <label class="check-label"><input id="download-check" type="checkbox"> I approve this model download under the license and eligibility attestations above</label>
             <button id="download-model" class="primary" type="button" disabled>Download / resume model</button><button id="cancel-download" class="secondary" type="button">Cancel model download</button>
           </div>
@@ -102,7 +105,7 @@
           <button id="dashboard-refresh" class="secondary" type="button" disabled>Refresh dashboard</button><p id="readiness" role="status">Daemon disconnected. No readiness assumed.</p>
           <form id="generation-form"><fieldset id="generation-fields" disabled><legend>Text-to-video settings</legend>
             <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" required maxlength="15000" rows="3"></textarea></div>
-            <label for="generation-profile">Generation profile</label><select id="generation-profile"><option value="h3-bf16-cpu-offload-experimental">BF16 CPU offload</option><option value="h3-int8-group-offload-experimental">INT8 group offload</option></select>
+            <label for="generation-profile">Generation profile</label><select id="generation-profile"></select>
             <div class="form-row"><div class="field"><label for="width">Width</label><input id="width" type="number" min="32" max="1344" step="32" value="1344" required></div><div class="field"><label for="height">Height</label><input id="height" type="number" min="32" max="1344" step="32" value="768" required></div></div>
             <p class="field-hint">Canvas area at most 1,032,192 pixels; axes must be multiples of 32. 24 fps, video plus audio.</p>
             <div class="form-row"><div class="field"><label for="frames">Frames</label><input id="frames" type="number" min="124" max="345" step="17" value="124" required></div><div class="field"><label for="steps">Sigma-grid steps</label><input id="steps" type="number" min="2" max="1000" value="50" required></div><div class="field"><label for="seed">Seed</label><input id="seed" type="number" min="0" max="9007199254740991" value="42" required></div></div>

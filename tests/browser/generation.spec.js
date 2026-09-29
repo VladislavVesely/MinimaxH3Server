@@ -7,10 +7,11 @@ const readline = require('node:readline');
 const path = require('node:path');
 const test = base.extend({
   controlledSetup: ['', { option: true }],
-  controller: async ({ controlledSetup }, use) => {
+  prunedProfile: ['', { option: true }],
+  controller: async ({ controlledSetup, prunedProfile }, use) => {
     const root = path.resolve(__dirname, '../..');
     const child = spawn(process.env.H3_TEST_PYTHON || path.join(root, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python'), [path.join(__dirname, 'generation_fixture.py')], {
-      cwd: root, env: { ...process.env, PYTHONPATH: path.join(root, 'src'), H3_TEST_CONTROLLED_SETUP: controlledSetup }, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: root, env: { ...process.env, PYTHONPATH: path.join(root, 'src'), H3_TEST_CONTROLLED_SETUP: controlledSetup, H3_TEST_PRUNED_PROFILE: prunedProfile }, stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stderr = ''; child.stderr.on('data', data => { stderr += data; });
     const lines = readline.createInterface({ input: child.stdout });
@@ -51,6 +52,7 @@ test('wizard stages real files, binds approvals, installs via mocked IO and repl
   await login(page, controller);
   await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
+  await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
   await page.getByRole('button', { name: 'Stage release & review plan' }).click();
   await expect(page.locator('#plan-document')).toContainText('backend_revision');
   await expect(page.getByRole('button', { name: 'Approve installation', exact: true })).toBeDisabled();
@@ -118,6 +120,7 @@ test('invalid source settings and local proxy session protections remain enforce
 async function approveControlledSetup(page, controller) {
   await login(page, controller);
   await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
+  await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
   await page.getByRole('button', { name: 'Stage release & review plan' }).click();
   await page.getByLabel('I read and acknowledge the complete pinned license and Exhibit A').check();
   await page.getByLabel('I confirm eligibility, including any necessary separate written authorization').check();
@@ -250,7 +253,8 @@ test.describe('bounded accepted launch observation', () => {
       } else if (end === 'pagehide') {
         await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
       } else {
-        await page.getByRole('button', { name: 'Stage release & review plan' }).click();
+        await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
+  await page.getByRole('button', { name: 'Stage release & review plan' }).click();
         await expect(page.getByRole('button', { name: 'Stage release & review plan' })).toBeEnabled();
         // Merely reviewing/replaying a planned checkpoint is not launch acceptance.
         await page.getByRole('button', { name: 'Replay setup progress' }).click();
@@ -386,5 +390,89 @@ test.describe('approved reboot observation recovery', () => {
     expect(posts.filter(url => /\/setup\/(resume|restore)$/.test(url))).toHaveLength(0);
     expect(posts.filter(url => url.endsWith('/authenticate'))).toHaveLength(1);
     expect(errors).toEqual([]);
+  });
+});
+
+for (const profile of ['h3-gguf-q4-k-m', 'h3-convrot-mixed']) {
+  test.describe(`pruned selected ${profile}`, () => {
+    test.use({ prunedProfile: profile });
+    test('selection, exact consent, restore and active generation stay profile-bound (controlled IO)', async ({ page, controller }) => {
+      await login(page, controller);
+      await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
+      await expect(page.locator('#install-profile')).toHaveValue('h3-gguf-q4-k-m');
+      await expect(page.locator('#profiles')).toContainText('Abiray/MiniMax-H3-Pruned-GGUF');
+      await expect(page.locator('#profiles')).toContainText('Abiray/Minimax-H3-nvfp4-INT4-INT8-Convrot');
+      await expect(page.locator('#profiles')).toContainText('Host RAM: unknown');
+      await expect(page.locator('#profiles')).toContainText('Publisher recommends 16 GB');
+      await expect(page.locator('#profiles')).toContainText('Publisher: 15+ GB');
+      await expect(page.locator('#install-profile option[value="h3-nvfp4"]')).toBeDisabled();
+      await expect(page.locator('#unavailable-variants')).toContainText('Pure INT4 diffusion is absent');
+      await page.locator('#install-profile').selectOption(profile);
+      await expect(page.locator('#selected-profile')).toContainText('Winnougan/MiniMax-H3-INT4_Convrot_ComfyUI');
+      await expect(page.locator('#selected-profile')).toContainText('Video VAE');
+      await expect(page.locator('#selected-profile')).toContainText('Audio VAE');
+      const planned = page.waitForResponse(r => r.url().endsWith('/setup/plan'));
+      await page.getByRole('button', { name: 'Stage release & review plan' }).click();
+      const fullReview = await (await planned).json();
+      await expect(page.locator('#plan-document')).toContainText('artifact_set_digest');
+      const review = JSON.parse(await page.locator('#plan-document').textContent());
+      expect(review.plan.profile).toBe(profile);
+      const total = profile.includes('gguf') ? '31,550,953,118' : '35,889,785,333';
+      await expect(page.locator('#download-selection')).toContainText(total + ' bytes');
+      await expect(page.locator('#download-selection')).not.toContainText('144,051,160,615');
+      await expect(page.locator('#license-disclosures')).toContainText('does not remove upstream derivative obligations');
+      for (const id of ['license-check','eligibility-check','system-check']) await page.locator('#'+id).check();
+      await page.getByRole('button', { name: 'Approve installation', exact: true }).click();
+      await expect(page.locator('#setup-status')).toContainText('ready');
+      const denied = await page.evaluate(async review => {
+        const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
+        const response = await fetch('/api/v1/controller/setup/download', {
+          method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf},
+          body: JSON.stringify({plan_digest:review.plan_digest, artifact_set_digest:'0'.repeat(64),
+            license_sha256:review.license_sha256, license_acknowledged:true, eligibility_confirmed:true, download_approved:true})});
+        return response.status;
+      }, fullReview);
+      expect(denied).toBe(502); // real target rejects stale catalog consent
+      await page.locator('#download-check').check();
+      const download = page.waitForRequest(r => r.url().endsWith('/setup/download'));
+      await page.locator('#download-model').click();
+      expect((await download).postDataJSON().artifact_set_digest).toBe(review.plan.artifact_set_digest);
+      await expect(page.locator('#setup-status')).toContainText('Operation: download');
+      // Restore must show the exact old set, never revert to the default/legacy.
+      await page.reload();
+      await page.locator('#restore-setup').click();
+      await expect(page.locator('#install-profile')).toHaveValue(profile);
+      await expect(page.locator('#download-selection')).toContainText(total + ' bytes');
+      await expect(page.locator('#download-model')).toBeDisabled();
+      await page.locator('#dashboard-refresh').click();
+      await expect(page.locator('#generation-profile')).toHaveValue(profile);
+      await expect(page.locator('#generation-profile option')).toHaveCount(1);
+      await expect(page.locator('#steps')).toHaveValue('20');
+      await expect(page.locator('#lora-field')).toBeHidden();
+      await expect(page.locator('#readiness')).toContainText(profile);
+      await page.locator('#prompt').fill('TEST ONLY pruned fixture output');
+      const generation = page.waitForRequest(r => r.url().endsWith('/remote/jobs') && r.method() === 'POST');
+      await page.locator('#generate').click();
+      expect((await generation).postDataJSON()).toMatchObject({profile,steps:20});
+      await expect(page.getByRole('link', {name:'Download MP4'})).toBeVisible();
+      // Changing a choice revokes UI approvals and requires a fresh review.
+      await page.locator('#install-profile').selectOption('h3-gguf-q5-k-m');
+      await expect(page.locator('#plan-review')).toBeHidden();
+      await expect(page.locator('#download-model')).toBeDisabled();
+    });
+  });
+}
+
+test.describe('pruned dashboard isolation', () => {
+  test.use({ prunedProfile: 'h3-gguf-q4-k-m' });
+  test('legacy completed metadata is not pruned inference evidence; polling preserves explicit steps', async ({page,controller}) => {
+    await login(page, controller);
+    await controller.control({action:'historical-legacy-output'});
+    await page.locator('#dashboard-refresh').click();
+    await expect(page.locator('#readiness')).toContainText('Generation tested: not proven');
+    await expect(page.locator('#steps')).toHaveValue('20');
+    await page.locator('#steps').fill('23');
+    await page.locator('#dashboard-refresh').click();
+    await expect(page.locator('#steps')).toHaveValue('23');
   });
 });

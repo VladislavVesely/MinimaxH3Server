@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 
 import uvicorn
 from fastapi.responses import HTMLResponse
@@ -124,7 +125,9 @@ class FixtureSSH(SSHConnection):
                 threading.Thread(target=launch, daemon=True).start()
             else:
                 setup = runner.create(plan)
-                runner.run(setup.setup_id, approval)
+                # TEST ONLY source/runtime IO: no checkout, pip, CUDA or weights.
+                with patch('h3server.backends.comfy_runtime.verify_sources'):
+                    runner.run(setup.setup_id, approval)
             return CommandResult(returncode=0)
         raise AssertionError('TEST ONLY unsupported SSH action')
     def deployment_action(self, *, root, artifact, digest, action, data):
@@ -132,6 +135,22 @@ class FixtureSSH(SSHConnection):
         from h3server.controller.target import snapshot
         paths = AppPaths(root)
         if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'])
+        if action == 'download':
+            # Real target consent validation and exact plan binding; refuse to
+            # detach/run the actual weight downloader in this browser fixture.
+            code = """from unittest.mock import patch
+from h3server.controller.target import main
+with patch('h3server.controller.target._detach', return_value=False):
+    main()
+"""
+            result = subprocess.run([sys.executable, '-c', code, '--root', root, '--digest', digest, action],
+                input=json.dumps(data), capture_output=True, text=True, timeout=10, check=False)
+            if result.returncode:
+                raise ControllerError('deployment_operation_failed', 502)
+            from h3server.downloads import require_consent
+            plan = json.loads((paths.bootstrap/digest/'plan.json').read_text())
+            require_consent(paths, profile_name=plan['profile'])
+            return json.loads(result.stdout)
         if action == 'activate':
             # Exercise the real target's prerequisite rejection, never activation.
             # Refuse detaching even if that prerequisite check regresses.
@@ -163,6 +182,13 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
         from h3server.backends.h3 import CAPABILITIES
         backend = replace(backend, capabilities=CAPABILITIES,
             validate_video=lambda fd: __import__('os').read(fd, 100).startswith(b'TEST ONLY fixture-mp4'))
+        profile = os.environ.get('H3_TEST_PRUNED_PROFILE')
+        if profile:
+            from h3server.backends.pruned import CAPABILITIES as PRUNED_CAPABILITIES
+            from h3server.backends.catalog import get_artifact_set
+            selected = get_artifact_set(profile)
+            backend = replace(backend, capabilities=PRUNED_CAPABILITIES,
+                              runtime_id=selected.runtime_id, profiles=(profile,))
         store = Store(paths.state/'remote.sqlite')
         worker = Worker(store, paths, backend=backend, min_free_bytes=0)
         daemon = remote_app(store, worker, token=load_token(paths), heartbeat_seconds=.2)
@@ -173,7 +199,10 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
         while not server.started: time.sleep(.01)
         network = Network(); network.home = home; network.api_port = remote_listener.getsockname()[1]
         network.outputs.update({'LC_ALL=C uname -s':b'Linux', 'LC_ALL=C uname -m':b'x86_64',
-            'LC_ALL=C cat /etc/os-release':b'ID=ubuntu\nVERSION_ID="24.04"\n'})
+            'LC_ALL=C cat /etc/os-release':b'ID=ubuntu\nVERSION_ID="24.04"\n',
+            'LC_ALL=C cat /proc/meminfo': b'MemTotal: 30408704 kB\n',
+            'LC_ALL=C nvidia-smi --query-gpu=pci.bus_id,name,memory.total,driver_version --format=csv,noheader,nounits':
+                b'00000000:01:00.0, NVIDIA GeForce RTX 4090, 24564, 580.1\n'})
         connection = FixtureSSH(Path(temporary)/'trust', socket_factory=network.socket, transport_factory=network.transport)
         connection.start_setup = threading.Event(); connection.finish_setup = threading.Event()
         # Private subprocess pipe only: no fixture controls on the HTTP API.
@@ -185,6 +214,15 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                 elif command['action'] == 'lose-setup-connection':
                     network.unavailable_until = time.monotonic() + 4
                     connection.close()
+                elif command['action'] == 'historical-legacy-output':
+                    # TEST ONLY historical metadata, not generated media. This
+                    # must not certify a newly activated pruned profile.
+                    from h3server.domain import JobRequest, GenerationSettings, JobStatus
+                    from h3server.store import OutputMetadata
+                    job = store.accept_job(JobRequest('TEST ONLY legacy history', settings=GenerationSettings()), capabilities=CAPABILITIES)
+                    store.transition_job(job.job_id, JobStatus.RUNNING)
+                    store.transition_job(job.job_id, JobStatus.COMPLETED,
+                        output=OutputMetadata('video.mp4', 1, 'video/mp4'))
                 elif command['action'] == 'expire-output': store.expire_job_output(command['job_id'])
                 elif command['action'] == 'delete-job':
                     with store._transaction(write=True) as db:

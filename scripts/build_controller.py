@@ -22,12 +22,18 @@ def verify_wheel(path):
         required = ['h3server/__main__.py', 'h3server/controller/target.py',
                     'h3server/remote/__main__.py', 'h3server/remote/worker.py',
                     'h3server/backends/manifest.json', 'h3server/backends/LICENSE.h3.txt',
+                    'h3server/backends/catalog.py', 'h3server/backends/comfy_runtime.py', 'h3server/backends/pruned.py',
                     'h3server/web/index.html', 'h3server/web/app.js', 'h3server/web/styles.css']
         for name in required:
             assert archive.read(name), name
         assert json.loads(archive.read('h3server/backends/manifest.json')) == load_manifest()
         assert archive.read('h3server/backends/LICENSE.h3.txt').decode() == license_document()
         assert not any('/payload/' in name for name in archive.namelist()), 'recursive payload'
+        source = Path(__file__).resolve().parents[1] / 'src'
+        for path in (source / 'h3server').rglob('*'):
+            if path.is_file() and path.suffix in {'.py', '.json', '.txt', '.html', '.js', '.css'}:
+                name = path.relative_to(source).as_posix()
+                assert archive.read(name) == path.read_bytes(), 'stale packaged source: ' + name
     return digest
 
 
@@ -36,7 +42,7 @@ def main():
     payload = root / 'build/controller-payload'
     shutil.rmtree(payload, ignore_errors=True)
     payload.mkdir(parents=True)
-    subprocess.run([sys.executable, '-m', 'build', '--wheel', '--outdir', str(payload)], cwd=root, check=True)
+    subprocess.run([sys.executable, '-m', 'build', '--no-isolation', '--wheel', '--outdir', str(payload)], cwd=root, check=True)
     wheel, = payload.glob('*.whl')
     digest = verify_wheel(wheel)
     (payload / 'release.json').write_text(json.dumps({'wheel': wheel.name, 'sha256': digest}, sort_keys=True), encoding='utf-8')

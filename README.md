@@ -51,7 +51,10 @@ retries; no automatic host-key approval occurs.
    sudo passwords remain request-scoped.
    SSH agents/private-key login are **not implemented**; no account SSH config or
    `server.txt` is imported. Never paste a private key into the password field.
-3. Choose an experimental profile and **Stage release & review plan**. This
+3. Choose an experimental profile (smaller pruned GGUF Q4_K_M is the default)
+   and **Stage release & review plan**. Both requested Abiray collections are
+   selectable. Review the diffusion model, shared INT4 encoder, both VAEs, exact
+   total bytes and source/license disclosures; changing selection clears approvals. This
    approval stages application files, not OS changes. Review exact package,
    environment and service-registration changes; approve license eligibility,
    installation and sudo separately. Driver replacement is never unconditional.
@@ -70,12 +73,53 @@ versions are rejected; driver repositories are not guessed. Missing tools yield
 unknown observations. There are currently **no native Linux server/GPU versions
 certified by this project**.
 
+### Smaller pruned choices (no original snapshot)
+
+| Profile ID | Selected weight download bytes | Publisher guidance (not measured peaks) |
+|---|---:|---|
+| `h3-gguf-q4-k-m` (default) |31,550,953,118|16 GB VRAM|
+| `h3-gguf-q5-k-m` |34,055,739,038|24 GB VRAM|
+| `h3-convrot-mixed` |35,889,785,333|15+ GB VRAM (~15.5 GB)|
+| `h3-convrot-int8` |40,957,152,230|24+ GB VRAM|
+| `h3-nvfp4` |32,515,409,407|**Blackwell only**, not RTX 4090/Ada|
+
+GGUF models are from `Abiray/MiniMax-H3-Pruned-GGUF`; ConvRot/NVFP4 models and
+both VAEs are from `Abiray/Minimax-H3-nvfp4-INT4-INT8-Convrot`. Each choice selects
+**one** diffusion file, the explicitly disclosed Winnougan
+`MiniMax-H3-INT4_Convrot_ComfyUI` encoder (not an NVFP4 encoder), and video/audio
+VAEs. Pure INT4 diffusion is **unavailable** in the pinned Abiray inventory; no
+advertised-but-absent URL is synthesized. All revisions, file hashes and selected
+sets are pinned. The UI exposes exact sources and aggregate totals before consent.
+
+Host RAM and peak VRAM are **unknown/unmeasured**, including on RTX 4090/29 GiB;
+pruned profiles do not inherit the legacy 96/192 GiB RAM rules. Q4 is the smaller
+experimental default, not a memory-fit guarantee. NVFP4 selection requires positive
+Blackwell identification; the current conservative name mapping recognizes RTX
+5090, rejects RTX 4090, and leaves other names unknown (not eligible).
+
+The 4,456,704-byte tokenizer is included once in pinned runtime source, not fetched
+again with weights. Runtime/dependency bytes are extra and not fully known.
+Selected-weight partials are renamed per file, not duplicated into a second cache;
+other snapshots, stale partials, runtime/upgrade environments and outputs add disk
+use. No whole repository or original 134 GiB snapshot is downloaded by these choices.
+
+The managed headless ComfyUI/GGUF backend supports fixed local base text-to-video
+with audio, 24 fps, 20 default steps, seed and multiples-of-32 canvas. No ComfyUI
+server, hosted API, arbitrary workflow, LoRA, negative-prompt/CFG controls or
+image/reference inputs are exposed. Generation options come from the **active
+daemon**, not the installation dropdown; switching requires approved installation
+and activation. No automatic fallback. See [source evidence and exact artifacts](docs/research/h3-pruned-runtime.md),
+[runtime operations](docs/research/h3-pruned-operation.md) and
+[UI/build integration](docs/research/h3-pruned-integration.md).
+
+### Explicit legacy alternatives
+
 | Experimental profile | Upstream GPU recipe | Local planning budget (unmeasured) |
 |---|---|---|
 | bf16 CPU offload | one 80 GB GPU | 192 GiB RAM, 320 GiB free disk |
 | int8 group offload | one 24–32 GB GPU | 96 GiB RAM, 320 GiB free disk |
 
-The selected 62 files total **144,051,160,615 bytes (134.16 GiB)**, even for int8.
+Only the **legacy** profiles select 62 files totaling **144,051,160,615 bytes (134.16 GiB)**, even for legacy int8.
 Budgets include staged copies and overhead, not guaranteed peak-memory fits;
 retained videos/caches need more disk. Do not sum multiple GPUs into one fit.
 The pinned runtime uses dense attention; sparse requests are rejected, including
@@ -102,7 +146,11 @@ USD 20 million annual revenue require prior written authorization; commercial UI
 must prominently display “MiniMax H3”. Redistribution needs the Agreement, required
 NOTICE/modification marking and downstream obligations. AUP/safeguard/reporting
 duties and restrictions on improving unrelated AI models also apply. A checkbox
-cannot cure ineligibility. Review runtime/component licenses independently. The
+cannot cure ineligibility. Both Abiray cards declare MiniMax H3 Community License
+(`other`); Winnougan encoder publisher metadata says Apache-2.0 but does **not**
+remove upstream MiniMax/Qwen derivative obligations. The UI presents these
+provenance disclosures with the full upstream license before separate approvals.
+Review runtime/component licenses independently. The
 controller distribution contains the license, **not weights**, and does not infer
 user eligibility or grant rights to third-party software.
 
@@ -125,7 +173,10 @@ On Windows use `.venv\Scripts\python.exe` and `dist\h3-controller.exe`; controll
 and native ACL tests run there, while POSIX remote-daemon tests belong on Linux/
 macOS. Set `H3_TEST_PYTHON` to override the browser fixture interpreter. Native
 builds are not cross-compiles. Build tooling installs controller dependencies only,
-never Torch or weights. Output: `dist/h3-controller[.exe]`, `dist/SHA256SUMS`;
+never Torch or weights. Wheel build uses the installed build tools (`--no-isolation`);
+keep setuptools >=68 installed. Verification compares every application source/resource
+in the remote wheel to this checkout, checks embedded resources and exercises the
+native authenticated profile catalog against source. Output: `dist/h3-controller[.exe]`, `dist/SHA256SUMS`;
 intermediate pure wheel: `build/controller-payload/`. Generated files are ignored.
 For source launch, first build a wheel (`python -m build --wheel`), verify its hash,
 then `python -m h3server --wheel dist/h3server-0.1.0-py3-none-any.whl --sha256 HASH`.

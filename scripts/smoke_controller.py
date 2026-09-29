@@ -17,7 +17,7 @@ from urllib.request import Request, build_opener, HTTPCookieProcessor
 import zipfile
 
 
-def verify_embedded(executable):
+def verify_embedded(executable, source_root=None):
     from PyInstaller.archive.readers import CArchiveReader
     archive = CArchiveReader(str(executable))
     def extract(name):
@@ -30,7 +30,14 @@ def verify_embedded(executable):
     with zipfile.ZipFile(io.BytesIO(wheel)) as release:
         for name in ['web/index.html', 'web/app.js', 'web/styles.css', 'backends/manifest.json', 'backends/LICENSE.h3.txt']:
             assert release.read('h3server/' + name) == extract('h3server/' + name)
-        assert 'h3server/controller/target.py' in release.namelist()
+        for name in ['controller/target.py', 'backends/catalog.py', 'backends/comfy_runtime.py', 'backends/pruned.py']:
+            assert 'h3server/' + name in release.namelist()
+        if source_root is not None:
+            for path in (source_root / 'h3server').rglob('*'):
+                if path.is_file() and path.suffix in {'.py', '.json', '.txt', '.html', '.js', '.css'}:
+                    name = path.relative_to(source_root).as_posix()
+                    assert release.read(name) == path.read_bytes(), 'stale embedded source: ' + name
+            print('Embedded remote wheel equals current application source (including pruned runtime/catalog)')
     print('Embedded release wheel, web, manifest and full license verified')
 
 
@@ -73,6 +80,12 @@ def smoke(command):
             assert request(api + '/bootstrap', {'token': token}, {'Origin': origin})[0] == 401
             status, _, body = request(api + '/status')
             assert status == 200 and json.loads(body)['capabilities']['release_available']
+            from h3server.controller.deploy import profile_catalog
+            status, _, body = request(api + '/profiles')
+            assert status == 200 and json.loads(body) == json.loads(json.dumps(profile_catalog()))
+            assert b'31,550,953,118' not in html  # totals are catalog-derived, not stale HTML literals
+            assert b'id="download-selection"' in html
+            print('Native authenticated catalog equals source: both Abiray collections, exact totals/digests, no target IO')
             assert request(api + '/disconnect', {}, {'Origin': origin})[0] == 403
             assert request(api + '/disconnect', {}, {'Origin': origin, 'X-CSRF-Token': csrf})[0] == 200
             assert request(api + '/openapi.json')[0] == 200
@@ -103,7 +116,7 @@ def main():
     executable = args.executable.resolve()
     for arguments in [['--help'], ['deploy', '--help'], ['--version']]:
         subprocess.run([str(executable), *arguments], check=True, capture_output=True, timeout=60)
-    verify_embedded(executable)
+    verify_embedded(executable, Path(__file__).resolve().parents[1] / 'src')
     smoke([str(executable)])
     smoke([str(executable), 'deploy'])
 

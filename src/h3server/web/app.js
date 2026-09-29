@@ -18,6 +18,8 @@
   let jobCursor = 0;
   let runtimeReady = false;
   let backendCapabilities = {};
+  let profileCatalog = [];
+  let activeProfileKey = null;
   let setupTimer = null;
   let recoveryTimer = null;
   let recoveryEpoch = 0;
@@ -221,7 +223,8 @@
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    $('plan').disabled = !usable || !authenticated || !scanned;
+    $('install-profile').disabled = !usable || !profileCatalog.length;
+    $('plan').disabled = !usable || !authenticated || !scanned || !$('install-profile').value || $('install-profile').selectedOptions[0]?.disabled;
     for (const id of ['restore-setup', 'setup-refresh', 'dashboard-refresh']) $(id).disabled = !usable || !authenticated;
     const consent = $('license-check').checked && $('eligibility-check').checked;
     $('install').disabled = !usable || !authenticated || !planReview || !consent || !$('system-check').checked || !!planReview?.plan.blockers.length;
@@ -296,8 +299,66 @@
     return details;
   }
 
+  function exactBytes(value) {
+    return value === null || value === undefined ? 'Unknown' : `${value.toLocaleString('en-US')} bytes (${bytes(value)})`;
+  }
+  function profileLabel(name) {
+    return profileCatalog.find(p => p.profile_name === name)?.label || name;
+  }
+  function selectionSummary(parent, selection, inventory = true) {
+    parent.replaceChildren();
+    parent.append(node('h4', `${selection.label} · experimental`),
+      node('p', `Selected weight download: ${exactBytes(selection.weight_bytes)}`));
+    if (!selection.artifact_set_digest) {
+      parent.append(node('p', 'Legacy original snapshot · explicit heavyweight alternative. Pruned weights are not used by this profile.'));
+      return;
+    }
+    parent.append(node('p', selection.publisher_vram_guidance),
+      node('p', 'Host RAM: unknown / unmeasured. Peak VRAM, speed and generation quality are unmeasured; source-inspected, not inference-certified.'),
+      node('p', `Bundled tokenizer: ${exactBytes(selection.tokenizer_bytes)} (included once with runtime source, not a second weight download). Weights + tokenizer: ${exactBytes(selection.selected_bytes)}.`),
+      node('p', 'Runtime/dependency download and installed size: unknown, additional. Fresh weight staging uses per-file rename, no second cache copy. Other snapshots, stale partials, runtime and outputs need extra disk.'));
+    if (selection.required_gpu_family) parent.append(node('p', 'Blackwell only: positive GPU identification required. Ada / RTX 4090 is incompatible; unknown devices are not eligible.'));
+    if (inventory) {
+      const artifacts = node('ul');
+      const roles = {diffusion_model: 'Diffusion model', text_encoder: 'Text encoder (INT4 ConvRot, not NVFP4)', video_vae: 'Video VAE', audio_vae: 'Audio VAE'};
+      for (const artifact of selection.artifacts) {
+        const item = node('li', `${roles[artifact.role]}: ${artifact.path} — ${exactBytes(artifact.size_bytes)}. Source: ${artifact.repository} @ ${artifact.revision}`);
+        item.append(detail('Pinned URL and SHA256', [artifact.url, artifact.sha256]));
+        artifacts.append(item);
+      }
+      parent.append(artifacts, detail('Exact artifact-set approval digest', [selection.artifact_set_digest]));
+    }
+  }
+  function renderCatalog(data) {
+    const previous = $('install-profile').value;
+    profileCatalog = data.profiles;
+    $('install-profile').replaceChildren();
+    for (const profile of profileCatalog) {
+      const option = node('option', profile.label + (profile.required_gpu_family ? ' · Blackwell only' : ' · experimental'));
+      option.value = profile.profile_name;
+      option.disabled = !!profile.required_gpu_family && profile.gpu_eligible !== true;
+      $('install-profile').append(option);
+    }
+    if ([...$('install-profile').options].some(o => o.value === previous && !o.disabled)) $('install-profile').value = previous;
+    $('unavailable-variants').replaceChildren();
+    list($('unavailable-variants'), data.unavailable.map(p => p.reason));
+    showSelection();
+  }
+  function showSelection() {
+    const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
+    if (selected) selectionSummary($('selected-profile'), selected);
+  }
+  $('install-profile').addEventListener('change', () => {
+    resetSetupPolling(); planReview = null;
+    $('plan-review').hidden = true;
+    for (const id of ['license-check', 'eligibility-check', 'system-check', 'download-check']) $(id).checked = false;
+    $('sudo-password').value = '';
+    showSelection(); render();
+  });
+
   function renderScan(data) {
     clearScan();
+    renderCatalog(data);
     const hardware = data.probe.hardware;
     card('Operating system', `${dataText(hardware.distribution)} ${dataText(hardware.distribution_version)}`, `Architecture: ${dataText(hardware.architecture)} · Kernel: ${dataText(data.probe.kernel)}`);
     card('Processor', dataText(hardware.cpu), `Logical CPUs: ${dataText(hardware.cpu_count)}`);
@@ -316,7 +377,12 @@
     $('compatibility').textContent = data.compatibility;
     for (const recommendation of data.recommendations) {
       const item = node('article', undefined, 'profile');
-      item.append(node('h3', recommendation.profile_name));
+      const selection = profileCatalog.find(p => p.profile_name === recommendation.profile_name);
+      item.append(node('h3', selection.label));
+      if (selection.artifact_set_digest) {
+        item.append(node('p', selection.artifacts[0].repository));
+        const summary = node('div'); selectionSummary(summary, selection, false); item.append(summary);
+      }
       item.append(node('span', `Assessment: ${recommendation.status}`, 'profile-status'));
       item.append(node('p', `Required free disk: ${bytes(recommendation.disk?.required_bytes)}`, 'disk-estimate'));
       item.append(detail('Assessment reasons', recommendation.reasons));
@@ -393,6 +459,12 @@
     resetSetupPolling();
     setupCursor = 0; $('setup-events').replaceChildren();
     planReview = data;
+    $('install-profile').value = data.plan.profile;
+    showSelection();
+    selectionSummary($('plan-selection'), data.selection, false);
+    selectionSummary($('download-selection'), data.selection);
+    $('license-disclosures').replaceChildren();
+    list($('license-disclosures'), data.selection.license_disclosures);
     $('plan-review').hidden = false;
     $('plan-document').textContent = JSON.stringify({ plan: data.plan, service: data.service }, null, 2);
     $('license-document').textContent = data.license_text;
@@ -498,7 +570,8 @@
   })));
   $('repair').addEventListener('click', () => perform('Recovering interrupted activation from its durable commit state…', () => setupAction('repair', { plan_digest: planReview.plan_digest, rollback_approved: true })));
   $('download-model').addEventListener('click', () => perform('Starting approved pinned model acquisition…', () => setupAction('download', {
-    plan_digest: planReview.plan_digest, license_sha256: planReview.license_sha256, license_acknowledged: $('license-check').checked,
+    plan_digest: planReview.plan_digest, artifact_set_digest: planReview.selection.artifact_set_digest,
+    license_sha256: planReview.license_sha256, license_acknowledged: $('license-check').checked,
     eligibility_confirmed: $('eligibility-check').checked, download_approved: $('download-check').checked,
   })));
   $('cancel-download').addEventListener('click', () => perform('Requesting model download cancellation…', () => setupAction('cancel-download', { plan_digest: planReview.plan_digest })));
@@ -580,10 +653,20 @@
     const data = await request('/remote/jobs');
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
-    runtimeReady = capability.runtime_ready;
+    const profiles = capability.profiles || [];
+    const profileKey = JSON.stringify([capability.backend, profiles]);
+    if (profileKey !== activeProfileKey) {
+      activeProfileKey = profileKey;
+      $('generation-profile').replaceChildren();
+      for (const name of profiles) {
+        const option = node('option', profileLabel(name)); option.value = name; $('generation-profile').append(option);
+      }
+      $('steps').value = capability.service_limits.steps_default;
+    }
+    runtimeReady = capability.runtime_ready && profiles.length > 0;
     const diagnostic = capability.diagnostic || {};
-    const generated = data.jobs.some(job => job.status === 'completed' && job.output && !job.output.expired);
-    $('readiness').textContent = `Daemon connected. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
+    const generated = data.jobs.some(job => profiles.includes(job.request?.settings?.profile) && job.status === 'completed' && job.output && !job.output.expired);
+    $('readiness').textContent = `Daemon connected. Active backend: ${capability.backend}; profiles: ${profiles.join(', ')}. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
     reconcileJobs(data.jobs);
     await jobEvents(current);
     if (!current()) return;
@@ -618,6 +701,7 @@
         csrf = (await pending).csrf_token;
       }
       await refresh();
+      renderCatalog(await request('/profiles'));
       $('operation').textContent = 'Ready for a secure SSH connection.';
       log('Local browser session secured. Authenticate, scan and explicitly approve changes before installation.');
     } catch (error) {

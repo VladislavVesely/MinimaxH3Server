@@ -16,7 +16,9 @@ import stat
 import uuid
 import zipfile
 
-from h3server.backends import load_manifest
+from h3server.backends import get_profile, load_manifest, load_profiles
+from h3server.backends.catalog import PRUNED_PROFILE_NAMES, UNAVAILABLE_VARIANTS, get_artifact_set
+from h3server.profiles import gpu_family_eligible
 from h3server.controller.ssh import ControllerError
 from h3server.installer.planner import Approval, ReleaseArtifact, build_plan, validate_approval, validate_reboot_approval
 from h3server.store import ApprovalRequired, canonical_plan_digest
@@ -45,6 +47,28 @@ class ReleaseBundle:
                     raise ValueError('release contains non-distribution content')
             if 'h3server/__init__.py' not in names:
                 raise ValueError('missing application package')
+
+
+def profile_document(name, hardware=None):
+    """JSON presentation of the exact catalog selection, not an approval or fit claim."""
+    profile = get_profile(name)
+    if name in PRUNED_PROFILE_NAMES:
+        selected = get_artifact_set(name)
+        return {**asdict(selected), 'artifacts': [{**asdict(a), 'url': a.url} for a in selected.artifacts],
+                'artifact_set_digest': selected.digest, 'weight_bytes': selected.weight_bytes,
+                'tokenizer_bytes': selected.tokenizer_bytes, 'selected_bytes': selected.selected_bytes,
+                'runtime_bytes': selected.runtime_bytes, 'peak_weight_disk_bytes': selected.peak_weight_disk_bytes,
+                'gpu_eligible': (gpu_family_eligible(hardware, selected.required_gpu_family)
+                                 if hardware is not None and selected.required_gpu_family else None)}
+    return {'profile_name': name, 'label': 'Legacy ' + ('BF16 CPU offload' if 'bf16' in name else 'INT8 group offload'),
+            'runtime_id': profile.runtime_id or 'diffusers-minimax-h3-t2va', 'artifact_set_digest': None,
+            'weight_bytes': load_manifest()['model']['total_bytes'], 'artifacts': [],
+            'license_disclosures': [], 'memory_status': 'legacy research budgets; not measured on this host'}
+
+
+def profile_catalog(hardware=None):
+    return {'profiles': [profile_document(p.name, hardware) for p in load_profiles(include_pruned=True)],
+            'unavailable': [{'profile_name': name, 'reason': reason} for name, reason in UNAVAILABLE_VARIANTS]}
 
 
 def license_document():
@@ -164,7 +188,8 @@ class Deployment:
     def document(self):
         return {'plan': self.plan, 'plan_digest': canonical_plan_digest(self.plan),
                 'service': self.service, 'service_digest': canonical_plan_digest(self.service) if self.service else None,
-                'license_text': license_document(), 'license_sha256': load_manifest()['sources']['license']['sha256']}
+                'license_text': license_document(), 'license_sha256': load_manifest()['sources']['license']['sha256'],
+                'selection': profile_document(self.plan['profile'])}
 
     def install(self, approval, *, service_digest, sudo_password=None):
         with self.connection.lock:

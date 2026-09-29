@@ -3,8 +3,9 @@
 Status: implemented fixed adapter and managed provisioning; **not H3 inference
 certified**. Native CPU imports and synthetic H264/AAC export were checked; no
 model weights, model load, GPU inference or actual target/service installation.
-Task 4 still owns browser selection/approval integration and executable rebuild.
-Existing main-worktree executable was not changed.
+Browser selection/approval and executable integration are documented separately in
+[h3-pruned-integration.md](h3-pruned-integration.md). Existing main-worktree
+executable was not changed.
 
 ## Runtime/public contracts
 
@@ -179,6 +180,6 @@ Residual validation: real Linux CUDA dependency/driver compatibility, quantized
 model numerical loading/sampling, peak VRAM/RAM, speed/quality, optimized versus
 eager ConvRot behavior and native cancellation latency remain unmeasured.
 Installer/recovery/service operations were controlled fixtures, not target IO.
-Task 4 must bind visible selected artifact approvals and send the active profile
-in generation requests, and rebuild the executable. Independent review plus
+The UI integration binds visible artifact approvals and sends the active profile
+in generation requests; see the separate integration/build record. Independent review plus
 separately approved hardware inference acceptance remain required.

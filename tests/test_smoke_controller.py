@@ -36,7 +36,8 @@ def embedded_payload(request, tmp_path, monkeypatch):
     with zipfile.ZipFile(wheel_bytes, 'w') as wheel:
         for name, data in resources.items():
             wheel.writestr(name, data)  # ZIP members are POSIX on every host.
-        wheel.writestr('h3server/controller/target.py', '# fixture only\n')
+        for name in ['controller/target.py', 'backends/catalog.py', 'backends/comfy_runtime.py', 'backends/pruned.py']:
+            wheel.writestr('h3server/' + name, '# fixture only\n')
     wheel_data = wheel_bytes.getvalue()
     manifest = {'wheel': 'h3server-0.1.0-py3-none-any.whl',
                 'sha256': hashlib.sha256(wheel_data).hexdigest()}

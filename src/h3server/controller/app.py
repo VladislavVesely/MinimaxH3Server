@@ -28,7 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from h3server.backends import load_profiles
-from h3server.controller.deploy import Deployment
+from h3server.controller.deploy import Deployment, profile_catalog
 from h3server.controller.proxy import RemoteProxy
 from h3server.controller.reconnection import SetupRecovery
 from h3server.installer.planner import Approval
@@ -213,6 +213,7 @@ class ActionRequest(StrictRequest):
     policy: str = Field(default='reject', pattern=r'^(reject|drain|cancel)$')
     cancel_confirmed: bool = False
     license_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    artifact_set_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
     license_acknowledged: bool = False
     eligibility_confirmed: bool = False
     download_approved: bool = False
@@ -370,16 +371,21 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         with recovery.operation(replace=True):
             return recovery.status()
 
+    @app.get(API + '/profiles')
+    def profiles():
+        return profile_catalog()
+
     @app.post(API + "/scan")
     @observed
     def scan(body: EmptyRequest | None = Body(default=None)):
         with connection.lock:
             home = connection.remote_home()
             probe = probe_hardware(connection, disk_path=home)
-            recommendations = recommend_profiles(probe.hardware, load_profiles())
+            recommendations = recommend_profiles(probe.hardware, load_profiles(include_pruned=True))
         return {"probe": {"hardware": asdict(probe.hardware), "kernel": probe.kernel,
                           "cuda": asdict(probe.cuda), "disk_path": probe.disk_path, "issues": probe.issues},
                 "recommendations": [asdict(item) for item in recommendations],
+                **profile_catalog(probe.hardware),
                 "compatibility": "Unverified compatibility: experimental pinned-source budgets are not proof of H3 fit or generation readiness.",
                 "capabilities": CAPABILITIES}
 
