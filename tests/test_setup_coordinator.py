@@ -26,6 +26,7 @@ def flow(tmp_path, monkeypatch):
     ssh = app.state.connection
     sftp = LocalSFTP(tmp_path / 'remote'); sftp.base.mkdir()
     monkeypatch.setattr(ssh, 'open_sftp', lambda: sftp)
+    monkeypatch.setattr(ssh, '_staging_transaction', sftp.staging_transaction)
     monkeypatch.setattr(ssh, 'inspect_install', lambda **kw: facts())
     calls, passwords = [], []
     state = {'setup': None, 'operation': None, 'active_release': None, 'reboot': False}

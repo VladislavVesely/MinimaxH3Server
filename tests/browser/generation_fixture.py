@@ -68,6 +68,8 @@ class Network(BrowserNetwork):
 
 class FixtureSSH(SSHConnection):
     """Mock only target SSH commands/SFTP; compose real plans/installer/store."""
+    def _staging_transaction(self, root, *, discovery=False):
+        return LocalSFTP("/").staging_transaction(root, discovery=discovery)
     def open_sftp(self):
         self._require_authentication()
         return LocalSFTP('/')
@@ -151,6 +153,9 @@ class FixtureSSH(SSHConnection):
                 # TEST ONLY source/runtime IO: no checkout, pip, CUDA or weights.
                 with patch('h3server.backends.comfy_runtime.verify_sources'):
                     runner.run(setup.setup_id, approval)
+            if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'stale-release':
+                (paths.config/'remote-token').write_text(self.fixture_token)
+                (paths.config/'remote-token').chmod(0o600)
             return CommandResult(returncode=0)
         raise AssertionError('TEST ONLY unsupported SSH action')
     def deployment_action(self, *, root, artifact, digest, action, data):
@@ -220,9 +225,13 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
             selected = get_artifact_set(profile)
             backend = replace(backend, capabilities=PRUNED_CAPABILITIES,
                               runtime_id=selected.runtime_id, profiles=(profile,))
-        store = Store(paths.state/'remote.sqlite')
-        worker = Worker(store, paths, backend=backend, min_free_bytes=0)
-        daemon = remote_app(store, worker, token=load_token(paths), heartbeat_seconds=.2)
+        # A stale *discovery* target cannot already contain the fixture daemon's
+        # live-work evidence. Isolate that daemon in this regression mode only.
+        daemon_paths = AppPaths(Path(temporary)/'fixture-daemon') if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'stale-release' else paths
+        for directory in daemon_paths.directories(): directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        store = Store(daemon_paths.state/'remote.sqlite')
+        worker = Worker(store, daemon_paths, backend=backend, min_free_bytes=0)
+        daemon = remote_app(store, worker, token=load_token(daemon_paths), heartbeat_seconds=.2)
         remote_listener.bind(('127.0.0.1',0))
         server = uvicorn.Server(uvicorn.Config(daemon, log_level='critical', access_log=False))
         thread = threading.Thread(target=lambda: server.run(sockets=[remote_listener]), daemon=True)
@@ -235,6 +244,7 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
             'LC_ALL=C nvidia-smi --query-gpu=pci.bus_id,name,memory.total,driver_version --format=csv,noheader,nounits':
                 b'00000000:01:00.0, NVIDIA GeForce RTX 4090, 24564, 580.1\n'})
         connection = FixtureSSH(Path(temporary)/'trust', socket_factory=network.socket, transport_factory=network.transport)
+        connection.fixture_token = load_token(daemon_paths)
         connection.start_setup = threading.Event(); connection.finish_setup = threading.Event(); connection.calls = []
         # Private subprocess pipe only: no fixture controls on the HTTP API.
         def controls():
@@ -242,6 +252,21 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
                 command = json.loads(line)
                 if command['action'] == 'calls':
                     print(json.dumps({'calls': connection.calls}), flush=True); continue
+                elif command['action'] == 'stage-stale-release':
+                    from h3server.controller.deploy import Deployment, ReleaseBundle
+                    from test_deploy import wheel
+                    old_dir = Path(temporary)/'old-release'; old_dir.mkdir()
+                    old_wheel = wheel(old_dir, 'h3server/old_only.py')
+                    old = ReleaseBundle(old_wheel, hashlib.sha256(old_wheel.read_bytes()).hexdigest())
+                    assert old.artifact != app.state.deployment.release.artifact
+                    prior = Deployment(connection, old)
+                    prior.make_plan('h3-convrot-int8', sudo_password_available=True)
+                    Store(paths.state/'setup.sqlite3')
+                    (paths.state/'setup.sqlite3').chmod(0o600)
+                    connection.calls.clear()
+                    print(json.dumps({'old_release':old.artifact.sha256,
+                        'current_release':app.state.deployment.release.artifact.sha256}), flush=True)
+                    continue
                 elif command['action'] == 'finish-download': (paths.root/'fixture-download-finish').touch()
                 elif command['action'] == 'start-setup': connection.start_setup.set()
                 elif command['action'] == 'finish-setup': connection.finish_setup.set()

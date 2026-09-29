@@ -109,7 +109,32 @@ class LocalSFTP:
     def path(self, value):
         assert value.startswith('/') and '..' not in Path(value).parts
         return self.base / value.lstrip('/')
+    def listdir(self, path): return [p.name for p in self.path(path).iterdir()]
     def lstat(self, path): return self.path(path).lstat()
+    from contextlib import contextmanager
+    @contextmanager
+    def staging_transaction(self, root, *, discovery=False):
+        # Controlled SSH IO: real OS flocks, never weaken production reentrancy.
+        import fcntl
+        import os
+        from h3server.controller.ssh import ControllerError
+        descriptors = []
+        try:
+            for name in (('staging', 'installer', 'deployment') if discovery else ('staging',)):
+                path = self.path(root + '/state/' + name + '.lock')
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                descriptors.append(fd)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ControllerError('staging_lock_unavailable') from None
+            def check():
+                for fd in descriptors:
+                    os.fstat(fd)
+            yield check
+        finally:
+            for fd in reversed(descriptors):
+                os.close(fd)
     def mkdir(self, path, mode): self.path(path).mkdir(mode=mode)
     def chmod(self, path, mode): self.path(path).chmod(mode)
     def open(self, path, mode): return self.path(path).open('xb' if mode == 'wx' else mode)
@@ -289,6 +314,7 @@ def test_proxy_range_auth_and_exact_allowlist_without_public_forwarder(tmp_path,
     token = 'TEST_ONLY_DAEMON_TOKEN_' + 'x'*40
     _write(sftp, '/home/test/MinimaxH3Server/config/remote-token', token.encode())
     monkeypatch.setattr(connection, 'open_sftp', lambda: sftp)
+    monkeypatch.setattr(connection, '_staging_transaction', sftp.staging_transaction)
     captured = []
     threads = []
     def channel():
@@ -428,6 +454,7 @@ def test_python_absent_prerequisite_progress_is_read_over_sftp(tmp_path):
         def remote_home(self):return '/home/test'
         @contextmanager
         def private_sftp(self):yield sftp
+        def staging_transaction(self, root): return sftp.staging_transaction(root)
         def deployment_action(self,**kwargs):raise AssertionError('Python does not exist yet')
     deployment=Deployment(SSH(),release)
     deployment.root='/home/test/MinimaxH3Server'
@@ -570,6 +597,7 @@ def test_active_release_blocks_privileged_prerequisite_update_before_any_install
         def remote_home(self): return '/home/test'
         @contextmanager
         def private_sftp(self): yield sftp
+        def staging_transaction(self, root): return sftp.staging_transaction(root)
         def install_prerequisites(self, **kwargs): raise AssertionError('APT must not execute during update')
         def deployment_action(self, **kwargs): raise AssertionError('Python must not be required for this guard')
 

@@ -142,6 +142,7 @@ def production(tmp_path, monkeypatch):
     connection = app.state.connection
     sftp = LocalSFTP(tmp_path / 'remote'); sftp.base.mkdir()
     monkeypatch.setattr(connection, 'open_sftp', lambda: sftp)
+    monkeypatch.setattr(connection, '_staging_transaction', sftp.staging_transaction)
     monkeypatch.setattr(connection, 'inspect_install', lambda **kw: facts(driver_working=False,
         driver_package='nvidia-driver-580', packages=('nvidia-driver-580=1',),
         package_changes=('Inst nvidia-driver-580 (1 Ubuntu [amd64])',)))

@@ -194,6 +194,9 @@ class SetupCoordinator:
             'plan_digest': document['plan_digest'], **values}), mutation=True)
 
     def _initial_plan(self):
+        fresh = self._call(lambda: self.deployment.rediscover_stale_plan(self._selection[0]), mutation=True)
+        if fresh is not None:
+            return fresh
         if self.deployment.plan is None:
             try:
                 self._call(lambda: self.deployment.restore(observation_only=True))
@@ -315,7 +318,8 @@ class SetupCoordinator:
                     'setup_timeout', 'setup_cancelled', 'setup_sudo_password_rejected',
                     'setup_credential_check_failed', 'setup_credential_required', 'setup_reauthentication_required',
                     'authentication_failed', 'host_key_changed', 'trust_required', 'reconnect_timeout',
-                    'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required'}
+                    'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
+                    'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)

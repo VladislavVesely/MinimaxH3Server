@@ -155,19 +155,44 @@ class Deployment:
             self.reset()
         self.root = root
 
-    def _stage(self, approval=None):
+    def _stage(self, approval=None, *, publish=True):
         with self.connection.private_sftp() as sftp:
+            _directory(sftp, self.root + "/state")
+        with self.connection.staging_transaction(self.root) as check:
+            self._stage_locked(approval, publish=publish, check=check)
+
+    def _require_staged_binding(self, sftp):
+        # A controller waiting for the staging lock may hold a superseded plan.
+        # It must not publish approvals/launch evidence after another Install
+        # replaced that discovery pointer.
+        try:
+            saved = json.loads(_read(sftp, self.root + '/config/deployment.json'))
+        except (OSError, ValueError):
+            raise ControllerError('selection_changed') from None
+        if saved != {'artifact': asdict(self.release.artifact), 'digest': canonical_plan_digest(self.plan)}:
+            raise ControllerError('selection_changed')
+
+    def _stage_locked(self, approval=None, *, publish=True, check):
+        with self.connection.private_sftp() as sftp:
+            if approval is not None:
+                self._require_staged_binding(sftp)
             _directory(sftp, self.root)
             _directory(sftp, self.root + '/state')
             artifact = self.release.artifact
+            check()
             _write(sftp, f'{self.root}/releases/{artifact.release_id}/{artifact.filename}', self.release.data, immutable=True)
+            check()
             _write(sftp, f'{self.root}/releases/{artifact.release_id}/daemon.json',
                    json.dumps(self.plan['deployment_config'], sort_keys=True).encode(), immutable=True)
             digest = canonical_plan_digest(self.plan)
+            check()
             _write(sftp, f'{self.root}/bootstrap/{digest}/plan.json', json.dumps(self.plan, sort_keys=True).encode(), immutable=True)
             if approval is not None:
+                check()
                 _write(sftp, f'{self.root}/bootstrap/{digest}/approval.json', json.dumps(asdict(approval), sort_keys=True).encode())
-            _write(sftp, f'{self.root}/config/deployment.json', json.dumps({'artifact': asdict(artifact), 'digest': digest}).encode())
+            if publish:
+                check()
+                _write(sftp, f'{self.root}/config/deployment.json', json.dumps({'artifact': asdict(artifact), 'digest': digest}).encode())
 
     def make_plan(self, profile, *, sudo_password_available=False):
         with self.connection.lock:
@@ -181,6 +206,61 @@ class Deployment:
             if self.plan['purpose'] == 'environment' and inspection.python_ready:
                 result = self.connection.recovery(root=self.root, artifact=self.release.artifact,
                     digest=canonical_plan_digest(self.plan), action='service-plan')
+                if not result.succeeded:
+                    raise ControllerError('service_plan_unavailable', 502)
+                self.service = json.loads(result.stdout)
+            return self.document()
+
+    def rediscover_stale_plan(self, profile):
+        """Explicit Install only: replace a proven unlaunched discovery pointer.
+
+        The low-level restore/recovery exact-release guard is deliberately intact.
+        Neither proving eligibility nor reading a SQLite copy runs target code.
+        """
+        from h3server.controller.discovery import ERROR, record, prove_unlaunched
+        with self.connection.lock:
+            self._authenticated()
+            with self.connection.private_sftp() as sftp:
+                try:
+                    raw, saved, artifact = record(sftp, self.root)
+                except FileNotFoundError:
+                    return None
+                except (ValueError, TypeError, KeyError, ControllerError):
+                    raise ControllerError(ERROR) from None
+                if artifact == self.release.artifact:
+                    return None
+                # Fail without even creating synchronization files for unsafe work.
+                proof = prove_unlaunched(sftp, self.root, raw)
+            with self.connection.staging_transaction(self.root, discovery=True) as check:
+                with self.connection.private_sftp() as sftp:
+                    if prove_unlaunched(sftp, self.root, raw) != proof:
+                        raise ControllerError(ERROR)
+                inspection = self.connection.inspect_install(sudo_password_available=True)
+                plan = build_plan(inspection, profile=profile, artifact=self.release.artifact)
+                plan['deployment_config'] = {'port': 8765, 'root': self.root}
+                with self.connection.private_sftp() as sftp:
+                    if prove_unlaunched(sftp, self.root, raw) != proof:
+                        raise ControllerError(ERROR)
+                old_plan, old_service = self.plan, self.service
+                self.plan, self.service = plan, None
+                try:
+                    self._stage(publish=False)
+                    with self.connection.private_sftp() as sftp:
+                        after = prove_unlaunched(sftp, self.root, raw)
+                        # The only added evidence may be our new immutable plan.
+                        plans = dict(proof[2])
+                        plans[canonical_plan_digest(plan)] = json.dumps(plan, sort_keys=True).encode()
+                        if after != (proof[0], proof[1], plans):
+                            raise ControllerError(ERROR)
+                        check()
+                        _write(sftp, self.root + '/config/deployment.json', json.dumps({
+                            'artifact': asdict(self.release.artifact), 'digest': canonical_plan_digest(plan)}).encode())
+                except Exception:
+                    self.plan, self.service = old_plan, old_service
+                    raise
+            if plan['purpose'] == 'environment' and inspection.python_ready:
+                result = self.connection.recovery(root=self.root, artifact=self.release.artifact,
+                    digest=canonical_plan_digest(plan), action='service-plan')
                 if not result.succeeded:
                     raise ControllerError('service_plan_unavailable', 502)
                 self.service = json.loads(result.stdout)
@@ -235,21 +315,26 @@ class Deployment:
                 raise ControllerError('approval_required') from None
             if self.plan['purpose'] == 'environment' and (not self.service or approval.privileged is not True or service_digest != canonical_plan_digest(self.service)):
                 raise ControllerError('approval_required')
-            path = f'{self.root}/bootstrap/{approval.plan_digest}/composite-install.json'
-            with self.connection.private_sftp() as sftp:
-                _directory(sftp, str(PurePosixPath(path).parent))
-                try:
-                    sftp.lstat(path)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise ControllerError('setup_operation_outcome_unknown')
-                # Unlike replacement staging, wx is exclusive across controllers.
-                # A partial marker also blocks replay, deliberately failing closed.
-                with sftp.open(path, 'wx') as stream:
-                    sftp.chmod(path, 0o600)
-                    stream.write(json.dumps({'plan_digest': approval.plan_digest}).encode())
-                    stream.flush()
+            with self.connection.staging_transaction(self.root) as check:
+                path = f'{self.root}/bootstrap/{approval.plan_digest}/composite-install.json'
+                with self.connection.private_sftp() as sftp:
+                    self._require_staged_binding(sftp)
+                    _directory(sftp, str(PurePosixPath(path).parent))
+                    try:
+                        sftp.lstat(path)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise ControllerError('setup_operation_outcome_unknown')
+                    # Unlike replacement staging, wx is exclusive across controllers.
+                    # A partial marker also blocks replay, deliberately failing closed.
+                    check()
+                    with sftp.open(path, 'wx') as stream:
+                        sftp.chmod(path, 0o600)
+                        stream.write(json.dumps({'plan_digest': approval.plan_digest}).encode())
+                        stream.flush()
+            # The durable marker now prevents rediscovery. Do not hold the
+            # short staging guardian across potentially hour-long prerequisites.
             return self.install(approval, service_digest=service_digest, sudo_password=sudo_password, replan=False)
 
     def install(self, approval, *, service_digest, sudo_password=None, replan=True):

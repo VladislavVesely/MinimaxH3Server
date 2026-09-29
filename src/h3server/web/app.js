@@ -45,6 +45,9 @@
     setup_operation_outcome_unknown: 'The remote operation outcome is unknown. Ask your administrator to inspect its saved checkpoint; do not repeatedly click Install.',
     setup_remote_busy: 'The target has existing or interrupted work. No unrelated job was cancelled. Resolve it before retrying.',
     setup_plan_blocked: 'Setup prerequisites are blocked. Review the reasons below with your administrator.',
+    stale_discovery_unproven: 'An older release is staged, but its never-launched state could not be proved. Nothing was recovered or replaced. Stop other controllers and ask your administrator to inspect the saved records with the matching release; do not delete checkpoints.',
+    staging_lock_unavailable: 'Another controller or installer owns staging, or its lock could not be verified. Stop other controllers and wait for existing work before retrying Install.',
+    staging_lock_lost: 'The staging connection or lock was lost. Reconnect and inspect saved state before retrying; no installation was replayed.',
 
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
     session_required: 'Local session unavailable or expired. Open a fresh launch URL from the local controller.',

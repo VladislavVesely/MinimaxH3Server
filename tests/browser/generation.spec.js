@@ -424,3 +424,25 @@ test('retry of an undelivered Install preserves its public id and selection with
   expect(attempts[0].request_id).toMatch(/^[a-f0-9-]{36}$/);
   expect(JSON.stringify(attempts)).not.toContain('TEST-ONLY-secret');
 });
+
+test.describe('stale unlaunched release discovery', () => {
+  test.use({ controlledSetup: 'stale-release', prunedProfile: 'h3-convrot-int8' });
+  test('one Install replaces only discovery and prepares the current ConvRot release once', async ({ page, controller }) => {
+    await login(page, controller);
+    const release = await controller.control({ action: 'stage-stale-release' });
+    expect(release.old_release).not.toEqual(release.current_release);
+    await page.locator('#scan').click();
+    await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
+    await page.locator('#install-profile').selectOption('h3-convrot-int8');
+    expect((await controller.control({ action: 'calls' })).calls).toEqual([]);
+    await page.getByRole('button', { name: 'Install', exact: true }).click();
+    await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()).state), { timeout: 20000 }).toBe('completed');
+    const calls = (await controller.control({ action: 'calls' })).calls;
+    expect(calls.filter(action => action === 'prepare')).toHaveLength(1);
+    const status = await page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()));
+    expect(status.profile).toBe('h3-convrot-int8');
+    expect(status.model_ready).toBe(true);
+    expect(status.generation_tested).toBe(false);
+    expect(status.error).toBeNull();
+  });
+});

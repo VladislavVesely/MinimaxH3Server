@@ -630,6 +630,73 @@ class SSHConnection:
                 raise ControllerError('deployment_timeout', 504)
 
     @contextmanager
+    def staging_transaction(self, root, *, discovery=False):
+        """Reentrant on this connection; never upgrade an already-owned lock set."""
+        with self.lock:
+            self._require_authentication()
+            owned = getattr(self, '_staging_owned', None)
+            if owned is not None:
+                if owned[0] != root or (discovery and not owned[1]):
+                    raise ControllerError('staging_lock_scope_changed')
+                owned[2]()
+                yield owned[2]
+                return
+            from h3server.controller.discovery import directory
+            with self.private_sftp() as sftp:
+                try:
+                    directory(sftp, root + '/state')
+                except (OSError, ValueError):
+                    raise ControllerError('staging_lock_unavailable') from None
+            with self._staging_transaction(root, discovery=discovery) as check:
+                self._staging_owned = (root, discovery, check)
+                try:
+                    check()
+                    yield check
+                    check()
+                finally:
+                    self._staging_owned = None
+
+    @contextmanager
+    def _staging_transaction(self, root, *, discovery=False):
+        from h3server.controller.discovery import staging_command
+        if not _absolute_path(root) or '..' in root.split('/'):
+            raise ValueError('invalid staging root')
+        channel = None
+        with _TransportDeadline(self._socket, self._transport, 180) as deadline:
+            try:
+                channel = self._transport.open_session(timeout=min(30, deadline.remaining()))
+                channel.settimeout(deadline.remaining())
+                nonce = secrets.token_hex(16)
+                channel.exec_command(staging_command(root, discovery=discovery, nonce=nonce))
+                session = _PrerequisiteSession(channel, None, None, deadline)
+                try:
+                    session.receive(nonce, ready=True)
+                except Exception:
+                    raise ControllerError('staging_lock_unavailable') from None
+                def check():
+                    if channel.exit_status_ready() or channel.closed or deadline.expired.is_set():
+                        raise ControllerError('staging_lock_lost')
+                yield check
+                # An ended guardian cannot authorize any subsequent staging.
+                check()
+                channel.sendall(b'finish\n')
+                channel.shutdown_write()
+                if channel.recv_exit_status() != 0:
+                    raise ControllerError('staging_lock_lost')
+            except (OSError, EOFError, paramiko.SSHException):
+                raise ControllerError('staging_lock_lost') from None
+            finally:
+                if channel is not None:
+                    try:
+                        channel.shutdown_write()
+                    except Exception:
+                        pass
+                    _close_quietly(channel)
+        if deadline.expired.is_set():
+            self.close()
+            raise ControllerError('staging_lock_lost')
+
+    @contextmanager
     def private_sftp(self):
         with self.deployment_deadline():
             client = self.open_sftp()

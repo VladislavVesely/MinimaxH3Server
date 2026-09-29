@@ -64,6 +64,17 @@ executable on PATH. To deploy a separately authenticated wheel:
    Environment ready, daemon healthy, verified weights, model loaded and a real
    playable video are distinct milestones. A successful scan proves none of them.
 
+When replacing a rebuilt controller, **quit other controller versions first**.
+On the next explicit Install, an older release's staging-only discovery can be
+rediscovered with the current release and selected model, without deleting old
+artifacts. This requires a verified plan/root and no launch, approval, checkpoint,
+active-release or operation evidence. Ambiguous/malformed state stays blocked;
+actual interrupted work still needs its matching release. Scan, selection and
+reconnect never perform this replacement. Current controllers serialize staging;
+older versions do not share that lock, so mixed-version concurrent staging is
+not supported. Remote Python is not needed for this proof (a bounded, sidecar-free
+SQLite copy, if present, is checked read-only by the local controller).
+
 ### Hardware and support boundaries
 
 The planner recognizes **Ubuntu 24.04/26.04 and Debian 12/13**, Linux x86-64 with
