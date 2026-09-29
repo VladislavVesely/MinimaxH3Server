@@ -68,6 +68,7 @@ def profile_document(name, hardware=None):
 
 def profile_catalog(hardware=None):
     return {'profiles': [profile_document(p.name, hardware) for p in load_profiles(include_pruned=True)],
+            'license_text': license_document(), 'license_sha256': load_manifest()['sources']['license']['sha256'],
             'unavailable': [{'profile_name': name, 'reason': reason} for name, reason in UNAVAILABLE_VARIANTS]}
 
 

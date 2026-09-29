@@ -13,31 +13,25 @@
   let capabilities = {};
   let lastTarget = null;
   let scanned = false;
-  let planReview = null;
-  let setupCursor = 0;
+  let setup = { state: 'idle', busy: false };
+  let pendingInstall = null;
+  let pageActive = true;
   let jobCursor = 0;
   let runtimeReady = false;
   let backendCapabilities = {};
   let profileCatalog = [];
   let activeProfileKey = null;
   let setupTimer = null;
-  let recoveryTimer = null;
-  let recoveryEpoch = 0;
-  let recoveredCycle = 0;
   let jobTimer = null;
   let setupEpoch = 0;
   let setupRequest = 0;
-  let acceptedLaunch = null;
   let dashboardEpoch = 0;
   let dashboardRequest = 0;
   const jobCards = new Map();
-  // An accepted detached launch is not evidence that its child has started.
-  const LAUNCH_WAIT_MS = 30000;
 
   function resetSetupPolling() {
     clearTimeout(setupTimer);
     setupEpoch++;
-    acceptedLaunch = null;
   }
   function resetDashboardPolling() {
     clearTimeout(jobTimer);
@@ -45,6 +39,13 @@
   }
 
   const messages = {
+    setup_sudo_password_rejected: 'The SSH password was not accepted for sudo, or this account’s sudo policy requires administrator attention. No repeated password attempt was made.',
+    setup_credential_required: 'Setup needs the SSH password in controller memory. Disconnect, reconnect and authenticate again before Install.',
+    setup_in_progress: 'Setup still owns the target. Cancellation has been requested by a connection change; wait until setup stops, then retry that connection action.',
+    setup_operation_outcome_unknown: 'The remote operation outcome is unknown. Ask your administrator to inspect its saved checkpoint; do not repeatedly click Install.',
+    setup_remote_busy: 'The target has existing or interrupted work. No unrelated job was cancelled. Resolve it before retrying.',
+    setup_plan_blocked: 'Setup prerequisites are blocked. Review the reasons below with your administrator.',
+
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
     session_required: 'Local session unavailable or expired. Open a fresh launch URL from the local controller.',
     csrf_forbidden: 'The local session changed. Reload this page before trying again.',
@@ -60,8 +61,8 @@
     approval_not_pending: 'No fingerprint approval is pending. Refresh the connection state.',
     trust_required: 'The host key is unknown. Automatic recovery stopped. Reconnect and verify the fingerprint with a trusted source before approving it.',
     recovery_in_progress: 'Automatic setup recovery is in progress. You can disconnect to cancel.',
-    reconnect_timeout: 'Automatic reconnection timed out after 120 seconds. Reconnect, authenticate and restore saved setup manually. No operation was repeated.',
-    recovery_failed: 'Setup recovery failed. Reconnect and restore the saved checkpoint; no operation was repeated.',
+    reconnect_timeout: 'Automatic reconnection timed out after 120 seconds. Disconnect, reconnect and authenticate again. Inspect the saved checkpoint before another Install.',
+    recovery_failed: 'Setup recovery failed. Disconnect, reconnect and authenticate again. Inspect the saved checkpoint before another Install.',
     recovery_binding_changed: 'The saved target or setup digest changed. Automatic recovery stopped. Review the target and restore manually.',
     authentication_failed: 'Authentication failed. The password was cleared. Reconnect and enter your credentials again.',
     authentication_required: 'SSH authentication is required. Reconnect and sign in again.',
@@ -69,10 +70,8 @@
     invalid_credentials: 'The password is invalid. Enter a nonempty password without null characters.',
     already_connected: 'A connection already exists. Refresh its state, or disconnect before changing servers.',
     invalid_remote_home: 'The server’s home directory could not be read. Check the SSH account and retry the scan.',
-    fresh_prerequisite_approval_required: 'Prerequisite recovery requires fresh approval. Review the restored plan and re-enter a sudo password if required; no sudo password was retained.',
     release_unavailable: 'Launch deployment with a verified release wheel and trusted SHA256 pin. No artifact is bundled in this source-only session.',
-    approval_required: 'Fresh, exact plan, license, eligibility and service approvals are required. Review the plan again.',
-    remote_unavailable: 'Remote daemon unavailable. Reauthenticate after disconnect or reboot, then restore setup and replay progress. No readiness assumed.',
+    remote_unavailable: 'Remote daemon unavailable. Reauthenticate after disconnect or reboot, then refresh the dashboard. No readiness assumed.',
     deployment_operation_failed: 'The target rejected or could not execute this operation. Replay progress; restore the matching release and reauthenticate if needed.',
     update_prerequisite_maintenance_required: 'Update requires OS/driver changes. Complete these with your administrator in a separate maintenance window, then rescan.',
     operation_failed: 'Operation failed. Check target permissions, exact approvals and the saved checkpoint; no completion is assumed.',
@@ -139,59 +138,29 @@
   function clearScan() {
     scanned = false;
     $('scan-results').hidden = true;
-    $('review-panel').hidden = true;
     $('hardware').replaceChildren();
-    $('profiles').replaceChildren();
   }
 
   function setConnection(data) {
     if (data.state !== connection.state || data.fingerprint !== connection.fingerprint) $('trust-check').checked = false;
-    const recovering = ['connecting', 'backoff'].includes(data.recovery?.state);
-    clearTimeout(recoveryTimer);
-    connection = recovering ? { ...data, state: 'recovering' } : data;
+    connection = data;
     $('forget-recovery').hidden = !data.recovery?.credential_retained;
-    if (recovering) {
-      resetSetupPolling(); resetDashboardPolling();
+    if (data.setup) showSetup(data.setup);
+    if (data.state !== 'authenticated') {
       runtimeReady = false;
-      $('sudo-password').value = '';
-      $('setup-status').textContent = `Automatic setup recovery: ${data.recovery.state}. Retrying for up to 120 seconds with the SSH credential in local controller memory. No install or reboot command is repeated.`;
-      const epoch = recoveryEpoch;
-      recoveryTimer = setTimeout(async () => {
-        try {
-          const status = await request('/status');
-          if (epoch === recoveryEpoch) setConnection(status);
-        } catch (error) {
-          if (epoch === recoveryEpoch) { showError(error, false); setConnection({ state: 'disconnected' }); }
-        }
-      }, 1000);
-    } else {
-      recoveryEpoch++;
-    }
-    if (!recovering && data.state !== 'authenticated') {
-      clearScan();
-      runtimeReady = false;
-      resetSetupPolling(); resetDashboardPolling();
-      jobCards.clear(); $('jobs').replaceChildren();
-      planReview = null; setupCursor = 0; jobCursor = 0;
-      $('plan-review').hidden = true;
-      $('sudo-password').value = '';
-      $('readiness').textContent = 'SSH disconnected. Reauthenticate and restore saved setup; automatic recovery is unavailable.';
-      $('setup-status').textContent = 'Setup observation stopped. Reauthenticate and restore saved setup to replay durable progress.';
+      resetDashboardPolling();
+      jobCards.clear(); $('jobs').replaceChildren(); jobCursor = 0;
+      if (!setup.busy && setup.state === 'idle') clearScan();
+      $('readiness').textContent = 'SSH disconnected. No generation readiness assumed.';
     }
     if (data.state !== 'awaiting_authentication') $('password').value = '';
-    if (data.recovery?.state === 'failed') showError({ code: data.recovery.error }, false);
-    if (data.state === 'authenticated' && data.recovery?.state === 'recovered' && data.recovery.cycle !== recoveredCycle && planReview) {
-      recoveredCycle = data.recovery.cycle;
-      setupCursor = 0; $('setup-events').replaceChildren();
-      $('setup-status').textContent = 'SSH recovered. Replaying the same durable setup; no operation repeated.';
-      setupProgress().catch(error => showError(error, false));
-    }
     render();
   }
 
   function render() {
     const state = connection.state;
     const usable = ready && !busy;
+    const available = usable && !setup.busy;
     const disconnected = state === 'disconnected';
     const authPending = state === 'awaiting_authentication';
     const trustPending = state === 'awaiting_approval';
@@ -199,50 +168,54 @@
     const labels = { recovering: 'Automatically reconnecting SSH', disconnected: 'SSH disconnected', awaiting_approval: 'Fingerprint verification needed', awaiting_authentication: 'Host trusted · sign in', authenticated: 'SSH authenticated' };
     $('ssh-state').textContent = labels[state] || 'SSH state unknown';
     $('ssh-state').dataset.state = state;
-    $('target-fields').disabled = !usable || !disconnected;
-    $('connect').disabled = !usable || !disconnected;
+    $('target-fields').disabled = !available || !disconnected;
+    $('connect').disabled = !available || !disconnected;
     $('fingerprint-panel').hidden = !trustPending;
     $('auth-form').hidden = !authPending;
     $('fingerprint').textContent = dataText(connection.fingerprint);
     $('key-type').textContent = dataText(connection.key_type);
     $('trust-check').disabled = !usable || !trustPending;
     $('approve').disabled = !usable || !trustPending || !$('trust-check').checked;
-    $('authenticate').disabled = !usable || !authPending;
-    $('password').disabled = !usable || !authPending;
+    $('authenticate').disabled = !available || !authPending;
+    $('password').disabled = !available || !authPending;
     $('disconnect').disabled = !usable || disconnected;
-    $('reconnect').disabled = !usable || !disconnected || lastTarget === null;
+    $('reconnect').disabled = !available || !disconnected || lastTarget === null;
     // Also lets an interrupted controller request be reconciled without resending it.
     $('refresh').disabled = busy;
     $('forget-recovery').disabled = busy;
-    $('scan').disabled = !usable || !authenticated || capabilities.scan !== true;
+    $('scan').disabled = !available || !authenticated || capabilities.scan !== true;
     $('scan-hint').textContent = authenticated
       ? (capabilities.scan === true ? 'Read-only observations only. No installation or CUDA runtime test is performed.' : 'Scanning is unavailable in this controller.')
       : 'Authenticate to enable the read-only scan.';
-    for (const id of ['step-connect', 'step-scan', 'step-review']) $(id).removeAttribute('aria-current');
-    $(scanned ? 'step-review' : authenticated ? 'step-scan' : 'step-connect').setAttribute('aria-current', 'step');
+    for (const id of ['step-connect', 'step-scan', 'step-install']) $(id).removeAttribute('aria-current');
+    $(scanned || setup.busy ? 'step-install' : authenticated ? 'step-scan' : 'step-connect').setAttribute('aria-current', 'step');
     $('progress').hidden = !busy;
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
-    $('install-profile').disabled = !usable || !profileCatalog.length;
-    $('plan').disabled = !usable || !authenticated || !scanned || !$('install-profile').value || $('install-profile').selectedOptions[0]?.disabled;
-    for (const id of ['restore-setup', 'setup-refresh', 'dashboard-refresh']) $(id).disabled = !usable || !authenticated;
-    const consent = $('license-check').checked && $('eligibility-check').checked;
-    $('install').disabled = !usable || !authenticated || !planReview || !consent || !$('system-check').checked || !!planReview?.plan.blockers.length;
-    $('reboot').disabled = !usable || !authenticated || !planReview || !$('reboot-check').checked || !consent;
-    $('download-model').disabled = !usable || !authenticated || !planReview || !consent || !$('download-check').checked;
-    for (const id of ['activate', 'repair', 'resume-setup', 'cancel-download']) $(id).disabled = !usable || !authenticated || !planReview;
-    $('generation-fields').disabled = !usable || !authenticated || !runtimeReady;
-    for (const button of $('jobs').querySelectorAll('button')) button.disabled = !usable || !authenticated;
+    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall;
+    $('install').disabled = !available || !authenticated || !connection.recovery?.setup_credential_retained || (!scanned && !pendingInstall) || !$('install-profile').value || $('install-profile').selectedOptions[0]?.disabled;
+    $('install').textContent = pendingInstall ? 'Retry Install request' : 'Install';
+    $('cancel-setup').hidden = !setup.busy;
+    $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
+    $('setup-refresh').disabled = !usable;
+    $('dashboard-refresh').disabled = !available || !authenticated;
+    $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
+    for (const button of $('jobs').querySelectorAll('button')) button.disabled = !available || !authenticated;
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
 
   async function refresh() {
     const data = await request('/status');
+    if (!pageActive) return;
     csrf = data.csrf_token;
     capabilities = data.capabilities;
     ready = true;
     $('session').textContent = 'Local session secured';
     setConnection(data);
+    if (setup.busy) {
+      clearTimeout(setupTimer);
+      setupTimer = setTimeout(() => setupProgress(), 700);
+    }
   }
 
   async function perform(label, action) {
@@ -254,7 +227,7 @@
     render();
     try {
       await action();
-      $('operation').textContent = 'Idle · no operation running.';
+      $('operation').textContent = setup.busy ? 'Automatic setup running · see phase and checkpoints.' : 'Idle · no operation running.';
     } catch (error) {
       $('password').value = '';
       // Reconcile after failures; never assume the previous SSH session survived.
@@ -305,32 +278,26 @@
   function profileLabel(name) {
     return profileCatalog.find(p => p.profile_name === name)?.label || name;
   }
-  function selectionSummary(parent, selection, inventory = true) {
+  function selectionSummary(parent, selection) {
     parent.replaceChildren();
     parent.append(node('h4', `${selection.label} · experimental`),
       node('p', `Selected weight download: ${exactBytes(selection.weight_bytes)}`));
     if (!selection.artifact_set_digest) {
-      parent.append(node('p', 'Legacy original snapshot · explicit heavyweight alternative. Pruned weights are not used by this profile.'));
+      parent.append(node('p', 'Legacy original snapshot · explicit heavyweight alternative. Pruned weights are not used by this profile. GPU/host memory fit, speed and generation quality are unmeasured here.'));
       return;
     }
     parent.append(node('p', selection.publisher_vram_guidance),
       node('p', 'Host RAM: unknown / unmeasured. Peak VRAM, speed and generation quality are unmeasured; source-inspected, not inference-certified.'),
       node('p', `Bundled tokenizer: ${exactBytes(selection.tokenizer_bytes)} (included once with runtime source, not a second weight download). Weights + tokenizer: ${exactBytes(selection.selected_bytes)}.`),
       node('p', 'Runtime/dependency download and installed size: unknown, additional. Fresh weight staging uses per-file rename, no second cache copy. Other snapshots, stale partials, runtime and outputs need extra disk.'));
+    const components = node('ul');
+    const roles = {diffusion_model: 'Diffusion model', text_encoder: 'Shared INT4 ConvRot text encoder', video_vae: 'Video VAE', audio_vae: 'Audio VAE'};
+    for (const artifact of selection.artifacts) components.append(node('li', `${roles[artifact.role]}: ${exactBytes(artifact.size_bytes)}`));
+    parent.append(components);
     if (selection.required_gpu_family) parent.append(node('p', 'Blackwell only: positive GPU identification required. Ada / RTX 4090 is incompatible; unknown devices are not eligible.'));
-    if (inventory) {
-      const artifacts = node('ul');
-      const roles = {diffusion_model: 'Diffusion model', text_encoder: 'Text encoder (INT4 ConvRot, not NVFP4)', video_vae: 'Video VAE', audio_vae: 'Audio VAE'};
-      for (const artifact of selection.artifacts) {
-        const item = node('li', `${roles[artifact.role]}: ${artifact.path} — ${exactBytes(artifact.size_bytes)}. Source: ${artifact.repository} @ ${artifact.revision}`);
-        item.append(detail('Pinned URL and SHA256', [artifact.url, artifact.sha256]));
-        artifacts.append(item);
-      }
-      parent.append(artifacts, detail('Exact artifact-set approval digest', [selection.artifact_set_digest]));
-    }
   }
   function renderCatalog(data) {
-    const previous = $('install-profile').value;
+    const previous = setup.profile || $('install-profile').value;
     profileCatalog = data.profiles;
     $('install-profile').replaceChildren();
     for (const profile of profileCatalog) {
@@ -339,20 +306,30 @@
       option.disabled = !!profile.required_gpu_family && profile.gpu_eligible !== true;
       $('install-profile').append(option);
     }
-    if ([...$('install-profile').options].some(o => o.value === previous && !o.disabled)) $('install-profile').value = previous;
+    if ([...$('install-profile').options].some(o => o.value === previous && (!o.disabled || setup.profile === previous))) $('install-profile').value = previous;
+    $('license-document').textContent = data.license_text;
+    $('license-pin').textContent = `Pinned license SHA256: ${data.license_sha256}`;
     $('unavailable-variants').replaceChildren();
     list($('unavailable-variants'), data.unavailable.map(p => p.reason));
     showSelection();
   }
   function showSelection() {
     const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
-    if (selected) selectionSummary($('selected-profile'), selected);
+    if (!selected) return;
+    selectionSummary($('selected-profile'), selected);
+    const roles = {diffusion_model: 'Diffusion model', text_encoder: 'Text encoder (INT4 ConvRot)', video_vae: 'Video VAE', audio_vae: 'Audio VAE'};
+    const inventory = node('ul');
+    $('artifact-details').replaceChildren(inventory);
+    for (const artifact of selected.artifacts) {
+      inventory.append(node('li', `${roles[artifact.role]}: ${artifact.path} — ${exactBytes(artifact.size_bytes)}. Source: ${artifact.repository} @ ${artifact.revision}`));
+      inventory.append(detail('Pinned URL and SHA256', [artifact.url, artifact.sha256]));
+    }
+    if (selected.artifact_set_digest) $('artifact-details').append(detail('Exact artifact-set digest', [selected.artifact_set_digest]));
+    $('license-disclosures').replaceChildren();
+    list($('license-disclosures'), selected.license_disclosures);
   }
   $('install-profile').addEventListener('change', () => {
-    resetSetupPolling(); planReview = null;
-    $('plan-review').hidden = true;
-    for (const id of ['license-check', 'eligibility-check', 'system-check', 'download-check']) $(id).checked = false;
-    $('sudo-password').value = '';
+    if (setup.busy || pendingInstall) return;
     showSelection(); render();
   });
 
@@ -374,30 +351,16 @@
     $('observation-notes').replaceChildren();
     list($('observation-notes'), [...data.probe.issues, ...hardware.evidence]);
     if (!$('observation-notes').children.length) list($('observation-notes'), ['No additional observation notes were reported.']);
-    $('compatibility').textContent = data.compatibility;
-    for (const recommendation of data.recommendations) {
-      const item = node('article', undefined, 'profile');
-      const selection = profileCatalog.find(p => p.profile_name === recommendation.profile_name);
-      item.append(node('h3', selection.label));
-      if (selection.artifact_set_digest) {
-        item.append(node('p', selection.artifacts[0].repository));
-        const summary = node('div'); selectionSummary(summary, selection, false); item.append(summary);
-      }
-      item.append(node('span', `Assessment: ${recommendation.status}`, 'profile-status'));
-      item.append(node('p', `Required free disk: ${bytes(recommendation.disk?.required_bytes)}`, 'disk-estimate'));
-      item.append(detail('Assessment reasons', recommendation.reasons));
-      item.append(detail('Research & disk estimate evidence', [...recommendation.evidence, ...(recommendation.disk?.evidence || [])]));
-      $('profiles').append(item);
-    }
-    if (!data.recommendations.length) $('profiles').append(node('p', 'No profiles are available from this controller.'));
     $('scan-results').hidden = false;
-    $('review-panel').hidden = false;
     scanned = true;
   }
 
   async function connect(target) {
     $('password').value = '';
     clearScan();
+    pendingInstall = null;
+    resetSetupPolling();
+    showSetup({ state: 'idle', busy: false });
     lastTarget = target;
     setConnection(await request('/connect', target));
     log(connection.state === 'awaiting_approval' ? 'SSH handshake received. Fingerprint approval required; no password sent.' : 'Stored host key matched. Password authentication required.');
@@ -421,7 +384,7 @@
     event.preventDefault();
     if (busy || !ready) return;
     // Do not retain credentials in state. Clear even if authentication fails.
-    const pending = request('/authenticate', { password: $('password').value, retain_for_setup_recovery: $('retain-recovery').checked });
+    const pending = request('/authenticate', { password: $('password').value, reuse_for_setup: true });
     $('password').value = '';
     perform('Authenticating with SSH…', async () => {
       setConnection(await pending);
@@ -437,7 +400,10 @@
   }));
   $('disconnect').addEventListener('click', () => perform('Disconnecting SSH…', async () => {
     $('password').value = '';
-    setConnection(await request('/disconnect', {}));
+    const result = await request('/disconnect', {});
+    pendingInstall = null; resetSetupPolling();
+    showSetup({ state: 'idle', busy: false });
+    setConnection(result);
     log('SSH disconnected. Reconnection requires password entry.');
   }));
   $('reconnect').addEventListener('click', () => perform('Reconnecting SSH; authentication will be required…', () => connect(lastTarget)));
@@ -455,32 +421,6 @@
     log('Read-only scan returned. Review unknown observations and experimental profiles; no generation readiness is proven.');
     $('hardware-heading').focus();
   }));
-  function showPlan(data) {
-    resetSetupPolling();
-    setupCursor = 0; $('setup-events').replaceChildren();
-    planReview = data;
-    $('install-profile').value = data.plan.profile;
-    showSelection();
-    selectionSummary($('plan-selection'), data.selection, false);
-    selectionSummary($('download-selection'), data.selection);
-    $('license-disclosures').replaceChildren();
-    list($('license-disclosures'), data.selection.license_disclosures);
-    $('plan-review').hidden = false;
-    $('plan-document').textContent = JSON.stringify({ plan: data.plan, service: data.service }, null, 2);
-    $('license-document').textContent = data.license_text;
-    $('setup-status').textContent = 'Plan reviewed; no new operation launched. Replay setup progress to inspect durable checkpoints.';
-    for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'cancel-check']) $(id).checked = false;
-    $('sudo-password').value = '';
-    render();
-  }
-  function approval() {
-    const data = { plan_digest: planReview.plan_digest, license_acknowledged: $('license-check').checked,
-      eligibility_confirmed: $('eligibility-check').checked, privileged: $('system-check').checked,
-      reboot: false, service_digest: planReview.service_digest };
-    if ($('sudo-password').value) data.sudo_password = $('sudo-password').value;
-    $('sudo-password').value = '';
-    return data;
-  }
   function eventLine(record) {
     const event = record.event;
     let text = `${event.stage}: ${event.status}`;
@@ -488,97 +428,69 @@
     if (event.progress) text += ` · ${event.progress.completed}${event.progress.total === null ? '' : '/' + event.progress.total} ${event.progress.unit}`;
     return text;
   }
+  const phases = { idle: 'Not started', planning: 'Inspecting and staging', prerequisites: 'Installing prerequisites',
+    replanning: 'Rechecking prerequisites', installing: 'Installing environment', rebooting: 'Rebooting',
+    reconnecting: 'Reconnecting securely', activating: 'Activating environment', downloading: 'Downloading selected model', completed: 'Completed' };
+  function showSetup(data) {
+    setup = data;
+    if (!busy) $('operation').textContent = setup.busy ? 'Automatic setup running · see phase and checkpoints.' : 'Idle · no operation running.';
+    if (setup.request_id === pendingInstall?.request_id) pendingInstall = null;
+    if (setup.profile && profileCatalog.length && (setup.busy || !scanned)) {
+      $('install-profile').value = setup.profile;
+      showSelection();
+    }
+    $('setup-progress').hidden = !setup.busy;
+    $('setup-events').replaceChildren();
+    for (const record of setup.snapshot?.events || []) $('setup-events').append(node('li', eventLine(record)));
+    const checkpoint = setup.snapshot?.setups?.find(item => item.plan_digest === setup.plan_digest);
+    $('setup-status').textContent = setup.state === 'idle'
+      ? 'Installation, model and generation readiness have not been verified.'
+      : `${phases[setup.phase] || setup.phase} · ${setup.state}. Environment checkpoint: ${checkpoint?.state || 'not started'}. Installation ready: ${setup.installation_ready === true}. Model files ready: ${setup.model_ready === true}. Generation tested: not proven.`;
+    const recovery = $('setup-recovery');
+    recovery.hidden = !setup.error && !['cancelled', 'cancelling', 'completed'].includes(setup.state);
+    recovery.textContent = setup.error
+      ? (messages[setup.error] || `Setup stopped (${setup.error}). No completion is assumed. Inspect the saved checkpoint with your administrator before retrying.`)
+      : 'Cancellation stops further automatic actions, not rollback. Already-started OS/package or detached work may continue, especially offline. Wait for setup to stop before disconnecting and authenticating again.';
+    if (setup.state === 'completed') recovery.textContent = 'Setup completed; the password was cleared from controller memory. Generation is still untested. To install another selection, disconnect, reconnect and authenticate again, then scan and click Install.';
+    if (setup.blockers?.length) recovery.textContent += ' ' + setup.blockers.join(' ');
+    if (setup.error || setup.state === 'cancelled') recovery.textContent += ' To retry after resolving the cause, disconnect, reconnect and authenticate again; then scan and click Install. Unknown operation outcomes require administrator inspection, not repeated installation.';
+    if (setup.busy) { runtimeReady = false; resetDashboardPolling(); }
+    render();
+  }
   async function setupProgress() {
     clearTimeout(setupTimer);
     const epoch = setupEpoch;
     const sequence = ++setupRequest;
-    const current = () => epoch === setupEpoch && sequence === setupRequest && connection.state === 'authenticated';
-    let data;
+    const current = () => pageActive && epoch === setupEpoch && sequence === setupRequest;
     try {
-      data = await request('/setup/events?after=' + setupCursor);
+      const data = await request('/status');
+      if (!current()) return;
+      setConnection(data);
     } catch (error) {
-      if (epoch !== setupEpoch || sequence !== setupRequest) return;
-      await refresh();
-      if (connection.state === 'recovering' || epoch !== setupEpoch || sequence !== setupRequest) return;
+      if (!current()) return;
+      showError(error, false);
+      if (!ready) return;
+    }
+    if (current() && setup.busy) setupTimer = setTimeout(() => setupProgress(), 700);
+  }
+  $('generation-profile').addEventListener('change', render);
+  $('install').addEventListener('click', () => perform('Starting selected automatic setup…', async () => {
+    const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
+    // Retain only the public intent ID across an ambiguous response, never secrets.
+    pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest, request_id: crypto.randomUUID() };
+    try {
+      showSetup(await request('/setup/start', pendingInstall));
+    } catch (error) {
+      if (!['network_unavailable', 'invalid_response'].includes(error.code)) pendingInstall = null;
       throw error;
     }
-    if (!current()) return;
-    if (data.reset) { setupCursor = 0; $('setup-events').replaceChildren(); }
-    for (const record of data.events) $('setup-events').append(node('li', eventLine(record)));
-    setupCursor = data.cursor;
-    while ($('setup-events').children.length > 100) $('setup-events').firstElementChild.remove();
-    const setup = data.setups.find(item => item.plan_digest === planReview?.plan_digest);
-    $('setup-status').textContent = `Environment checkpoint: ${setup?.state || 'not started'}. Operation: ${data.operation?.action || 'none'} ${data.operation?.state || ''}. Active release: ${data.active_release?.release || 'none'}. Model and real generation are checked separately in the dashboard.`;
-    const pending = ['running', 'reconnecting', 'waiting_for_reboot'].includes(setup?.state) || data.operation?.state === 'running';
-    const awaitingStart = !setup || ['planned', 'awaiting_approval'].includes(setup.state);
-    if (pending || !awaitingStart) acceptedLaunch = null;
-    if (acceptedLaunch) {
-      acceptedLaunch.delayed = Date.now() >= acceptedLaunch.deadline;
-      $('setup-status').textContent += acceptedLaunch.delayed
-        ? ' Launch delayed: no running checkpoint observed within 30 seconds. Automatic launch checks paused; use Replay setup progress to check again. No completion is assumed.'
-        : ' Launch accepted; waiting for the initial running checkpoint (up to 30 seconds).';
-    }
-    if (data.has_more || pending || (acceptedLaunch && !acceptedLaunch.delayed)) setupTimer = setTimeout(() => {
-      if (!current()) return;
-      const nextSequence = setupRequest + 1;
-      setupProgress().catch(error => {
-        if (epoch === setupEpoch && nextSequence === setupRequest) { clearTimeout(setupTimer); showError(error, false); }
-      });
-    }, data.has_more ? 100 : 2000);
-  }
-  async function setupAction(action, data) {
-    const epoch = setupEpoch;
-    // Keep observing existing work until the new action succeeds. A rejection
-    // must neither discard its accepted-launch window nor renew its deadline.
-    const result = await request('/setup/' + action, data);
-    if (epoch !== setupEpoch || connection.state !== 'authenticated') return;
-    resetSetupPolling();
-    if (result.review) showPlan(result.review);
-    if (result.state === 'accepted') acceptedLaunch = { deadline: Date.now() + LAUNCH_WAIT_MS, delayed: false };
-    $('setup-status').textContent = `Request ${result.state}. This is not completion; replaying durable target progress.`;
     await setupProgress();
-  }
-  for (const id of ['license-check', 'eligibility-check', 'system-check', 'reboot-check', 'download-check', 'generation-profile']) $(id).addEventListener('change', render);
-  async function loadPlan(path, data) {
-    resetSetupPolling();
-    const epoch = setupEpoch;
-    const review = await request(path, data);
-    if (epoch !== setupEpoch || connection.state !== 'authenticated') return false;
-    showPlan(review);
-    return true;
-  }
-  $('plan').addEventListener('click', () => perform('Staging verified release and inspecting exact changes…', () =>
-    loadPlan('/setup/plan', { profile: $('install-profile').value, sudo_password_available: $('sudo-available').checked })));
-  $('restore-setup').addEventListener('click', () => perform('Restoring durable setup after authentication…', async () => {
-    if (await loadPlan('/setup/restore', {})) await setupProgress();
   }));
-  $('install').addEventListener('click', () => perform('Launching explicitly approved installation…', () => setupAction('install', approval())));
-  $('reboot').addEventListener('click', () => perform('Requesting separately approved reboot…', async () => {
-    const data = approval(); data.reboot = $('reboot-check').checked;
-    const result = await request('/setup/reboot', data);
-    if (result.reauthentication_required) {
-      $('setup-status').textContent = 'Reboot request accepted, not completion. Memory retention is off: reconnect, authenticate and restore saved setup manually after the server returns.';
-    } else {
-      // The controller owns reconnection and digest-bound restore. Only replay
-      // durable events here; never resend installation, resume or reboot.
-      await refresh();
-    }
+  $('cancel-setup').addEventListener('click', () => perform('Stopping further automatic setup actions…', async () => {
+    showSetup(await request('/setup/cancel', {}));
+    await setupProgress();
   }));
-  $('resume-setup').addEventListener('click', () => perform('Resuming previously approved stages…', () => setupAction('resume', { plan_digest: planReview.plan_digest })));
-  $('activate').addEventListener('click', () => perform('Requesting release activation with rollback…', () => setupAction('activate', {
-    plan_digest: planReview.plan_digest, activation_approved: true, policy: $('busy-policy').value, cancel_confirmed: $('cancel-check').checked,
-  })));
-  $('repair').addEventListener('click', () => perform('Recovering interrupted activation from its durable commit state…', () => setupAction('repair', { plan_digest: planReview.plan_digest, rollback_approved: true })));
-  $('download-model').addEventListener('click', () => perform('Starting approved pinned model acquisition…', () => setupAction('download', {
-    plan_digest: planReview.plan_digest, artifact_set_digest: planReview.selection.artifact_set_digest,
-    license_sha256: planReview.license_sha256, license_acknowledged: $('license-check').checked,
-    eligibility_confirmed: $('eligibility-check').checked, download_approved: $('download-check').checked,
-  })));
-  $('cancel-download').addEventListener('click', () => perform('Requesting model download cancellation…', () => setupAction('cancel-download', { plan_digest: planReview.plan_digest })));
-  $('setup-refresh').addEventListener('click', () => perform('Replaying durable setup events…', () => {
-    if (acceptedLaunch?.delayed) acceptedLaunch = { deadline: Date.now() + LAUNCH_WAIT_MS, delayed: false };
-    return setupProgress();
-  }));
+  $('setup-refresh').addEventListener('click', () => perform('Checking automatic setup progress…', setupProgress));
 
   async function jobEvents(current) {
     const response = await fetch(API + '/remote/events?after=' + jobCursor, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
@@ -689,7 +601,7 @@
       await request('/remote/jobs', body); await dashboard();
     });
   });
-  window.addEventListener('pagehide', () => { $('password').value = ''; $('sudo-password').value = ''; resetSetupPolling(); resetDashboardPolling(); clearTimeout(recoveryTimer); recoveryEpoch++; });
+  window.addEventListener('pagehide', () => { pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
 
   async function start() {
     busy = true;
@@ -702,8 +614,9 @@
       }
       await refresh();
       renderCatalog(await request('/profiles'));
+      if (setup.busy) await setupProgress();
       $('operation').textContent = 'Ready for a secure SSH connection.';
-      log('Local browser session secured. Authenticate, scan and explicitly approve changes before installation.');
+      log('Local browser session secured. Authenticate, scan, select a model and click Install to begin.');
     } catch (error) {
       ready = false;
       $('session').textContent = 'Local session unavailable';

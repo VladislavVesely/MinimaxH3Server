@@ -16,8 +16,7 @@
     <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
       <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
       <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
-      <li id="step-review"><span class="step-number">3</span><span>Review profiles<small>Experimental, not certified</small></span></li>
-      <li class="muted-step"><span class="step-number">4</span><span>Install &amp; validate<small>Approve changes &amp; verify</small></span></li>
+      <li id="step-install"><span class="step-number">4</span><span>Install &amp; validate<small>Select a model &amp; install</small></span></li>
     </ol></div>
     <div class="sidebar-note"><span class="tiny-dot" aria-hidden="true"></span> Local controller<p>Your infrastructure. No hosted generation fallback.</p></div>
   </aside>
@@ -51,11 +50,10 @@
           <form id="auth-form" class="auth-panel" hidden>
             <h3 id="auth-heading" tabindex="-1">Authenticate securely</h3><p class="field-hint">Host identity is trusted. Your password is sent only to this local controller for SSH authentication, never saved to disk or browser storage, and cleared from this form on submission.</p>
             <div class="field"><label for="password">SSH password</label><input id="password" name="password" type="password" required maxlength="4096" autocomplete="off" aria-describedby="password-note"></div>
-            <label class="check-label"><input id="retain-recovery" type="checkbox" checked> Keep my SSH password in LOCAL CONTROLLER MEMORY only for automatic setup recovery</label>
-             <p class="field-hint" id="password-note">With consent, this running controller reconnects for up to 120 seconds after an approved reboot or lost setup connection and replays the same saved setup. No sudo password is retained and no installation or reboot is repeated. Disconnect, session expiry, opt-out or controller shutdown clears retained credentials. A restarted controller requires authentication again. Uncheck to reconnect manually.</p>
+            <p class="field-hint" id="password-note">Your SSH password is kept only in this controller’s memory for setup, sudo and reconnection on this target/session. It is never saved to disk or browser storage. Setup completion/failure, cancellation, disconnect, session expiry or controller shutdown clears it. A restarted controller requires authentication again.</p>
             <button class="primary" id="authenticate" type="submit">Authenticate</button>
           </form>
-          <button id="forget-recovery" class="text-button" type="button" hidden>Forget retained SSH password / stop automatic recovery</button>
+          <button id="forget-recovery" class="text-button" type="button" hidden>Forget setup password / stop automatic setup</button>
            <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>
         </section>
         <section class="panel" id="scan-panel" aria-labelledby="scan-heading">
@@ -64,41 +62,25 @@
           <button id="scan" class="primary" type="button" disabled>Scan hardware</button><p id="scan-hint" class="field-hint">Authenticate to enable the read-only scan.</p>
           <div id="scan-results" hidden><h3 id="hardware-heading" tabindex="-1">Hardware observations</h3><div id="hardware" class="hardware-grid"></div><details class="observations"><summary>Observation notes &amp; evidence</summary><ul id="observation-notes"></ul></details></div>
         </section>
-        <section class="panel" id="review-panel" aria-labelledby="review-heading" hidden>
-          <p class="eyebrow">03 / COMPARE</p><h2 id="review-heading">Experimental profile comparison</h2><p id="compatibility" class="notice"></p><p class="field-hint">Statuses compare observed hardware with research criteria. They do not certify compatibility, a memory fit, or a working generation backend.</p><div id="profiles" class="profile-grid"></div>
-        </section>
         <section class="panel" id="installation" aria-labelledby="installation-heading">
-          <p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Review before you install</h2>
-          <p id="install-note">Choose a profile after scanning. Staging transfers only the verified application wheel and plan, not model weights. No system mutation occurs until approval.</p>
+          <p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Choose your model</h2>
+          <p id="install-note">Choose a profile after scanning. Selecting a model makes no changes. Install runs the selected setup automatically and reports real checkpoints below.</p>
           <label for="install-profile">Installation profile</label><select id="install-profile" disabled></select>
           <p class="field-hint">Smaller pruned choices first; GGUF Q4_K_M is the default experimental choice for RTX 4090, not a guaranteed memory fit. Legacy profiles remain explicit alternatives. NVFP4 needs positively identified Blackwell, never Ada/RTX 4090.</p>
           <div id="selected-profile"></div><ul id="unavailable-variants" class="notice"></ul>
-          <label class="check-label"><input id="sudo-available" type="checkbox"> I can supply a sudo password for approved operations</label>
-          <button id="plan" class="primary" type="button" disabled>Stage release &amp; review plan</button>
-          <button id="restore-setup" class="secondary" type="button" disabled>Restore saved setup</button>
-          <div id="plan-review" hidden>
-            <h3>Exact proposed changes</h3><div id="plan-selection"></div><pre id="plan-document"></pre>
-            <details><summary>Full pinned MiniMax H3 license and Exhibit A</summary><pre id="license-document"></pre></details>
+          <details><summary>License, provenance &amp; technical details</summary>
             <ul id="license-disclosures" class="notice"></ul>
-            <p class="notice">MiniMax H3 has territorial and commercial restrictions. Acknowledgement does not grant eligibility or override required written authorization. These profiles and native runtime remain experimental.</p>
-            <label class="check-label"><input id="license-check" type="checkbox"> I read and acknowledge the complete pinned license and Exhibit A, and the auxiliary provenance/license disclosures above</label>
-            <label class="check-label"><input id="eligibility-check" type="checkbox"> I confirm eligibility, including any necessary separate written authorization</label>
-            <label class="check-label"><input id="system-check" type="checkbox"> I approve the listed system changes, user services and privileged lingering registration</label>
-            <div class="field"><label for="sudo-password">Sudo password (optional, memory only)</label><input id="sudo-password" type="password" autocomplete="off" maxlength="4096"></div>
-            <button id="install" class="primary" type="button" disabled>Approve installation</button>
-            <button id="resume-setup" class="secondary" type="button">Resume approved installation</button>
-            <label class="check-label"><input id="reboot-check" type="checkbox"> Separately approve reboot of this server for this plan</label>
-            <button id="reboot" class="secondary" type="button" disabled>Request approved reboot</button>
-            <h3>Activate or update release</h3><p>Activation requires a verified environment. Updates preserve models and back up compatible databases. A failed health check rolls back. System/driver prerequisites during an update need a separate administrator maintenance window.</p>
-            <label for="busy-policy">Existing job policy</label><select id="busy-policy"><option value="reject">Reject update if any job is busy</option><option value="drain">Reject new jobs and drain accepted jobs (5 minute deadline)</option><option value="cancel">Cancel accepted jobs (requires separate confirmation)</option></select>
-            <label class="check-label"><input id="cancel-check" type="checkbox"> I explicitly approve cancellation of all accepted jobs</label>
-            <button id="activate" class="primary" type="button">Approve activation / update</button>
-            <button id="repair" class="secondary" type="button">Approve interrupted activation recovery</button><p class="field-hint">Recovery rolls back before commit; after a durable healthy commit it releases the maintenance gate without discarding newly accepted jobs.</p>
-            <h3>Selected model acquisition</h3><div id="download-selection"></div><p>Model download consent is separate. Files are pinned, resumable and verified; model files being ready does not prove a generated video.</p>
-            <label class="check-label"><input id="download-check" type="checkbox"> I approve this model download under the license and eligibility attestations above</label>
-            <button id="download-model" class="primary" type="button" disabled>Download / resume model</button><button id="cancel-download" class="secondary" type="button">Cancel model download</button>
-          </div>
-          <button id="setup-refresh" class="text-button" type="button" disabled>Replay setup progress</button><p id="setup-status" role="status">Installation, daemon, model and generation readiness have not been verified.</p><ol id="setup-events" aria-label="Durable setup events"></ol>
+            <details><summary>Full pinned MiniMax H3 license and Exhibit A</summary><pre id="license-document"></pre></details>
+            <p id="license-pin" class="field-hint"></p><div id="artifact-details"></div>
+          </details>
+          <p id="install-scope" class="notice">Install stages the verified release, installs required packages, drivers and user services, may reboot/reconnect, activates the environment and downloads the selected artifacts above. By clicking Install, you acknowledge the pinned license, Exhibit A and auxiliary provenance terms and confirm eligibility, including any necessary written authorization. MiniMax H3 has territorial and commercial restrictions; this action does not grant eligibility. Existing busy jobs are never cancelled automatically.</p>
+          <button id="install" class="primary" type="button" disabled>Install</button>
+          <button id="cancel-setup" class="secondary" type="button" hidden>Cancel setup</button>
+          <button id="setup-refresh" class="text-button" type="button" disabled>Refresh setup progress</button>
+          <p id="setup-status" role="status">Installation, model and generation readiness have not been verified.</p>
+          <progress id="setup-progress" aria-label="Setup progress; completion is not measurable" hidden></progress>
+          <p id="setup-recovery" class="notice" hidden></p>
+          <ol id="setup-events" aria-label="Durable setup events"></ol>
         </section>
         <section class="panel" id="generation" aria-labelledby="generation-heading">
           <p class="eyebrow">MINIMAX H3 · LOCAL GENERATION</p><h2 id="generation-heading">Generate video and audio</h2>

@@ -737,3 +737,10 @@ def test_composite_download_cancellation_is_bound_to_owned_operation(tmp_path, m
     request(record['operation'])
     assert json.loads(capsys.readouterr().out)['state'] == 'cancellation_requested'
     assert json.loads((paths.state / 'download-cancel.json').read_text()) == {'operation': record['operation']}
+
+
+def test_profile_catalog_exposes_verified_license_before_install():
+    from h3server.controller.deploy import profile_catalog, license_document
+    catalog = profile_catalog()
+    assert catalog['license_text'] == license_document()
+    assert hashlib.sha256(catalog['license_text'].encode()).hexdigest() == catalog['license_sha256']

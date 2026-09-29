@@ -48,36 +48,6 @@ async function login(page, controller) {
   await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
 }
 
-test('wizard stages real files, binds approvals, installs via mocked IO and replays after reload', async ({ page, controller }) => {
-  await login(page, controller);
-  await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
-  await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
-  await page.getByRole('button', { name: 'Stage release & review plan' }).click();
-  await expect(page.locator('#plan-document')).toContainText('backend_revision');
-  await expect(page.getByRole('button', { name: 'Approve installation', exact: true })).toBeDisabled();
-  const denied = await page.evaluate(async () => {
-    const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
-    return (await fetch('/api/v1/controller/setup/install', { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-      body:JSON.stringify({plan_digest:'0'.repeat(64),license_acknowledged:true,eligibility_confirmed:true,privileged:true}) })).status;
-  });
-  expect(denied).toBe(409);
-  await page.getByLabel('I read and acknowledge the complete pinned license and Exhibit A').check();
-  await page.getByLabel('I confirm eligibility, including any necessary separate written authorization').check();
-  await page.getByLabel('I approve the listed system changes, user services and privileged lingering registration').check();
-  await page.getByLabel('Sudo password (optional, memory only)').fill('TEST-ONLY-sudo-secret');
-  await page.getByRole('button', { name:'Approve installation', exact:true }).click();
-  await expect(page.locator('#setup-status')).toContainText('ready');
-  await expect(page.getByLabel('Sudo password (optional, memory only)')).toHaveValue('');
-  await expect(page.locator('#setup-events')).toContainText('completed');
-  await page.reload();
-  await page.getByRole('button', {name:'Restore saved setup'}).click();
-  await expect(page.locator('#setup-status')).toContainText('ready');
-  await expect(page.getByRole('button', {name:'Approve installation', exact:true})).toBeDisabled();
-  await expect(page.getByLabel('SSH password', {exact:true})).toHaveValue('');
-  expect(await page.evaluate(() => [localStorage.length,sessionStorage.length])).toEqual([0,0]);
-});
-
 test('real authenticated proxy queues, replays, downloads Range and cancels test-only jobs', async ({ page, controller }) => {
   const urls = []; page.on('request', request => urls.push(request.url()));
   await login(page, controller);
@@ -116,33 +86,6 @@ test('invalid source settings and local proxy session protections remain enforce
   });
   expect(result).toEqual([422,403,404]);
 });
-
-async function approveControlledSetup(page, controller) {
-  await login(page, controller);
-  await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
-  await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
-  await page.getByRole('button', { name: 'Stage release & review plan' }).click();
-  await page.getByLabel('I read and acknowledge the complete pinned license and Exhibit A').check();
-  await page.getByLabel('I confirm eligibility, including any necessary separate written authorization').check();
-  await page.getByLabel('I approve the listed system changes, user services and privileged lingering registration').check();
-  await page.getByRole('button', { name: 'Approve installation', exact: true }).click();
-}
-
-for (const checkpoint of ['planned', 'awaiting_approval']) {
-  test.describe(`accepted ${checkpoint} launch`, () => {
-    test.use({ controlledSetup: checkpoint });
-    test('polls the initial checkpoint until detached work runs and finishes', async ({ page, controller }) => {
-      const errors = []; page.on('pageerror', error => errors.push(error.message));
-      await approveControlledSetup(page, controller);
-      await expect(page.locator('#setup-status')).toContainText(`Environment checkpoint: ${checkpoint}.`);
-      await controller.control({ action: 'start-setup' });
-      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
-      await controller.control({ action: 'finish-setup' });
-      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 8000 });
-      expect(errors).toEqual([]);
-    });
-  });
-}
 
 test('completed video survives queued job polling; errors, expiry and deleted cards reconcile', async ({ page, controller }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -194,275 +137,6 @@ test('completed video survives queued job polling; errors, expiry and deleted ca
   expect(errors).toEqual([]);
 });
 
-test.describe('bounded accepted launch observation', () => {
-  test.use({ controlledSetup: 'planned' });
-
-  test('stops with an honest delayed status and manual replay can observe a late child', async ({ page, controller }) => {
-    let polls = 0;
-    page.on('request', request => { if (request.url().includes('/setup/events?')) polls++; });
-    await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
-    await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
-    await approveControlledSetup(page, controller);
-    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-    await page.clock.fastForward(31000);
-    await expect(page.locator('#setup-status')).toContainText('Launch delayed: no running checkpoint observed within 30 seconds.');
-    await expect(page.locator('#setup-status')).toContainText('No completion is assumed.');
-    const stopped = polls;
-    await page.clock.runFor(10000);
-    expect(polls).toBe(stopped);
-    await page.getByRole('button', { name: 'Replay setup progress' }).click();
-    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-    await controller.control({ action: 'start-setup' });
-    await page.clock.runFor(2000);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.');
-    await controller.control({ action: 'finish-setup' });
-    await page.clock.runFor(2000);
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.');
-    const completed = polls;
-    await page.clock.runFor(10000);
-    expect(polls).toBe(completed);
-  });
-
-  for (const end of ['disconnect', 'pagehide', 'plan']) {
-    test(`clears accepted launch checks on ${end}`, async ({ page, controller }) => {
-      let polls = 0;
-      page.on('request', request => { if (request.url().includes('/setup/events?')) polls++; });
-      await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
-      await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
-      await approveControlledSetup(page, controller);
-      await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-      // Hold an actual controller response, not fabricated checkpoint data.
-      let release, received, delivered;
-      const held = new Promise(resolve => { release = resolve; });
-      const responseReceived = new Promise(resolve => { received = resolve; });
-      const responseDelivered = new Promise(resolve => { delivered = resolve; });
-      const eventRoute = '**/setup/events?*';
-      let intercepted = false;
-      await page.route(eventRoute, async route => {
-        if (intercepted) return route.continue();
-        intercepted = true;
-        const response = await route.fetch();
-        received(); await held;
-        await route.fulfill({ response }); delivered();
-      });
-      await page.clock.runFor(2000);
-      await responseReceived;
-      if (end === 'disconnect') {
-        await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
-        await expect(page.getByText('SSH disconnected', { exact: true })).toBeVisible();
-      } else if (end === 'pagehide') {
-        await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-      } else {
-        await page.locator('#install-profile').selectOption('h3-bf16-cpu-offload-experimental');
-  await page.getByRole('button', { name: 'Stage release & review plan' }).click();
-        await expect(page.getByRole('button', { name: 'Stage release & review plan' })).toBeEnabled();
-        // Merely reviewing/replaying a planned checkpoint is not launch acceptance.
-        await page.getByRole('button', { name: 'Replay setup progress' }).click();
-        await expect(page.locator('#setup-status')).not.toContainText('Launch accepted');
-      }
-      const stopped = polls;
-      const status = await page.locator('#setup-status').textContent();
-      release(); await responseDelivered;
-      await page.unroute(eventRoute);
-      await page.clock.runFor(10000);
-      expect(polls).toBe(stopped);
-      await expect(page.locator('#setup-status')).toHaveText(status);
-    });
-  }
-});
-
-test.describe('rejected setup action preserves installation observation', () => {
-  test.use({ controlledSetup: 'planned' });
-
-  async function rejectActivation(page) {
-    const rejected = page.waitForResponse(response => response.url().endsWith('/setup/activate'));
-    await page.getByRole('button', { name: 'Approve activation / update' }).click();
-    const response = await rejected;
-    expect(response.status()).toBe(502);
-    expect(await response.json()).toEqual({ error: { code: 'deployment_operation_failed' } });
-    await expect(page.locator('#error')).toContainText('The target rejected or could not execute this operation.');
-    await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
-  }
-
-  for (const checkpoint of ['planned', 'running']) {
-    test(`rejected activation at ${checkpoint} does not stop automatic progress`, async ({ page, controller }) => {
-      const errors = []; page.on('pageerror', error => errors.push(error.message));
-      let installs = 0;
-      page.on('request', request => { if (request.url().endsWith('/setup/install')) installs++; });
-      await approveControlledSetup(page, controller);
-      await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-      if (checkpoint === 'running') {
-        await controller.control({ action: 'start-setup' });
-        await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
-      }
-      await rejectActivation(page);
-      if (checkpoint === 'planned') {
-        await controller.control({ action: 'start-setup' });
-        await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
-      }
-      await controller.control({ action: 'finish-setup' });
-      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 8000 });
-      expect(installs).toBe(1);
-      expect(errors).toEqual([]);
-    });
-  }
-
-  test('late rejection cannot revive observation after page exit', async ({ page, controller }) => {
-    let polls = 0;
-    page.on('request', request => { if (request.url().includes('/setup/events?')) polls++; });
-    await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
-    await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
-    await approveControlledSetup(page, controller);
-    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-    let release, received;
-    const held = new Promise(resolve => { release = resolve; });
-    const responseReceived = new Promise(resolve => { received = resolve; });
-    await page.route('**/setup/activate', async route => {
-      const response = await route.fetch();
-      expect(response.status()).toBe(502);
-      received(); await held;
-      await route.fulfill({ response });
-    });
-    await page.getByRole('button', { name: 'Approve activation / update' }).click();
-    await responseReceived;
-    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-    const stopped = polls;
-    release();
-    await expect(page.locator('#error')).toContainText('The target rejected or could not execute this operation.');
-    await page.clock.runFor(10000);
-    expect(polls).toBe(stopped);
-  });
-
-  test('rejection neither drops nor extends the accepted launch deadline', async ({ page, controller }) => {
-    await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
-    await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'));
-    await approveControlledSetup(page, controller);
-    await expect(page.locator('#setup-status')).toContainText('Launch accepted; waiting');
-    await page.clock.fastForward(20000);
-    await rejectActivation(page);
-    await page.clock.fastForward(11000);
-    await expect(page.locator('#setup-status')).toContainText('Launch delayed: no running checkpoint observed within 30 seconds.');
-  });
-});
-
-test.describe('automatic setup connection recovery', () => {
-  test.use({ controlledSetup: 'planned' });
-  test('delayed transport restoration replays the same setup without another install', async ({ page, controller }) => {
-    const posts = [], errors = [];
-    page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
-    page.on('pageerror', error => errors.push(error.message));
-    await approveControlledSetup(page, controller);
-    await controller.control({ action: 'start-setup' });
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.', { timeout: 8000 });
-    const plan = await page.locator('#plan-document').textContent();
-    await controller.control({ action: 'lose-setup-connection' });
-    await expect(page.locator('#setup-status')).toContainText('Automatic setup recovery', { timeout: 8000 });
-    await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
-    await controller.control({ action: 'finish-setup' });
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 12000 });
-    await expect(page.locator('#plan-document')).toHaveText(plan);
-    await expect(page.locator('#setup-events')).toContainText('completed');
-    expect(posts.filter(url => url.endsWith('/setup/install'))).toHaveLength(1);
-    expect(posts.filter(url => /\/setup\/(resume|reboot|restore)$/.test(url))).toHaveLength(0);
-    expect(posts.filter(url => url.endsWith('/authenticate'))).toHaveLength(1);
-    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
-    await expect(page.locator('body')).not.toContainText('TEST-ONLY-secret');
-    expect(errors).toEqual([]);
-  });
-});
-
-test.describe('approved reboot observation recovery', () => {
-  test.use({ controlledSetup: 'reboot' });
-  test('reconnects automatically while the independent bootstrap completes without duplicate commands', async ({ page, controller }) => {
-    const posts = [], errors = [];
-    page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
-    page.on('pageerror', error => errors.push(error.message));
-    await approveControlledSetup(page, controller);
-    await expect(page.locator('#setup-status')).toContainText('waiting_for_reboot');
-    const plan = await page.locator('#plan-document').textContent();
-    await page.getByLabel('Separately approve reboot of this server for this plan').check();
-    await page.getByRole('button', { name: 'Request approved reboot', exact: true }).click();
-    await expect(page.locator('#setup-status')).toContainText('Automatic setup recovery');
-    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: ready.', { timeout: 12000 });
-    await expect(page.locator('#plan-document')).toHaveText(plan);
-    await expect(page.locator('#setup-events')).toContainText('completed');
-    for (const action of ['install', 'reboot']) expect(posts.filter(url => url.endsWith('/setup/' + action))).toHaveLength(1);
-    expect(posts.filter(url => /\/setup\/(resume|restore)$/.test(url))).toHaveLength(0);
-    expect(posts.filter(url => url.endsWith('/authenticate'))).toHaveLength(1);
-    expect(errors).toEqual([]);
-  });
-});
-
-for (const profile of ['h3-gguf-q4-k-m', 'h3-convrot-mixed']) {
-  test.describe(`pruned selected ${profile}`, () => {
-    test.use({ prunedProfile: profile });
-    test('selection, exact consent, restore and active generation stay profile-bound (controlled IO)', async ({ page, controller }) => {
-      await login(page, controller);
-      await page.getByRole('button', { name: 'Scan hardware', exact: true }).click();
-      await expect(page.locator('#install-profile')).toHaveValue('h3-gguf-q4-k-m');
-      await expect(page.locator('#profiles')).toContainText('Abiray/MiniMax-H3-Pruned-GGUF');
-      await expect(page.locator('#profiles')).toContainText('Abiray/Minimax-H3-nvfp4-INT4-INT8-Convrot');
-      await expect(page.locator('#profiles')).toContainText('Host RAM: unknown');
-      await expect(page.locator('#profiles')).toContainText('Publisher recommends 16 GB');
-      await expect(page.locator('#profiles')).toContainText('Publisher: 15+ GB');
-      await expect(page.locator('#install-profile option[value="h3-nvfp4"]')).toBeDisabled();
-      await expect(page.locator('#unavailable-variants')).toContainText('Pure INT4 diffusion is absent');
-      await page.locator('#install-profile').selectOption(profile);
-      await expect(page.locator('#selected-profile')).toContainText('Winnougan/MiniMax-H3-INT4_Convrot_ComfyUI');
-      await expect(page.locator('#selected-profile')).toContainText('Video VAE');
-      await expect(page.locator('#selected-profile')).toContainText('Audio VAE');
-      const planned = page.waitForResponse(r => r.url().endsWith('/setup/plan'));
-      await page.getByRole('button', { name: 'Stage release & review plan' }).click();
-      const fullReview = await (await planned).json();
-      await expect(page.locator('#plan-document')).toContainText('artifact_set_digest');
-      const review = JSON.parse(await page.locator('#plan-document').textContent());
-      expect(review.plan.profile).toBe(profile);
-      const total = profile.includes('gguf') ? '31,550,953,118' : '35,889,785,333';
-      await expect(page.locator('#download-selection')).toContainText(total + ' bytes');
-      await expect(page.locator('#download-selection')).not.toContainText('144,051,160,615');
-      await expect(page.locator('#license-disclosures')).toContainText('does not remove upstream derivative obligations');
-      for (const id of ['license-check','eligibility-check','system-check']) await page.locator('#'+id).check();
-      await page.getByRole('button', { name: 'Approve installation', exact: true }).click();
-      await expect(page.locator('#setup-status')).toContainText('ready');
-      const denied = await page.evaluate(async review => {
-        const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
-        const response = await fetch('/api/v1/controller/setup/download', {
-          method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf},
-          body: JSON.stringify({plan_digest:review.plan_digest, artifact_set_digest:'0'.repeat(64),
-            license_sha256:review.license_sha256, license_acknowledged:true, eligibility_confirmed:true, download_approved:true})});
-        return response.status;
-      }, fullReview);
-      expect(denied).toBe(502); // real target rejects stale catalog consent
-      await page.locator('#download-check').check();
-      const download = page.waitForRequest(r => r.url().endsWith('/setup/download'));
-      await page.locator('#download-model').click();
-      expect((await download).postDataJSON().artifact_set_digest).toBe(review.plan.artifact_set_digest);
-      await expect(page.locator('#setup-status')).toContainText('Operation: download');
-      // Restore must show the exact old set, never revert to the default/legacy.
-      await page.reload();
-      await page.locator('#restore-setup').click();
-      await expect(page.locator('#install-profile')).toHaveValue(profile);
-      await expect(page.locator('#download-selection')).toContainText(total + ' bytes');
-      await expect(page.locator('#download-model')).toBeDisabled();
-      await page.locator('#dashboard-refresh').click();
-      await expect(page.locator('#generation-profile')).toHaveValue(profile);
-      await expect(page.locator('#generation-profile option')).toHaveCount(1);
-      await expect(page.locator('#steps')).toHaveValue('20');
-      await expect(page.locator('#lora-field')).toBeHidden();
-      await expect(page.locator('#readiness')).toContainText(profile);
-      await page.locator('#prompt').fill('TEST ONLY pruned fixture output');
-      const generation = page.waitForRequest(r => r.url().endsWith('/remote/jobs') && r.method() === 'POST');
-      await page.locator('#generate').click();
-      expect((await generation).postDataJSON()).toMatchObject({profile,steps:20});
-      await expect(page.getByRole('link', {name:'Download MP4'})).toBeVisible();
-      // Changing a choice revokes UI approvals and requires a fresh review.
-      await page.locator('#install-profile').selectOption('h3-gguf-q5-k-m');
-      await expect(page.locator('#plan-review')).toBeHidden();
-      await expect(page.locator('#download-model')).toBeDisabled();
-    });
-  });
-}
-
 test.describe('pruned dashboard isolation', () => {
   test.use({ prunedProfile: 'h3-gguf-q4-k-m' });
   test('legacy completed metadata is not pruned inference evidence; polling preserves explicit steps', async ({page,controller}) => {
@@ -475,4 +149,278 @@ test.describe('pruned dashboard isolation', () => {
     await page.locator('#dashboard-refresh').click();
     await expect(page.locator('#steps')).toHaveValue('23');
   });
+});
+
+async function install(page, controller, profile = 'h3-bf16-cpu-offload-experimental') {
+  await login(page, controller);
+  await page.locator('#scan').click();
+  await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
+  await page.locator('#install-profile').selectOption(profile);
+  await page.getByRole('button', { name: 'Install', exact: true }).click();
+}
+async function controllerStatus(page) {
+  return page.evaluate(async () => (await fetch('/api/v1/controller/status')).json());
+}
+async function completed(page) {
+  await expect(page.locator('#setup-status')).toContainText('Completed · completed', {timeout:20000});
+  await expect(page.locator('#setup-status')).toContainText('Model files ready: true');
+  await expect(page.locator('#setup-status')).toContainText('Generation tested: not proven');
+  await expect(page.locator('#setup-progress')).toBeHidden();
+}
+
+test('one Install stages real files, activates, downloads and restores completion on reload', async ({page,controller}) => {
+  const posts = [], errors = [];
+  page.on('request', r => { if (r.method() === 'POST') posts.push(r.url()); });
+  page.on('pageerror', e => errors.push(e.message));
+  await install(page, controller);
+  await completed(page);
+  await expect(page.locator('#setup-events')).toContainText('completed');
+  const status = await controllerStatus(page);
+  expect(status.recovery.setup_credential_retained).toBe(false);
+  expect(status.setup.profile).toBe('h3-bf16-cpu-offload-experimental');
+  const calls = (await controller.control({action:'calls'})).calls;
+  expect(calls.filter(c => c === 'prepare')).toHaveLength(1);
+  expect(calls.filter(c => c === 'activate')).toHaveLength(1);
+  expect(calls.filter(c => c === 'download')).toHaveLength(1);
+  expect(calls.filter(c => c === 'sudo-check')).toHaveLength(1);
+  await page.reload();
+  await completed(page);
+  await expect(page.locator('#install-profile')).toHaveValue(status.setup.profile);
+  expect(posts.filter(p => p.endsWith('/setup/start'))).toHaveLength(1);
+  expect(posts.filter(p => /\/setup\/(plan|install|reboot|activate|download|restore)$/.test(p))).toHaveLength(0);
+  expect(await page.evaluate(() => [localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  await expect(page.locator('body')).not.toContainText('TEST-ONLY-secret');
+  expect(errors).toEqual([]);
+});
+
+for (const checkpoint of ['planned', 'awaiting_approval']) {
+  test.describe(`composite observes ${checkpoint}`, () => {
+    test.use({controlledSetup:checkpoint});
+    test('locks selection, restores running progress on reload and needs no further actions', async ({page,controller}) => {
+      let starts = 0;
+      page.on('request', r => { if (r.url().endsWith('/setup/start')) starts++; });
+      await install(page,controller);
+      await expect(page.locator('#setup-status')).toContainText(`Environment checkpoint: ${checkpoint}.`);
+      await expect(page.locator('#setup-progress')).toBeVisible();
+      await expect(page.locator('#setup-progress')).not.toHaveAttribute('value', /.+/);
+      await expect(page.locator('#install-profile')).toBeDisabled();
+      await expect(page.locator('#install')).toBeDisabled();
+      await page.reload();
+      await expect(page.locator('#setup-status')).toContainText(`Environment checkpoint: ${checkpoint}.`);
+      await expect(page.locator('#install-profile')).toHaveValue('h3-bf16-cpu-offload-experimental');
+      await controller.control({action:'start-setup'});
+      await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.');
+      await controller.control({action:'finish-setup'});
+      await completed(page);
+      expect(starts).toBe(1);
+    });
+  });
+}
+
+for (const mode of ['reboot', 'replan']) {
+  test.describe(`automatic ${mode}`, () => {
+    test.use({controlledSetup:mode});
+    test('advances exact selection through recovery/replan, activation and download without prompts', async ({page,controller}) => {
+      const posts = [];
+      page.on('request', r => { if (r.method() === 'POST') posts.push(r.url()); });
+      await install(page,controller);
+      if (mode === 'reboot') await expect(page.locator('#setup-status')).toContainText('Reconnecting securely', {timeout:10000});
+      await completed(page);
+      const calls = (await controller.control({action:'calls'})).calls;
+      expect(calls.filter(c => c === 'prepare')).toHaveLength(1);
+      expect(calls.filter(c => c === (mode === 'reboot' ? 'reboot' : 'prerequisites'))).toHaveLength(1);
+      expect(calls.slice(-2)).toEqual(['activate','download']);
+      expect(posts.filter(p => p.endsWith('/setup/start'))).toHaveLength(1);
+      expect(posts.filter(p => p.endsWith('/authenticate'))).toHaveLength(1);
+      expect(posts.filter(p => /\/setup\/(install|reboot|activate|download|restore|resume)$/.test(p))).toHaveLength(0);
+    });
+  });
+}
+
+test.describe('sudo recovery', () => {
+  test.use({controlledSetup:'sudo-rejected'});
+  test('specific failure has no second normal password or automatic password retry', async ({page,controller}) => {
+    await install(page,controller);
+    await expect(page.locator('#setup-recovery')).toContainText('not accepted for sudo');
+    await expect(page.locator('#setup-recovery')).toContainText('disconnect, reconnect and authenticate');
+    await expect(page.locator('#sudo-password')).toHaveCount(0);
+    await expect(page.locator('#setup-progress')).toBeHidden();
+    expect((await controllerStatus(page)).recovery.setup_credential_retained).toBe(false);
+    expect((await controller.control({action:'calls'})).calls).not.toContain('prepare');
+    await page.locator('#disconnect').click();
+    await page.locator('#reconnect').click();
+    await expect(page.locator('#authenticate')).toBeEnabled();
+    await expect(page.locator('#fingerprint-panel')).toBeHidden();
+  });
+});
+
+test.describe('controlled download cancellation', () => {
+  test.use({controlledSetup:'download'});
+  test('cancel after reload stops owned download, clears memory and never promises rollback', async ({page,controller}) => {
+    await install(page,controller);
+    await expect(page.locator('#setup-status')).toContainText('Downloading selected model', {timeout:15000});
+    await page.reload();
+    await expect(page.locator('#setup-status')).toContainText('Downloading selected model');
+    await page.getByRole('button',{name:'Cancel setup',exact:true}).click();
+    await expect(page.locator('#setup-status')).toContainText('cancelled');
+    await expect(page.locator('#setup-recovery')).toContainText('not rollback');
+    await expect(page.locator('#setup-progress')).toBeHidden();
+    const status = await controllerStatus(page);
+    expect(status.recovery.credential_retained).toBe(false);
+    expect(status.setup.busy).toBe(false);
+    expect((await controller.control({action:'calls'})).calls.filter(c=>c==='cancel-download')).toHaveLength(1);
+    await page.reload();
+    await expect(page.locator('#setup-status')).toContainText('cancelled');
+    await page.locator('#disconnect').click();
+    await expect(page.locator('#setup-status')).toContainText('have not been verified');
+  });
+});
+
+test.describe('transport recovery and interruption', () => {
+  test.use({controlledSetup:'planned'});
+  test('connection loss resumes same digest without resubmitting installation', async ({page,controller}) => {
+    await install(page,controller);
+    await controller.control({action:'start-setup'});
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: running.');
+    const original = (await controllerStatus(page)).setup;
+    await controller.control({action:'lose-setup-connection'});
+    await expect(page.locator('#setup-status')).toContainText('Reconnecting securely', {timeout:10000});
+    await controller.control({action:'finish-setup'});
+    await completed(page);
+    const final = (await controllerStatus(page)).setup;
+    expect(final.plan_digest).toBe(original.plan_digest);
+    expect(final.request_id).toBe(original.request_id);
+    expect((await controller.control({action:'calls'})).calls.filter(c=>c==='prepare')).toHaveLength(1);
+  });
+  test('page exit discards stale status response and stops browser polling without cancelling controller', async ({page,controller}) => {
+    await install(page,controller);
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    // Delay an actual response only; no fabricated HTTP fixture or coordinator.
+    let received, release, delivered;
+    const arrived = new Promise(r=>received=r), held = new Promise(r=>release=r), done = new Promise(r=>delivered=r);
+    await page.route('**/api/v1/controller/status', async route => {
+      const response = await route.fetch(); received(); await held; await route.fulfill({response}); delivered();
+    });
+    await arrived;
+    const text = await page.locator('#setup-status').textContent();
+    await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+    release(); await done; await page.unroute('**/api/v1/controller/status');
+    await controller.control({action:'start-setup'}); await controller.control({action:'finish-setup'});
+    await page.waitForTimeout(1600);
+    await expect(page.locator('#setup-status')).toHaveText(text);
+    await page.reload(); await completed(page);
+  });
+  test('low-level unauthorized mutation remains denied and does not stop automatic observation', async ({page,controller}) => {
+    await install(page,controller);
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    const denied = await page.evaluate(async () => {
+      const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
+      return (await fetch('/api/v1/controller/setup/install', {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+        body:JSON.stringify({plan_digest:'0'.repeat(64),license_acknowledged:true,eligibility_confirmed:true,privileged:true})})).status;
+    });
+    expect(denied).toBe(409);
+    await controller.control({action:'start-setup'}); await controller.control({action:'finish-setup'});
+    await completed(page);
+  });
+});
+
+for (const profile of ['h3-gguf-q4-k-m','h3-convrot-mixed']) {
+  test.describe(`pruned selected ${profile}`, () => {
+    test.use({prunedProfile:profile});
+    test('per-selection totals, license, bound start, automatic download and generation stay exact', async ({page,controller}) => {
+      await login(page,controller);
+      await page.locator('#scan').click();
+      await expect(page.locator('#install-profile')).toHaveValue('h3-gguf-q4-k-m');
+      await expect(page.locator('#install-profile option[value="h3-nvfp4"]')).toBeDisabled();
+      await expect(page.locator('#unavailable-variants')).toContainText('Pure INT4 diffusion is absent');
+      await page.locator('#install-profile').selectOption(profile);
+      const total = profile.includes('gguf') ? '31,550,953,118' : '35,889,785,333';
+      await expect(page.locator('#selected-profile')).toContainText(total+' bytes');
+      await expect(page.locator('#selected-profile')).toContainText('Host RAM: unknown');
+      await expect(page.locator('#artifact-details')).toContainText('Winnougan/MiniMax-H3-INT4_Convrot_ComfyUI');
+      await expect(page.locator('#artifact-details')).toContainText('Video VAE');
+      await expect(page.locator('#artifact-details')).toContainText('Audio VAE');
+      await expect(page.locator('#license-disclosures')).toContainText('does not remove upstream derivative obligations');
+      const catalog = await page.evaluate(async () => (await (await fetch('/api/v1/controller/profiles')).json()));
+      const selected = catalog.profiles.find(p=>p.profile_name===profile);
+      const started = page.waitForRequest(r=>r.url().endsWith('/setup/start'));
+      await page.locator('#install').click();
+      expect((await started).postDataJSON()).toMatchObject({profile,artifact_set_digest:selected.artifact_set_digest});
+      await completed(page);
+      const status = (await controllerStatus(page)).setup;
+      // Low-level exact digest authorization is not bypassed by composite UI.
+      const denied = await page.evaluate(async ({status,catalog}) => {
+        const csrf = (await (await fetch('/api/v1/controller/status')).json()).csrf_token;
+        return (await fetch('/api/v1/controller/setup/download',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+          body:JSON.stringify({plan_digest:status.plan_digest,artifact_set_digest:'0'.repeat(64),license_sha256:catalog.license_sha256,
+            license_acknowledged:true,eligibility_confirmed:true,download_approved:true})})).status;
+      },{status,catalog});
+      expect(denied).toBe(502);
+      await page.reload(); await completed(page);
+      await expect(page.locator('#install-profile')).toHaveValue(profile);
+      await expect(page.locator('#selected-profile')).toContainText(total+' bytes');
+      await page.locator('#dashboard-refresh').click();
+      await expect(page.locator('#generation-profile')).toHaveValue(profile);
+      await expect(page.locator('#generation-profile option')).toHaveCount(1);
+      await expect(page.locator('#steps')).toHaveValue('20');
+      await expect(page.locator('#lora-field')).toBeHidden();
+      await page.locator('#prompt').fill('TEST ONLY pruned fixture output');
+      const generation = page.waitForRequest(r=>r.url().endsWith('/remote/jobs') && r.method()==='POST');
+      await page.locator('#generate').click();
+      expect((await generation).postDataJSON()).toMatchObject({profile,steps:20});
+      await expect(page.getByRole('link',{name:'Download MP4'})).toBeVisible();
+    });
+  });
+}
+
+test.describe('ambiguous start and connection cancellation', () => {
+  test.use({controlledSetup:'planned'});
+  test('lost accepted response restores progress without launching another request', async ({page,controller}) => {
+    let starts = 0;
+    page.on('request', r=>{if(r.url().endsWith('/setup/start')) starts++;});
+    await page.route('**/setup/start', async route => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(202);
+      await route.abort('failed');
+    });
+    await install(page,controller);
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await expect(page.locator('#install')).toBeDisabled();
+    await controller.control({action:'start-setup'}); await controller.control({action:'finish-setup'});
+    await completed(page);
+    expect(starts).toBe(1);
+    expect((await controller.control({action:'calls'})).calls.filter(c=>c==='prepare')).toHaveLength(1);
+  });
+  test('disconnect cancels busy setup, then reconnect resets visible progress without bypassing host trust', async ({page,controller}) => {
+    await install(page,controller);
+    await expect(page.locator('#setup-status')).toContainText('Environment checkpoint: planned.');
+    await page.locator('#disconnect').click();
+    await expect(page.locator('#setup-status')).toContainText('cancelled');
+    await expect(page.locator('#setup-progress')).toBeHidden();
+    expect((await controllerStatus(page)).recovery.credential_retained).toBe(false);
+    await page.locator('#reconnect').click();
+    await expect(page.locator('#authenticate')).toBeEnabled();
+    await expect(page.locator('#setup-status')).toContainText('have not been verified');
+    await expect(page.locator('#fingerprint-panel')).toBeHidden();
+    await expect(page.locator('#install')).toBeDisabled();
+  });
+});
+
+test('retry of an undelivered Install preserves its public id and selection without storing secrets', async ({page,controller}) => {
+  const attempts = [];
+  let first = true;
+  await page.route('**/setup/start', async route => {
+    attempts.push(route.request().postDataJSON());
+    if (first) { first = false; await route.abort('failed'); }
+    else await route.continue();
+  });
+  await install(page,controller);
+  await expect(page.getByRole('button',{name:'Retry Install request',exact:true})).toBeEnabled();
+  await expect(page.locator('#install-profile')).toBeDisabled();
+  await page.getByRole('button',{name:'Retry Install request',exact:true}).click();
+  await completed(page);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]).toEqual(attempts[1]);
+  expect(attempts[0].request_id).toMatch(/^[a-f0-9-]{36}$/);
+  expect(JSON.stringify(attempts)).not.toContain('TEST-ONLY-secret');
 });

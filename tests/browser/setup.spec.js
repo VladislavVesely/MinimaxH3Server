@@ -74,7 +74,7 @@ test('bootstrap is single-use, cookie is HttpOnly, writes require CSRF and reloa
   await expect(page.getByRole('alert')).toContainText('invalid or expired');
 });
 
-test('trust before authentication, read-only scan, unknowns, safe text and explicit installation staging', async ({ page, controller }) => {
+test('trust before authentication, read-only scan, unknowns, safe text and explicit Install intent', async ({ page, controller }) => {
   const posts = [];
   const logs = [];
   page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
@@ -93,11 +93,9 @@ test('trust before authentication, read-only scan, unknowns, safe text and expli
   await expect(page.locator('#hardware')).toContainText('Unknown');
   await expect(page.locator('#hardware')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('#hardware img')).toHaveCount(0);
-  await expect(page.locator('#profiles article')).not.toHaveCount(0);
-  await expect(page.locator('#profiles')).toContainText('Required free disk');
-  await expect(page.locator('#install')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Stage release & review plan' })).toBeEnabled();
-  await expect(page.locator('#installation')).toContainText('No system mutation occurs until approval');
+  await expect(page.locator('#review-panel')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Install', exact:true })).toBeEnabled();
+  await expect(page.locator('#installation')).toContainText('Selecting a model makes no changes');
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
   expect(logs.join(' ')).not.toContain('browser-secret');
   await expect(page.locator('body')).not.toContainText('browser-secret');
@@ -181,4 +179,25 @@ test('reload preserves the real pending fingerprint challenge and requires fresh
   await approve(page);
   await authenticate(page);
   await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
+});
+
+test('selected details and one Install replace comparison and approval wizard', async ({ page, controller }) => {
+  await open(page, controller);
+  await connect(page); await approve(page);
+  await expect(page.locator('#password-note')).toContainText('sudo');
+  await expect(page.locator('#retain-recovery')).toHaveCount(0);
+  const authentication = page.waitForRequest(r => r.url().endsWith('/authenticate'));
+  await authenticate(page);
+  expect((await authentication).postDataJSON().reuse_for_setup).toBe(true);
+  await page.locator('#scan').click();
+  await expect(page.locator('#hardware')).toContainText('Unknown');
+  await expect(page.locator('#review-panel')).toHaveCount(0);
+  await expect(page.locator('#installation input[type="checkbox"]')).toHaveCount(0);
+  await expect(page.locator('#sudo-password')).toHaveCount(0);
+  await expect(page.getByRole('button', {name:'Install', exact:true})).toBeEnabled();
+  await page.locator('#install-profile').selectOption('h3-gguf-q5-k-m');
+  await expect(page.locator('#selected-profile')).toContainText('Q5_K_M');
+  await expect(page.locator('#selected-profile')).toContainText('Host RAM: unknown');
+  await expect(page.locator('#install-scope')).toContainText('reboot');
+  await expect(page.locator('#install-scope')).toContainText('eligibility');
 });

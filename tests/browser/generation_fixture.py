@@ -71,14 +71,36 @@ class FixtureSSH(SSHConnection):
     def open_sftp(self):
         self._require_authentication()
         return LocalSFTP('/')
+    def check_setup_password(self, password):
+        self._require_authentication()
+        assert password == 'TEST-ONLY-secret'
+        self.calls.append('sudo-check')
+        if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'sudo-rejected':
+            raise ControllerError('setup_sudo_password_rejected')
+
+    def install_prerequisites(self, *, root, plan, approval, sudo_password, **kwargs):
+        assert sudo_password == 'TEST-ONLY-secret'
+        assert approval.plan_digest == canonical_plan_digest(plan)
+        self.calls.append('prerequisites')
+        paths = AppPaths(root)
+        # Fixed privileged bootstrap boundary only; persist its real protocol.
+        status = paths.bootstrap / approval.plan_digest / 'status'
+        status.write_text('waiting_for_replan\n'); status.chmod(0o600)
+        self.prerequisites_ready = True
+
     def inspect_install(self, **kwargs):
         self._require_authentication()
+        if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'replan' and not getattr(self, 'prerequisites_ready', False):
+            return facts(python_ready=False, packages=('python3-venv=1',),
+                         package_changes=('Inst python3-venv (1 Ubuntu [amd64])',))
         if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'reboot':
             return facts(driver_working=False, driver_package='nvidia-driver-580',
                 packages=('nvidia-driver-580=1',), package_changes=('Inst nvidia-driver-580 (1 Ubuntu [amd64])',))
         return facts()
     def recovery(self, *, root, artifact, digest, action, **kwargs):
         self._require_authentication()
+        self.calls.append(action)
+        if action in {'prepare', 'reboot'}: assert kwargs['sudo_password'] == 'TEST-ONLY-secret'
         paths = AppPaths(root)
         plan = json.loads((paths.bootstrap/digest/'plan.json').read_text())
         if action == 'service-plan':
@@ -113,7 +135,7 @@ class FixtureSSH(SSHConnection):
         if action == 'prepare':
             approval = Approval(**json.loads((paths.bootstrap/digest/'approval.json').read_text()))
             assert kwargs['service_digest'] == canonical_plan_digest(service_plan(paths, plan, uid=1000))
-            if os.environ.get('H3_TEST_CONTROLLED_SETUP'):
+            if os.environ.get('H3_TEST_CONTROLLED_SETUP') in {'planned', 'awaiting_approval'}:
                 setup = store.create_setup(plan)
                 if os.environ['H3_TEST_CONTROLLED_SETUP'] == 'awaiting_approval':
                     store.transition_setup(setup.setup_id, SetupState.AWAITING_APPROVAL)
@@ -121,7 +143,8 @@ class FixtureSSH(SSHConnection):
                 runner = Installer(paths, store, io=io)
                 def launch():
                     if self.start_setup.wait(60):
-                        runner.run(setup.setup_id, approval)
+                        with patch('h3server.backends.comfy_runtime.verify_sources'):
+                            runner.run(setup.setup_id, approval)
                 threading.Thread(target=launch, daemon=True).start()
             else:
                 setup = runner.create(plan)
@@ -135,34 +158,42 @@ class FixtureSSH(SSHConnection):
         from h3server.controller.target import snapshot
         paths = AppPaths(root)
         if action == 'snapshot': return snapshot(paths, Store(paths.state/'setup.sqlite3'), data['after'])
-        if action == 'download':
-            # Real target consent validation and exact plan binding; refuse to
-            # detach/run the actual weight downloader in this browser fixture.
-            code = """from unittest.mock import patch
-from h3server.controller.target import main
-with patch('h3server.controller.target._detach', return_value=False):
-    main()
-"""
-            result = subprocess.run([sys.executable, '-c', code, '--root', root, '--digest', digest, action],
-                input=json.dumps(data), capture_output=True, text=True, timeout=10, check=False)
-            if result.returncode:
-                raise ControllerError('deployment_operation_failed', 502)
-            from h3server.downloads import require_consent
-            plan = json.loads((paths.bootstrap/digest/'plan.json').read_text())
-            require_consent(paths, profile_name=plan['profile'])
-            return json.loads(result.stdout)
-        if action == 'activate':
-            # Exercise the real target's prerequisite rejection, never activation.
-            # Refuse detaching even if that prerequisite check regresses.
-            code = """from unittest.mock import patch
-from h3server.controller.target import main
-with patch('h3server.controller.target._detach', side_effect=AssertionError('TEST ONLY detaching forbidden')):
-    main()
-"""
-            result = subprocess.run([sys.executable, '-c', code, '--root', root, '--digest', digest, action],
-                input=json.dumps(data), capture_output=True, text=True, timeout=10, check=False)
-            assert result.returncode != 0 and 'verified environment required' in result.stderr
-            raise ControllerError('deployment_operation_failed', 502)
+        if action in {'activate', 'download', 'cancel-download'}:
+            self.calls.append(action)
+            if action == 'activate': assert data['policy'] == 'reject' and not data['cancel_confirmed']
+            command = [sys.executable, str(Path(__file__).with_name('target_fixture.py')),
+                       '--root', root, '--digest', digest, action]
+            prior = (paths.state/'operation.json').read_text() if (paths.state/'operation.json').exists() else None
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True)
+            process.stdin.write(json.dumps(data)); process.stdin.close()
+            if action == 'cancel-download':
+                process.wait(10)
+                output = process.stdout.read(); error = process.stderr.read()
+                process.stdout.close(); process.stderr.close()
+                if process.returncode: raise ControllerError('deployment_operation_failed', 502)
+                return json.loads(output)
+            # The real target owns the operation lock and durable records; the
+            # fixture launches a local subprocess instead of forking over SSH.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    text = (paths.state/'operation.json').read_text()
+                    record = json.loads(text)
+                    if text != prior and record['action'] == action:
+                        def reap():
+                            process.wait(60)
+                            process.stdout.close(); process.stderr.close()
+                        threading.Thread(target=reap, daemon=True).start()
+                        return {'state': 'accepted', 'operation': record['operation']}
+                except FileNotFoundError:
+                    pass
+                if process.poll() is not None:
+                    process.stdout.close(); process.stderr.close()
+                    raise ControllerError('deployment_operation_failed', 502)
+                time.sleep(.01)
+            process.kill(); process.wait(); process.stdout.close(); process.stderr.close()
+            raise AssertionError('TEST ONLY target launch timeout')
         raise AssertionError('TEST ONLY unsupported deployment action')
 
 
@@ -204,12 +235,15 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
             'LC_ALL=C nvidia-smi --query-gpu=pci.bus_id,name,memory.total,driver_version --format=csv,noheader,nounits':
                 b'00000000:01:00.0, NVIDIA GeForce RTX 4090, 24564, 580.1\n'})
         connection = FixtureSSH(Path(temporary)/'trust', socket_factory=network.socket, transport_factory=network.transport)
-        connection.start_setup = threading.Event(); connection.finish_setup = threading.Event()
+        connection.start_setup = threading.Event(); connection.finish_setup = threading.Event(); connection.calls = []
         # Private subprocess pipe only: no fixture controls on the HTTP API.
         def controls():
             for line in sys.stdin:
                 command = json.loads(line)
-                if command['action'] == 'start-setup': connection.start_setup.set()
+                if command['action'] == 'calls':
+                    print(json.dumps({'calls': connection.calls}), flush=True); continue
+                elif command['action'] == 'finish-download': (paths.root/'fixture-download-finish').touch()
+                elif command['action'] == 'start-setup': connection.start_setup.set()
                 elif command['action'] == 'finish-setup': connection.finish_setup.set()
                 elif command['action'] == 'lose-setup-connection':
                     network.unavailable_until = time.monotonic() + 4
