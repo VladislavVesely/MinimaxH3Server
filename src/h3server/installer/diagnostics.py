@@ -149,8 +149,14 @@ def read_diagnostics(paths, setup):
             with regular_file(paths, f'logs/installer-{setup.setup_id}.log') as stream:
                 stream.seek(0, 2)
                 size = stream.tell()
-                stream.seek(max(0, size - TAIL_BYTES))
-                tail = bounded(safe_log(stream.read(TAIL_BYTES).decode('utf-8', 'replace')))
+                start = max(0, size - TAIL_BYTES)
+                stream.seek(start)
+                raw = stream.read(TAIL_BYTES)
+                if start:
+                    # A partial first line may have lost the URL/header/secret
+                    # prefix required for redaction. Never expose that fragment.
+                    raw = raw.partition(b'\n')[2]
+                tail = bounded(safe_log(raw.decode('utf-8', 'replace')))
         except FileNotFoundError:
             tail = ''
         return {'schema': 1, 'setup_id': setup.setup_id, 'plan_digest': setup.plan_digest,

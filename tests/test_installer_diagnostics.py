@@ -113,3 +113,32 @@ def test_persisted_diagnostics_are_schema_filtered_and_symlink_confined(tmp_path
     path.symlink_to(saved)
     with pytest.raises((OSError, ValueError)):
         read_diagnostics(paths, setup)
+
+
+@pytest.mark.parametrize('prefix', [
+    'https://example.test/wheel?token=',
+    'Authorization: Bearer ',
+    'password=',
+])
+def test_legacy_tail_discards_truncated_secret_line_before_redaction(tmp_path, prefix):
+    from h3server.installer.diagnostics import read_diagnostics, TAIL_BYTES
+    paths, plan, store = prepared(tmp_path)
+    setup = store.create_setup(plan)
+    secret = 'LEAKME\n'
+    output = 'No matching distribution found for av==18.1.0\n'
+    padding = 'x' * (TAIL_BYTES - len(secret) - len(output))
+    file = paths.logs / f'installer-{setup.setup_id}.log'
+    file.write_text(prefix + secret + output + padding)
+    record = read_diagnostics(paths, setup)
+    assert 'LEAKME' not in json.dumps(record)
+    assert record['tail'].startswith(output)
+    assert len(record['tail'].encode()) <= TAIL_BYTES
+
+
+def test_legacy_oversized_line_without_boundary_is_not_exposed(tmp_path):
+    from h3server.installer.diagnostics import read_diagnostics, TAIL_BYTES
+    paths, plan, store = prepared(tmp_path)
+    setup = store.create_setup(plan)
+    file = paths.logs / f'installer-{setup.setup_id}.log'
+    file.write_text('Authorization: Bearer ' + 's' * (TAIL_BYTES + 10))
+    assert read_diagnostics(paths, setup)['tail'] == ''
