@@ -177,16 +177,22 @@ class Deployment:
                     raise ApprovalRequired('separate service approval required')
             except (ValueError, ApprovalRequired):
                 raise ControllerError('approval_required') from None
+            # Check before either installation path, without requiring Python:
+            # prerequisite discovery may be repairing a live deployment's Python.
+            with self.connection.private_sftp() as sftp:
+                try:
+                    _read(sftp, self.root + '/state/active-release.json')
+                    active_release = True
+                except FileNotFoundError:
+                    active_release = False
+            if active_release and (self.plan['privileged_required'] or self.plan['reboot_required']):
+                raise ControllerError('update_prerequisite_maintenance_required')
             self._stage(approval)
             if self.plan['purpose'] == 'prerequisites':
                 self.connection.install_prerequisites(root=self.root, plan=self.plan, approval=approval, sudo_password=sudo_password)
                 # Never reuse consent across the required fresh discovery round.
                 return {'state': 'waiting_for_replan', 'review': self.make_plan(self.plan['profile'], sudo_password_available=sudo_password is not None)}
-            snapshot = self.connection.deployment_action(root=self.root, artifact=self.release.artifact,
-                digest=approval.plan_digest, action='snapshot', data={'after': 0})
-            if snapshot.get('active_release'):
-                if self.plan['privileged_required'] or self.plan['reboot_required']:
-                    raise ControllerError('update_prerequisite_maintenance_required')
+            if active_release:
                 return self.connection.deployment_action(root=self.root, artifact=self.release.artifact,
                     digest=approval.plan_digest, action='install-update', data={'plan_digest': approval.plan_digest})
             result = self.connection.recovery(root=self.root, artifact=self.release.artifact,

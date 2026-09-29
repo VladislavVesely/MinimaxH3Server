@@ -83,7 +83,9 @@ artifact/hash lock or a certified runtime.**
 
 Updates preserve existing services during candidate installation. OS/driver changes
 in an update are rejected with an explicit requirement for a separate administrator
-maintenance window; rescan afterward. Existing compatible database schemas only
+maintenance window; rescan afterward. The controller checks the existing release
+marker over SFTP before either prerequisite or environment installation, including
+when target Python is unavailable. Existing compatible database schemas only
 are supported, not guessed/irreversible migrations.
 
 Activation owns an exclusive deployment/installer lock and persists its journal.
@@ -95,7 +97,11 @@ without a lease that might reopen submissions during a switch.
 After quiescence: stop the user service, back up SQLite, atomically switch `current`,
 register/restart the candidate unit, and check authenticated daemon health. Failure
 restores the previous release, environment-specific unit and compatible database
-backup; models are untouched. A lost activation process does not mean completion.
+backup; models are untouched. When there is no previous release, rollback disables
+the candidate's user-service autostart before declaring rollback complete. A newly
+approved activation restores registration; removing `current` alone is insufficient
+because the daemon unit references its environment directly. A lost activation
+process does not mean completion.
 Use **Approve interrupted activation recovery**: before switching it releases only
 its own gate (never kills draining jobs); during switching it rolls back; after a
 durable healthy commit it finalizes the gate without restoring backups over newly

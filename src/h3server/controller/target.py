@@ -190,6 +190,9 @@ class Activation:
             except FileNotFoundError:
                 atomic_json(paths, runtime_path, runtime_document)
             self.io.service(['daemon-reload'])
+            # First-install rollback disables autostart. Only a new approved
+            # activation restores the authoritative unit's registration.
+            self.io.service(['enable', str(paths.config / 'systemd/h3server.service')])
             self.io.service(['restart', 'h3server.service'])
             self.io.health()
             atomic_json(paths, 'state/active-release.json', journal['candidate'])
@@ -257,6 +260,10 @@ class Activation:
             atomic_json(paths, 'state/activation.json', journal)
             self._release_gate(journal['operation'])
         else:
+            # Recovery registered this environment directly, not via current.
+            # Removing the pointer alone cannot prevent autostart at next boot.
+            # Keep the journal/gate unresolved if disabling registration fails.
+            self.io.service(['disable', 'h3server.service'])
             paths.current.unlink(missing_ok=True)
             (paths.state / 'active-release.json').unlink(missing_ok=True)
             # No previous service to authenticate to; we hold the operation lock

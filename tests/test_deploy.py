@@ -490,3 +490,92 @@ def test_sftp_directory_refuses_parent_traversal_before_any_mutation(tmp_path):
         def __getattr__(self,name):raise AssertionError('unexpected SFTP IO')
     for path in ('relative/path','/home/test/../outside','/home/./test'):
         with pytest.raises(ControllerError,match='unsafe_remote_path'):_directory(NoIO(),path)
+
+
+@pytest.mark.parametrize('interrupt_disable', [False, True])
+def test_first_activation_rollback_disables_autostart_and_approved_retry_enables_it(tmp_path, interrupt_disable):
+    """Real journal/files; simulated user-manager IO, not native reboot evidence."""
+    from h3server.controller.target import Activation
+    from h3server.backends.base import read_json
+    paths, plan = staged_target(tmp_path)
+
+    class UserManagerIO(RuntimeIO):
+        enabled = True  # Recovery.prepare registered the candidate for boot.
+        running = False
+        disable_interrupted = False
+
+        def service(self, command):
+            super().service(command)
+            if command == ['disable', 'h3server.service']:
+                if interrupt_disable and not self.disable_interrupted:
+                    self.disable_interrupted = True
+                    raise RuntimeError('TEST disable interrupted')
+                self.enabled = False
+            elif command == ['enable', str(paths.config / 'systemd/h3server.service')]:
+                self.enabled = True
+            elif command == ['stop', 'h3server.service']:
+                self.running = False
+            elif command == ['restart', 'h3server.service']:
+                self.running = True
+
+        def restart_user_manager(self):
+            self.running = self.enabled
+
+    io = UserManagerIO(paths, previous=False, fail_health=True)
+    with pytest.raises(RuntimeError):
+        Activation(paths, io=io).run(plan, 'a'*32, policy='reject')
+    if interrupt_disable:
+        journal = read_json(paths, 'state/activation.json')
+        assert journal['phase'] == 'switching'  # Never acknowledge incomplete rollback.
+        assert read_json(paths, 'state/maintenance.json')['active']
+        Activation(paths, io=io).rollback(journal)
+    assert read_json(paths, 'state/activation.json')['phase'] == 'rolled_back'
+    assert not paths.current.exists()
+    assert not io.enabled
+    io.restart_user_manager()
+    assert not io.running  # The rejected environment/readiness still exists, but cannot autostart.
+
+    # A fresh approved activation restores the authoritative registration.
+    Activation(paths, io=io).run(plan, 'b'*32, policy='reject')
+    assert io.enabled
+    enable = ('service', 'enable', str(paths.config / 'systemd/h3server.service'))
+    last_restart = max(i for i, call in enumerate(io.calls) if call == ('service', 'restart', 'h3server.service'))
+    assert io.calls[last_restart-1] == enable
+    io.restart_user_manager()
+    assert io.running
+    assert read_json(paths, 'state/activation.json')['phase'] == 'complete'
+
+
+def test_active_release_blocks_privileged_prerequisite_update_before_any_install_io(tmp_path):
+    from contextlib import contextmanager
+    import threading
+    from h3server.controller.deploy import _write
+    from h3server.installer.planner import build_plan
+    from test_install_plan import facts
+
+    release = bundle(tmp_path)
+    sftp = LocalSFTP(tmp_path / 'remote'); sftp.base.mkdir()
+    root = '/home/test/MinimaxH3Server'
+    _write(sftp, root + '/state/active-release.json', json.dumps({
+        'release': 'old', 'environment': 'old-env', 'unit': 'TEST ONLY previous unit'}).encode())
+
+    class SSH:
+        lock = threading.RLock()
+        def status(self): return {'state': 'authenticated'}
+        def remote_home(self): return '/home/test'
+        @contextmanager
+        def private_sftp(self): yield sftp
+        def install_prerequisites(self, **kwargs): raise AssertionError('APT must not execute during update')
+        def deployment_action(self, **kwargs): raise AssertionError('Python must not be required for this guard')
+
+    deploy = Deployment(SSH(), release)
+    deploy.root = root
+    deploy.plan = build_plan(facts(python_ready=False, packages=('python3-venv=3.12.3',),
+        package_changes=('Inst python3-venv (3.12.3 Ubuntu:24.04/noble [amd64])',)),
+        profile='h3-bf16-cpu-offload-experimental', artifact=release.artifact)
+    deploy.plan['deployment_config'] = {'port': 8765, 'root': root}
+    assert deploy.plan['purpose'] == 'prerequisites' and deploy.plan['privileged_required']
+    approval = Approval(canonical_plan_digest(deploy.plan), True, True, True)
+    with pytest.raises(ControllerError, match='update_prerequisite_maintenance_required'):
+        deploy.install(approval, service_digest=None)
+    assert not sftp.path(root + '/bootstrap').exists()  # Rejection precedes even approval staging.
