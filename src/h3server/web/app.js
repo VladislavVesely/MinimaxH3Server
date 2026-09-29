@@ -566,7 +566,10 @@
     }
   });
   for (const id of ['install-sage', 'use-sage', 'install-turbo', 'use-turbo']) $(id).addEventListener('change', () => {
-    if (id === 'use-turbo' && $('use-turbo').checked && ![4,5,6,7,8].includes(Number($('steps').value))) $('steps').value = 6;
+    if (id === 'use-turbo') {
+      if (!$('use-turbo').checked) $('steps').value = 20;
+      else if (![4,5,6,7,8].includes(Number($('steps').value))) $('steps').value = 6;
+    }
     render(); savePreferences().catch(error => showError(error, false));
   });
   $('duration').addEventListener('input', () => syncDuration('seconds'));
