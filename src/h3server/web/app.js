@@ -294,6 +294,27 @@
     render();
   }
 
+  function generationBlockReasons() {
+    const reasons = [];
+    if (!ready) reasons.push('Open a valid local controller session.');
+    if (connection.state !== 'authenticated') reasons.push('Connect and authenticate to the server.');
+    if (setup.busy) reasons.push('Wait for setup to finish.');
+    if (busy) reasons.push('Wait for the current operation to finish.');
+    if (!runtimeReady) reasons.push('Generation readiness is not confirmed. Check the readiness status above or click Refresh dashboard.');
+    const sparseOn = $('sparse-preset').value !== 'off';
+    if (sparseOn && $('use-turbo').checked) reasons.push('Turbo and sparse attention cannot be combined. Turn off Turbo or select Sparse: Off.');
+    for (const [name, state, selected, off] of [
+      ['Sparse attention', sparseState, sparseOn, 'select Sparse: Off'],
+      ['Turbo LoRA', turboState, $('use-turbo').checked, 'turn off Turbo'],
+      ['SageAttention', sageState, $('use-sage').checked, 'turn off SageAttention']
+    ]) {
+      if (state.busy) reasons.push(`${name} setup is running. Wait for its download and checks to finish.`);
+      else if (selected && !state.supported) reasons.push(`${name} is not supported or verified for this model/component version. ${off.charAt(0).toUpperCase() + off.slice(1)} or check its setup status above.`);
+      else if (selected && !state.installed) reasons.push(`${name} is not installed and verified. Select its installation option above and click Install, or ${off}.`);
+    }
+    return reasons;
+  }
+
   function render() {
     const state = connection.state;
     const usable = ready && !busy;
@@ -383,8 +404,10 @@
       : !sparseState.installed ? 'To use sparse, select its installation option above and click Install.'
       : !sparseState.supported ? 'Sparse is not verified for this active model profile.' : 'Ready. Quality-first is the recommended starting preset; actual runtime/fallback appears in job output.';
     $('use-turbo').disabled = sparseOn && !$('use-turbo').checked;
-    $('generate').disabled = sparseState.busy || (sparseOn && (!sparseState.installed || !sparseState.supported || $('use-turbo').checked)) || sageState.busy || turboState.busy || ($('use-sage').checked && (!sageState.installed || !sageState.supported))
-      || ($('use-turbo').checked && (!turboState.installed || !turboState.supported));
+    const generationReasons = generationBlockReasons();
+    $('generate').disabled = generationReasons.length > 0;
+    $('generate-disabled-reason').hidden = generationReasons.length === 0;
+    $('generate-disabled-reason').textContent = generationReasons.length ? 'Cannot queue generation: ' + generationReasons.join(' ') : '';
     $('steps').min = $('use-turbo').checked ? 4 : 2;
     $('steps').max = $('use-turbo').checked ? 8 : 1000;
     $('turbo-strength').disabled = !$('use-turbo').checked;
