@@ -120,3 +120,27 @@ def test_packaged_compatibility_payload_has_trusted_hash():
     assert len(payload) == 187946
     assert hashlib.sha256(payload).hexdigest() == PREVIOUS_SHA256
     assert PREVIOUS_ARTIFACT.sha256 == PREVIOUS_SHA256
+
+
+def test_audited_predecessor_service_contract_is_unchanged():
+    # Compare syntax without importing/executing predecessor code. A future unit
+    # contract change must remove/review this compatibility proof explicitly.
+    import ast
+    import inspect
+    import io
+    import zipfile
+    from h3server.installer import recovery
+    names = {'BOOTSTRAP_UNIT', 'DAEMON_UNIT', '_quote', '_scalar_path',
+             'render_units', '_unit_path', 'service_plan'}
+    def contract(source):
+        result = {}
+        for node in ast.parse(source).body:
+            name = (node.name if isinstance(node, ast.FunctionDef) else
+                    node.targets[0].id if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) else None)
+            if name in names:
+                result[name] = ast.dump(node, include_attributes=False)
+        assert set(result) == names
+        return result
+    with zipfile.ZipFile(io.BytesIO(previous_payload())) as archive:
+        predecessor = archive.read('h3server/installer/recovery.py').decode()
+    assert contract(predecessor) == contract(inspect.getsource(recovery))
