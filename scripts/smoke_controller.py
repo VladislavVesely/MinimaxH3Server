@@ -20,13 +20,16 @@ import zipfile
 def verify_embedded(executable):
     from PyInstaller.archive.readers import CArchiveReader
     archive = CArchiveReader(str(executable))
-    manifest = json.loads(archive.extract('h3server/payload/release.json'))
-    wheel = archive.extract('h3server/payload/' + manifest['wheel'])
+    def extract(name):
+        # CArchive keys use native separators; wheel ZIP members remain POSIX.
+        return archive.extract(os.path.normpath(name))
+    manifest = json.loads(extract('h3server/payload/release.json'))
+    wheel = extract('h3server/payload/' + manifest['wheel'])
     assert hashlib.sha256(wheel).hexdigest() == manifest['sha256']
     import io
     with zipfile.ZipFile(io.BytesIO(wheel)) as release:
         for name in ['web/index.html', 'web/app.js', 'web/styles.css', 'backends/manifest.json', 'backends/LICENSE.h3.txt']:
-            assert release.read('h3server/' + name) == archive.extract('h3server/' + name)
+            assert release.read('h3server/' + name) == extract('h3server/' + name)
         assert 'h3server/controller/target.py' in release.namelist()
     print('Embedded release wheel, web, manifest and full license verified')
 

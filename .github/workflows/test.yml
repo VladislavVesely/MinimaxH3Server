@@ -44,7 +44,7 @@ jobs:
           tests/test_ssh.py tests/test_controller_security.py tests/test_web_assets.py
           tests/test_domain.py tests/test_events.py tests/test_store.py
           tests/test_probe.py tests/test_profiles.py tests/test_backend_manifest.py
-          tests/test_install_plan.py
+          tests/test_install_plan.py tests/test_smoke_controller.py
       - run: npm ci
         working-directory: tests/browser
       - run: npx playwright install --with-deps chromium
