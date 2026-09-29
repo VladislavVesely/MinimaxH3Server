@@ -99,8 +99,10 @@ def stage(name, emit):
     emit(Event(name, StageStatus.RUNNING))
     try:
         yield
-    except BaseException:
-        emit(Event(name, StageStatus.FAILED))
+    except BaseException as error:
+        from h3server.installer.diagnostics import safe_log
+        message = safe_log(f'{type(error).__name__}: {error}')
+        emit(Event(name, StageStatus.FAILED, message[:4000]))
         raise
     else:
         emit(Event(name, StageStatus.COMPLETED))

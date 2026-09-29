@@ -4,7 +4,7 @@ Only --request or bounded --diagnose child processes import native dependencies.
 Runtime readiness is imports/CUDA/codecs + approved file integrity, NOT inference.
 The parent retains the hard process-group deadline for uninterruptible kernels.
 """
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from dataclasses import asdict
 import importlib.util
 import json
@@ -76,8 +76,15 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False):
     # Do not activate optional downloaded/compiled kernels through user options.
     import folder_paths
     folder_paths.folder_names_and_paths.clear()
-    for name in ('diffusion_models','text_encoders','vae'):
-        folder_paths.folder_names_and_paths[name] = ([str(snapshot/name)], {'.safetensors','.gguf'})
+    from h3server.backends.safetensors_compat import artifact_directory, REPAIRS
+    folders = {name: [str(snapshot/name)] for name in ('diffusion_models','text_encoders','vae')}
+    for artifact in selected.artifacts:
+        if artifact.sha256 in REPAIRS:
+            print(f'Preparing checksum-verified runtime copy: {Path(artifact.local_relative_path).name}', flush=True)
+            normalized = artifact_directory(paths, snapshot, artifact)
+            folders[Path(artifact.local_relative_path).parent.as_posix()].insert(0, str(normalized))
+    for name, locations in folders.items():
+        folder_paths.folder_names_and_paths[name] = (locations, {'.safetensors','.gguf'})
     with directory(paths, 'tmp/comfy/embeddings', create=True) as fd:
         if os.listdir(fd):
             raise ValueError('embeddings directory must remain empty')
@@ -228,7 +235,9 @@ def execute_document(request_path, *, emit, profile=None):
     require_consent(paths, profile_name=profile)
     offline_environment(paths)
     # Weights MUST fail offline before native imports or any node loading.
+    emit(Event('loading', StageStatus.RUNNING, 'Verifying selected model file checksums before loading; large files can take time.'))
     snapshot = verify_snapshot(paths, profile_name=profile)
+    emit(Event('loading', StageStatus.RUNNING, 'Model checksums verified; checking runtime and preparing model components.'))
     environment = verify_provisioned(paths, profile)
     rt = load_runtime(environment, paths, snapshot, get_artifact_set(profile))
     check_gpu(rt, get_artifact_set(profile))
@@ -278,8 +287,38 @@ def main(argv=None):
     parser.add_argument('--root'); parser.add_argument('--environment-only', action='store_true')
     args = parser.parse_args(argv)
     stdout = sys.stdout
-    with redirect_stdout(sys.stderr):
+    current_stage = ['loading']
+    def emit(event):
+        current_stage[0] = event.stage
+        print(encode_event(event), file=stdout, flush=True)
+    class WorkerLog:
+        """Bounded line framing; scheduler redacts prompts and credentials."""
+        def __init__(self):
+            self.pending = ''
+            self.discarding = False
+        def write(self, text):
+            for part in text.splitlines(keepends=True):
+                if not self.discarding:
+                    self.pending += part
+                    if len(self.pending) > 4000:
+                        self.pending = ''
+                        self.discarding = True
+                if part.endswith(('\n', '\r')):
+                    if self.pending.strip():
+                        emit(Event(current_stage[0], StageStatus.RUNNING, self.pending.rstrip()))
+                    self.pending = ''
+                    self.discarding = False
+            return len(text)
+        def flush(self):
+            pass
+        def isatty(self):
+            return False
+    sink = sys.stderr if args.diagnose else WorkerLog()
+    with redirect_stdout(sink), redirect_stderr(sink):
         try:
+            if not args.diagnose:
+                import logging
+                logging.basicConfig(level=logging.INFO, stream=sink, format='%(message)s')
             if args.diagnose:
                 paths = AppPaths(args.root)
                 report = runtime_diagnostic(paths, args.profile)
@@ -294,9 +333,12 @@ def main(argv=None):
                 if args.environment_only and not report['environment_ready']: raise SystemExit(1)
             else:
                 if args.environment_only: raise ValueError('diagnostic flag in generation')
-                execute_document(args.request, profile=args.profile,
-                    emit=lambda e: print(encode_event(e), file=stdout, flush=True))
-        except BaseException:
+                execute_document(args.request, profile=args.profile, emit=emit)
+        except BaseException as error:
+            if not args.diagnose:
+                from h3server.installer.diagnostics import safe_log
+                emit(Event(current_stage[0], StageStatus.FAILED,
+                           safe_log(f'{type(error).__name__}: {error}')[:4000]))
             raise SystemExit('Pruned H3 worker failed; no output published') from None
 
 

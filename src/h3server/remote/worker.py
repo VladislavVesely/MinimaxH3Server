@@ -7,9 +7,9 @@ PATH is a daemon-created 0600 JSON document with schema_version=1, job_id,
 request (prompt, loras, sparse_attention, normalized settings), output_path and
 root. The adapter must use local verified artifacts, enforce persisted license
 consent, write ONLY output_path, and emit domain Event JSON lines on stdout.
-Allowed stages/units are below. Messages are deliberately discarded: raw backend
-logs, exception text, prompts and credentials never enter the public event log.
-Stderr is discarded. Exit zero is necessary but not sufficient: the daemon checks
+Allowed stages/units are below. Bounded messages are sanitized and known prompts
+redacted before publication. Pruned workers frame Python logs and concrete errors
+as these events. Unframed native stderr is discarded. Exit zero is necessary but not sufficient: the daemon checks
 the bounded regular output and independently validates its MP4 video stream.
 
 Backend injection is a Python composition seam for the next adapter and explicit
@@ -40,7 +40,7 @@ import threading
 import time
 from typing import Callable
 
-from h3server.domain import Capabilities, Event, JobRequest, JobStatus, H3_PROFILES
+from h3server.domain import Capabilities, Event, JobRequest, JobStatus, StageStatus, H3_PROFILES
 from h3server.events import decode_event
 from h3server.paths import AppPaths
 from h3server.store import OutputMetadata, QueueFull, Store
@@ -411,7 +411,9 @@ class Worker:
                 result = self._wait_exit(process, 5)
                 self._terminate(process)
                 if result.si_code != os.CLD_EXITED or result.si_status != 0:
-                    raise ValueError("backend failed")
+                    detail = (f'exit code {result.si_status}' if result.si_code == os.CLD_EXITED
+                              else f'signal {result.si_status} (check GPU/system memory and kernel logs)')
+                    raise RuntimeError('Backend process terminated: ' + detail)
                 fd = self._open_output(job.job_id)
             # Parsing may be slow. Cancellation can still acquire the scheduler
             # lock, kill the process group and revoke/delete the partial output.
@@ -436,10 +438,12 @@ class Worker:
                                               output=OutputMetadata("video.mp4", info.st_size, "video/mp4"))
             finally:
                 os.close(fd)
-        except Exception:
-            # Backend exception text can contain secrets; publish only fixed codes.
+        except Exception as error:
+            from h3server.installer.diagnostics import safe_log
+            message = safe_log(f'{type(error).__name__}: {error}'.replace(job.request.prompt, '[prompt redacted]'))[:4000]
             with self._lock:
                 if self.store.get_job(job.job_id).status is JobStatus.RUNNING:
+                    self.store.append_event('job', job.job_id, Event('worker', StageStatus.FAILED, message))
                     self.store.transition_job(job.job_id, JobStatus.FAILED)
         finally:
             try:
@@ -493,7 +497,14 @@ class Worker:
                     event = decode_event(line.decode("utf-8"))
                     if event.stage not in STAGES or (event.progress and event.progress.unit not in UNITS):
                         raise ValueError("unknown worker event vocabulary")
-                    event = Event(event.stage, event.status, "", event.progress)
+                    from h3server.installer.diagnostics import safe_log
+                    prompt = self.store.get_job(job_id).request.prompt
+                    message = event.message
+                    for private in (prompt, repr(prompt)[1:-1], json.dumps(prompt)[1:-1], *prompt.splitlines()):
+                        if private:
+                            message = message.replace(private, '[prompt redacted]')
+                    message = safe_log(message)[:4000]
+                    event = Event(event.stage, event.status, message, event.progress)
                     with self._lock:
                         if self.store.get_job(job_id).status is JobStatus.RUNNING:
                             self.store.append_event("job", job_id, event)
