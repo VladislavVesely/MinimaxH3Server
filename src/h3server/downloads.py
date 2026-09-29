@@ -6,7 +6,8 @@ eligibility and model-download approval. Installation consent is NOT reused.
 record_consent is target-side persisted consent; download_model resumes exactly
 that inventory and emits domain Events for Store.append_event('setup', id, event).
 No downloader executes Python from a model or accepts pickle weights. All staging
-is tmp/downloads/<revision>; models/h3-<revision> is verified before each worker.
+is tmp/downloads/<revision-or-set-digest>; the corresponding models/h3-* snapshot
+must be verified before each worker (explicit profile_name for pruned weights).
 Cancellation leaves partial bytes resumable, never marked ready. Final hashes,
 not ETags (which can describe LFS pointers), bind resumed bytes to the pin.
 """
@@ -32,33 +33,72 @@ class DownloadCancelled(RuntimeError):
     pass
 
 
+def _selected_manifest(profile_name=None):
+    """Private bridge to the legacy integrity loop; never a caller-supplied manifest."""
+    manifest = load_manifest()
+    if profile_name is None or profile_name in {p["name"] for p in manifest.get("profiles", ())}:
+        return manifest
+    from h3server.backends import get_artifact_set
+    selected = get_artifact_set(profile_name)
+    entries = [{"rfilename": a.local_relative_path, "size": a.size_bytes,
+                "lfs": {"sha256": a.sha256, "size": a.size_bytes},
+                "repository": a.repository, "revision": a.revision, "source_path": a.path}
+               for a in selected.artifacts]
+    return {"profile_name": profile_name, "artifact_set_digest": selected.digest,
+            "model": {"repository": selected.artifacts[0].repository,
+                      "revision": selected.artifacts[0].revision, "files": entries,
+                      "total_bytes": selected.weight_bytes}, "sources": manifest["sources"]}
+
+
 def _binding(manifest):
     model = manifest["model"]
-    return {"schema_version": 1, "repository": model["repository"], "revision": model["revision"],
-            "inventory_sha256": hashlib.sha256(json.dumps(model["files"], sort_keys=True).encode()).hexdigest(),
-            "license_sha256": manifest["sources"]["license"]["sha256"]}
+    binding = {"schema_version": 1, "repository": model["repository"], "revision": model["revision"],
+               "inventory_sha256": hashlib.sha256(json.dumps(model["files"], sort_keys=True).encode()).hexdigest(),
+               "license_sha256": manifest["sources"]["license"]["sha256"]}
+    if "artifact_set_digest" in manifest:
+        binding.update(schema_version=2, profile_name=manifest["profile_name"],
+                       artifact_set_digest=manifest["artifact_set_digest"])
+    return binding
 
 
-def record_consent(paths, *, license_sha256, license_acknowledged, eligibility_confirmed, download_approved):
+def _consent_path(manifest):
+    if "profile_name" in manifest:
+        return f"config/h3-consent-{manifest['profile_name']}.json"
+    return "config/h3-consent.json"
+
+
+def _snapshot_id(manifest):
+    return manifest.get("artifact_set_digest", manifest["model"]["revision"])
+
+
+def record_consent(paths, *, license_sha256, license_acknowledged, eligibility_confirmed, download_approved,
+                   profile_name=None, artifact_set_digest=None):
     """Caller must present full license; eligibility may require separate authorization.
 
+    Pruned callers must also present ArtifactSet.license_disclosures and bind the
+    displayed selected set via artifact_set_digest. Runtime tokenizers are part
+    of this approval contract but are provisioned/verified by the runtime owner.
     A boolean is an operator attestation, not legal certification. Never infer it
     from territory, public Hub availability or general sudo/installation approval.
     """
-    binding = _binding(load_manifest())
+    manifest = _selected_manifest(profile_name)
+    binding = _binding(manifest)
+    if "artifact_set_digest" in manifest and artifact_set_digest != manifest["artifact_set_digest"]:
+        raise ValueError("explicit selected artifact set approval required")
     if license_sha256 != binding["license_sha256"] or any(v is not True for v in (
         license_acknowledged, eligibility_confirmed, download_approved
     )):
         raise ValueError("explicit pinned license, eligibility and download consent required")
-    atomic_json(paths, "config/h3-consent.json", {**binding, "license_acknowledged": True,
+    atomic_json(paths, _consent_path(manifest), {**binding, "license_acknowledged": True,
                 "eligibility_confirmed": True, "download_approved": True})
 
 
-def require_consent(paths):
-    expected = {**_binding(load_manifest()), "license_acknowledged": True,
+def require_consent(paths, *, profile_name=None):
+    manifest = _selected_manifest(profile_name)
+    expected = {**_binding(manifest), "license_acknowledged": True,
                 "eligibility_confirmed": True, "download_approved": True}
     try:
-        consent = read_json(paths, "config/h3-consent.json")
+        consent = read_json(paths, _consent_path(manifest))
         if consent != expected or any(consent.get(k) is not True for k in (
             "license_acknowledged", "eligibility_confirmed", "download_approved"
         )):
@@ -68,6 +108,10 @@ def require_consent(paths):
 
 
 def _inventory(manifest):
+    if "profile_name" in manifest:
+        if manifest != _selected_manifest(manifest["profile_name"]):
+            raise ValueError("unexpected selected artifact inventory")
+        return manifest["model"]["files"]
     model = manifest["model"]
     if model["repository"] != "MiniMaxAI/MiniMax-H3" or not re.fullmatch(r"[a-f0-9]{40}", model["revision"]):
         raise ValueError("unexpected model identity")
@@ -91,11 +135,11 @@ def _inventory(manifest):
     return model["files"]
 
 
-def snapshot_path(paths):
-    manifest = load_manifest()
+def snapshot_path(paths, *, profile_name=None):
+    manifest = _selected_manifest(profile_name)
     _inventory(manifest)
     # Retain spelling: descriptor walks, not Path.resolve(), reject aliases.
-    return paths.root / "models" / ("h3-" + manifest["model"]["revision"])
+    return paths.root / "models" / ("h3-" + _snapshot_id(manifest))
 
 
 def _verify(stream, entry, cancelled=lambda: False):
@@ -144,10 +188,10 @@ def _names(fd, prefix=""):
     return result
 
 
-def verify_snapshot(paths, *, cancelled=lambda: False):
-    manifest = load_manifest()
+def verify_snapshot(paths, *, cancelled=lambda: False, profile_name=None):
+    manifest = _selected_manifest(profile_name)
     entries = _inventory(manifest)
-    snapshot = snapshot_path(paths)
+    snapshot = snapshot_path(paths, profile_name=profile_name)
     relative = str(snapshot.relative_to(paths.root))
     with directory(paths, relative) as fd:
         if _names(fd) != {entry["rfilename"] for entry in entries}:
@@ -179,7 +223,7 @@ def _lock(paths):
 
 
 def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, transport=None,
-                   timeout=30, file_timeout=6 * 3600):
+                   timeout=30, file_timeout=6 * 3600, profile_name=None):
     """Explicit injectable IO boundary; default uses bounded HTTPS, no auth tokens.
 
     One response per artifact per call, <=30s socket inactivity wait and <=6h
@@ -193,10 +237,10 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
     """
     if not 0 < timeout <= 30 or not 0 < file_timeout <= 6 * 3600:
         raise ValueError("invalid download time limit")
-    require_consent(paths)
-    manifest = load_manifest()
+    require_consent(paths, profile_name=profile_name)
+    manifest = _selected_manifest(profile_name)
     entries = _inventory(manifest)
-    revision = manifest["model"]["revision"]
+    revision = _snapshot_id(manifest)
     destination = f"models/h3-{revision}"
     staging = f"tmp/downloads/{revision}"
     transport = transport or DownloadTransport
@@ -211,7 +255,7 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
         try:
             for entry in entries:
                 check_cancel()
-                require_consent(paths)
+                require_consent(paths, profile_name=profile_name)
                 name = entry["rfilename"]
                 target, partial = destination + "/" + name, staging + "/" + name + ".part"
                 try:
@@ -231,7 +275,9 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
                         offset = 0
                     if offset < entry["size"]:
                         deadline = time.monotonic() + file_timeout
-                        with transport(paths, name, offset, timeout=timeout, deadline=deadline, cancelled=cancelled) as response:
+                        selection = {"profile_name": profile_name} if "profile_name" in manifest else {}
+                        with transport(paths, name, offset, timeout=timeout, deadline=deadline,
+                                       cancelled=cancelled, **selection) as response:
                             status = response.status
                             if status == 200:
                                 stream.seek(0)
@@ -280,7 +326,7 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
                     os.replace(Path(partial).name, Path(target).name, src_dir_fd=source_fd, dst_dir_fd=target_fd)
                     os.fsync(target_fd)
             check_cancel()
-            verify_snapshot(paths, cancelled=cancelled)
+            verify_snapshot(paths, cancelled=cancelled, profile_name=profile_name)
         except DownloadCancelled:
             event(StageStatus.CANCELLED)
             raise
@@ -288,7 +334,7 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
             event(StageStatus.FAILED)
             raise
         event(StageStatus.COMPLETED)
-    return snapshot_path(paths)
+    return snapshot_path(paths, profile_name=profile_name)
 
 
 def main(argv=None):
@@ -297,9 +343,11 @@ def main(argv=None):
     from h3server.events import encode_event
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
+    parser.add_argument("--profile", default=None, help="Exact catalog profile; default preserves legacy behavior")
     args = parser.parse_args(argv)
     try:
-        download_model(AppPaths(args.root), emit=lambda event: print(encode_event(event), flush=True))
+        download_model(AppPaths(args.root), profile_name=args.profile,
+                       emit=lambda event: print(encode_event(event), flush=True))
     except Exception:
         raise SystemExit("model download failed; consent, storage, network or integrity check did not pass") from None
 

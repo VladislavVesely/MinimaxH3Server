@@ -65,6 +65,9 @@ class Profile:
     requires_cuda_runtime: bool | None = None
     backend_revision: str | None = None
     verification_evidence: tuple[str, ...] = ()
+    runtime_id: str | None = None
+    artifact_set_digest: str | None = None
+    required_gpu_family: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -95,6 +98,8 @@ class Profile:
             not isinstance(self.backend_revision, str) or not self.backend_revision.strip()
         ):
             raise ValueError("backend_revision must be a nonempty string or None")
+        if self.required_gpu_family not in (None, "blackwell"):
+            raise ValueError("unknown required GPU family")
         if self.verification_evidence != ():
             _evidence(self.verification_evidence, "generation verification evidence")
         if self.status is RecommendationStatus.VERIFIED:
@@ -110,6 +115,23 @@ class Recommendation:
     reasons: tuple[str, ...]
     evidence: tuple[str, ...]
     disk: DiskEstimate | None
+
+
+def gpu_family_eligible(hardware: HardwareInfo, required_family: str) -> bool | None:
+    """Conservative exact-name evidence, not a VRAM heuristic or CUDA test.
+
+    NVIDIA product specifications identify RTX 4090 as Ada and RTX 5090 as
+    Blackwell. Unrecognized names remain unknown (including other Blackwell
+    models). Restricted runtime startup must require True, never truthy unknown.
+    Mixed devices are not approved without explicit device selection.
+    """
+    known = {"NVIDIA GeForce RTX 4090": "ada", "NVIDIA GeForce RTX 5090": "blackwell"}
+    if not hardware.gpus:
+        return None
+    families = tuple(known.get(gpu.name) for gpu in hardware.gpus)
+    if any(family is not None and family != required_family for family in families):
+        return False
+    return True if all(family == required_family for family in families) else None
 
 
 def evaluate_profile(hardware: HardwareInfo, profile: Profile) -> Recommendation:
@@ -188,6 +210,15 @@ def evaluate_profile(hardware: HardwareInfo, profile: Profile) -> Recommendation
             failures.append("CUDA runtime: measured unusable")
         else:
             matches.append("CUDA runtime: reported usable by supplied hardware evidence")
+
+    if profile.required_gpu_family is not None:
+        eligible = gpu_family_eligible(hardware, profile.required_gpu_family)
+        if eligible is False:
+            failures.append(f"GPU family: {profile.required_gpu_family} required; known incompatible device")
+        elif eligible is None:
+            unknowns.append(f"GPU family: positive {profile.required_gpu_family} identification required before runtime use")
+        else:
+            matches.append(f"GPU family: positively identified {profile.required_gpu_family}; not inference certification")
 
     if profile.status is RecommendationStatus.UNSUPPORTED:
         failures.append("Profile evidence explicitly marks this profile unsupported")
