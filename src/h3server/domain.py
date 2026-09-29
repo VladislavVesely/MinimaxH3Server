@@ -134,6 +134,47 @@ class JobStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+H3_PROFILES = (
+    "h3-bf16-cpu-offload-experimental",
+    "h3-int8-group-offload-experimental",
+)
+
+
+@dataclass(frozen=True)
+class GenerationSettings:
+    """Normalized H3 settings. Canvas/step caps are service resource policy.
+
+    Both orientations fit the default canvas area; these are not assertions of
+    upstream explicit-input maxima. Steps count sigma points, not model calls.
+    """
+
+    num_frames: int = 124
+    width: int = 1344
+    height: int = 768
+    steps: int = 50
+    seed: int = 42
+    profile: str = H3_PROFILES[0]
+
+    def __post_init__(self):
+        for name in ("num_frames", "width", "height", "steps", "seed"):
+            if type(getattr(self, name)) is not int:
+                raise ValueError(f"{name} must be an integer")
+        if not 124 <= self.num_frames <= 345 or (self.num_frames - 5) % 17:
+            raise ValueError("num_frames must be aligned to 17*n+5 within 124..345")
+        if any(not 32 <= side <= 1344 or side % 32 for side in (self.width, self.height)):
+            raise ValueError("canvas axes must be multiples of 32 within 32..1344")
+        if self.width * self.height > 1344 * 768:
+            raise ValueError("canvas exceeds service pixel-area limit")
+        if not 2 <= self.steps <= 1000 or not 0 <= self.seed <= 2**63 - 1:
+            raise ValueError("steps or seed outside service bounds")
+        if self.profile not in H3_PROFILES:
+            raise ValueError("unknown H3 profile")
+
+    @property
+    def duration(self) -> float:
+        return self.num_frames / 24
+
+
 @dataclass(frozen=True)
 class JobRequest:
     """Validate against the selected backend before accepting or executing work.
@@ -145,9 +186,12 @@ class JobRequest:
     prompt: str
     loras: tuple[str, ...] = ()
     sparse_attention: bool | None = None
+    settings: GenerationSettings | None = None
 
     def __post_init__(self) -> None:
-        if not self.prompt.strip():
+        if self.settings is not None and not isinstance(self.settings, GenerationSettings):
+            raise ValueError("settings must be normalized GenerationSettings")
+        if not isinstance(self.prompt, str) or not self.prompt.strip():
             raise ValueError("prompt must not be empty")
         if not isinstance(self.loras, tuple) or any(
             not isinstance(identifier, str) or not identifier.strip() for identifier in self.loras

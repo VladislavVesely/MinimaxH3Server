@@ -15,7 +15,7 @@ import re
 import sqlite3
 from uuid import uuid4
 
-from h3server.domain import Capabilities, Event, Job, JobRequest, JobStatus, StageStatus
+from h3server.domain import Capabilities, Event, GenerationSettings, Job, JobRequest, JobStatus, StageStatus
 from h3server.events import (
     MAX_EVENT_PAGE, EventPage, EventRecord, ReplayGap, _dump, _keys, _load,
     _text, decode_event, encode_event,
@@ -40,6 +40,10 @@ class InvalidTransition(ValueError):
 
 class ApprovalRequired(InvalidTransition):
     pass
+
+
+class QueueFull(StoreError):
+    """Acceptance exceeded the transactional pending-job bound."""
 
 
 class SetupState(StrEnum):
@@ -76,8 +80,11 @@ class OutputMetadata:
     filename: str
     size_bytes: int
     media_type: str
+    expired: bool = False
 
     def __post_init__(self):
+        if type(self.expired) is not bool:
+            raise ValueError("expired must be bool")
         if not isinstance(self.filename, str) or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", self.filename):
             raise ValueError("output filename must be a single portable component")
         stem = self.filename.split(".", 1)[0].upper()
@@ -151,11 +158,20 @@ def canonical_plan_digest(plan: dict) -> str:
 def _request_data(request: JobRequest) -> dict:
     if not isinstance(request, JobRequest):
         raise ValueError("expected JobRequest")
-    return {"prompt": request.prompt, "loras": list(request.loras), "sparse_attention": request.sparse_attention}
+    return {"prompt": request.prompt, "loras": list(request.loras), "sparse_attention": request.sparse_attention,
+            "settings": asdict(request.settings) if request.settings is not None else None}
 
 
 def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
-    request = _keys(_load(row["request"]), {"prompt", "loras", "sparse_attention"})
+    request = _load(row["request"])
+    # Additive JSON migration: v1 rows remain readable without rewriting history.
+    # Legacy jobs have no executable settings and must not run with guessed ones.
+    if type(request) is dict and "settings" not in request:
+        request["settings"] = None
+    request = _keys(request, {"prompt", "loras", "sparse_attention", "settings"})
+    if request["settings"] is not None:
+        settings = _keys(request["settings"], {"num_frames", "width", "height", "steps", "seed", "profile"})
+        request["settings"] = GenerationSettings(**settings)
     _text(request["prompt"])
     if type(request["loras"]) is not list:
         raise ValueError("invalid LoRA list")
@@ -163,7 +179,10 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     job = Job(_identifier(row["job_id"]), JobRequest(**request), JobStatus(row["status"]))
     output = None
     if row["output"] is not None:
-        data = _keys(_load(row["output"]), {"filename", "size_bytes", "media_type"})
+        data = _load(row["output"])
+        if type(data) is dict and "expired" not in data:
+            data["expired"] = False
+        data = _keys(data, {"filename", "size_bytes", "media_type", "expired"})
         output = OutputMetadata(**data)
         if job.status is not JobStatus.COMPLETED:
             raise ValueError("only completed jobs may have output metadata")
@@ -327,11 +346,17 @@ class Store:
             page = records[:limit]
             return EventPage(page, page[-1].event_id if page else after, len(records) > limit)
 
-    def accept_job(self, request: JobRequest, *, capabilities: Capabilities) -> Job:
+    def accept_job(self, request: JobRequest, *, capabilities: Capabilities, pending_limit: int | None = None) -> Job:
         request.validate_capabilities(capabilities)
         payload = _dump(_request_data(request))
         job = Job(uuid4().hex, request)
+        if pending_limit is not None:
+            _bounded_int(pending_limit, 1)
         with self._transaction(write=True) as db:
+            if pending_limit is not None:
+                pending = db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued', 'running')").fetchone()[0]
+                if pending >= pending_limit:
+                    raise QueueFull("pending job limit reached")
             db.execute("INSERT INTO jobs VALUES (?, ?, ?, NULL)", (job.job_id, payload, job.status.value))
             _stored(_decode_job, db.execute("SELECT * FROM jobs WHERE job_id=?", (job.job_id,)).fetchone())
             self._append(db, "job", job.job_id, Event("queued", StageStatus.PENDING))
@@ -350,6 +375,11 @@ class Store:
     def get_job_output(self, job_id: str) -> OutputMetadata | None:
         with self._transaction() as db:
             return self._job(db, job_id)[1]
+
+    def get_job_snapshot(self, job_id: str) -> tuple[Job, OutputMetadata | None]:
+        """Read lifecycle and output from one snapshot for API state refreshes."""
+        with self._transaction() as db:
+            return self._job(db, job_id)
 
     def list_jobs(self, *, limit: int = 100, offset: int = 0) -> tuple[Job, ...]:
         _bounded_int(limit, 1, MAX_EVENT_PAGE)
@@ -380,6 +410,25 @@ class Store:
     def transition_job(self, job_id: str, target: JobStatus, *, output: OutputMetadata | None = None) -> Job:
         with self._transaction(write=True) as db:
             return self._transition_job(db, job_id, JobStatus(target), output)
+
+    def claim_next_job(self) -> Job | None:
+        """Atomically claim FIFO work, never while another persisted job runs."""
+        with self._transaction(write=True) as db:
+            if db.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone():
+                return None
+            row = db.execute("SELECT job_id FROM jobs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
+            return self._transition_job(db, row[0], JobStatus.RUNNING, None) if row else None
+
+    def expire_job_output(self, job_id: str) -> None:
+        """Preserve completion history, but durably revoke output availability."""
+        with self._transaction(write=True) as db:
+            job, output = self._job(db, job_id)
+            if job.status is not JobStatus.COMPLETED or output is None or output.expired:
+                return
+            data = asdict(output)
+            data["expired"] = True
+            db.execute("UPDATE jobs SET output=? WHERE job_id=?", (_dump(data), job_id))
+            self._append(db, "job", job_id, Event("output_expired", StageStatus.COMPLETED))
 
     def reconcile_interrupted_jobs(self) -> tuple[str, ...]:
         """Call only after establishing exclusive daemon/worker ownership at restart."""
