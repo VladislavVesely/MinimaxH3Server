@@ -1,5 +1,15 @@
 # Validation and acceptance status
 
+## Estimate refresh regression
+
+Dashboard polling no longer restarts timing lookups for unchanged inputs or
+flashes the loading message. Lookups debounce input changes; reconnect, explicit
+refresh and explicit unload invalidate the previous lookup. The new
+`tests/estimate-refresh.cjs` failed before the fix and passes afterward, alongside
+existing estimate/blocker/inputs/toggle/timing checks. Rebuilt-native validation
+observed two dashboard polls with zero estimate requests or text changes, then
+exactly one lookup after changing an input. No generation/install/unload submitted.
+
 ## Resident models and measurements — 2026-09-29
 
 Implemented opt-in resident JSONL workers for the pinned Comfy/pruned runtime,

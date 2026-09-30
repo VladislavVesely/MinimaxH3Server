@@ -24,6 +24,7 @@
   let performanceAvailable = false;
   let estimateTimer = null;
   let estimateEpoch = 0;
+  let estimateKey = null;
   let backendCapabilities = {};
   let profileCatalog = [];
   let activeProfileKey = null;
@@ -286,7 +287,7 @@
     if (data.state !== 'authenticated') {
       runtimeReady = false;
       modelState = {}; performanceAvailable = false;
-      clearTimeout(estimateTimer); estimateEpoch++;
+      clearTimeout(estimateTimer); estimateEpoch++; estimateKey = null;
       $('generation-estimate').textContent = 'Connect to obtain a timing estimate.';
       $('estimate-details').hidden = true;
       sageState = { installed: false, busy: false, supported: false };
@@ -1127,7 +1128,10 @@
       });
     }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy ? 2000 : 5000);
   }
-  $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
+  $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', async () => {
+    estimateKey = null;
+    await dashboard();
+  }));
   function generationBody() {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
@@ -1151,6 +1155,12 @@
     return `Estimate ~${timeLabel(value.mean_seconds)} (${value.cache === 'warm_partial' ? 'reused base/encoder, decoder reload' : value.cache === 'encoder_reuse' ? 'encoder retained, other weights reloaded' : value.cache}; ${value.samples} matching ${value.samples === 1 ? 'run' : 'runs'}${spread}). Queue delay excluded.`;
   }
   function scheduleEstimate() {
+    const body = generationBody();
+    const key = JSON.stringify([connection.state, performanceAvailable, body]);
+    // Dashboard polling observes jobs; it must not restart an unchanged lookup
+    // or replace the displayed estimate with a periodic loading message.
+    if (key === estimateKey) return;
+    estimateKey = key;
     clearTimeout(estimateTimer);
     const epoch = ++estimateEpoch;
     $('estimate-details').hidden = true;
@@ -1161,7 +1171,6 @@
     $('generation-estimate').textContent = 'Checking measurements for these settings…';
     estimateTimer = setTimeout(async () => {
       try {
-        const body = generationBody();
         // Only length affects timing lookup; do not send an unsubmitted prompt.
         body.prompt = 'x'.repeat(Math.max(1, Math.min(16000, Array.from(body.prompt).length)));
         const estimate = await request('/remote/performance/estimate', body);
@@ -1179,6 +1188,7 @@
   $('generation-form').addEventListener('change', scheduleEstimate);
   $('unload-models').addEventListener('click', () => perform('Releasing retained models…', async () => {
     modelState = await request('/remote/models/unload', {});
+    estimateKey = null; // Explicit unload changes cold/reused timing semantics.
     await dashboard();
   }));
   $('export-timings').addEventListener('click', () => perform('Preparing local timing data…', async () => {
