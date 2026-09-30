@@ -150,8 +150,12 @@ class SetupRecovery:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ControllerError('reconnect_timeout')
-                reconnect(factory, target, self._password, timeout=remaining,
-                          cancel=self._cancel, wait=wait)
+                if target[0]=='local' and target[1]==0:
+                    factory().connect_local()
+                    if self.connection._username!=target[2]:raise ControllerError('recovery_binding_changed')
+                else:
+                    reconnect(factory, target, self._password, timeout=remaining,
+                              cancel=self._cancel, wait=wait)
                 if self._cancel.is_set() or not self._session_active():
                     raise ControllerError('cancelled')
                 remaining = deadline - time.monotonic()

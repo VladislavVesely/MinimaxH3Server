@@ -481,6 +481,29 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 recovery.set_target((body.host, body.port, body.username))
                 return result
 
+    @app.post(API + '/connection/local')
+    def connect_local(body: EmptyRequest):
+        with recovery.operations:
+            setup_idle()
+            if connection.status()['state']!='disconnected':raise ControllerError('already_connected')
+            with recovery.operation(replace=True):
+                deployment.reset();setup.reset()
+                result=connection.connect_local()
+                recovery.set_target(('local',0,connection._username))
+                return {**result,'recovery':recovery.status()}
+
+    @app.post(API + '/connection/local/authorize')
+    def authorize_local(body: AuthenticationRequest):
+        with recovery.operations:
+            setup_idle()
+            state=connection.status()
+            if state.get('mode')!='local' or state['state']!='authenticated':raise ControllerError('local_target_required')
+            if not state.get('local_supported'):raise ControllerError('local_install_unsupported')
+            password=body.password.get_secret_value()
+            connection.check_setup_password(password)
+            recovery.remember(password,enabled=True,reuse_for_setup=True)
+            return {**connection.status(),'recovery':recovery.status()}
+
     @app.post(API + "/approve")
     @observed
     def approve(body: ApprovalRequest):
@@ -558,7 +581,10 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def scan(body: EmptyRequest | None = Body(default=None)):
         with connection.lock:
             home = connection.remote_home()
-            probe = probe_hardware(connection, disk_path=home)
+            if connection.status().get('mode')=='local' and connection.status().get('local_platform')=='Darwin':
+                from h3server.controller.local_probe import mac_probe
+                probe=mac_probe(home)
+            else:probe = probe_hardware(connection, disk_path=home)
             recommendations = recommend_profiles(probe.hardware, load_profiles(include_pruned=True))
         return {"probe": {"hardware": asdict(probe.hardware), "kernel": probe.kernel,
                           "cuda": asdict(probe.cuda), "disk_path": probe.disk_path, "issues": probe.issues},
@@ -569,6 +595,8 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/setup/start', status_code=202)
     def setup_start(body: SetupStartRequest):
+        if connection._local_mode and connection._local_platform!='Linux':
+            raise ControllerError('local_install_unsupported')
         return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention)
 
     @app.post(API + '/setup/retry', status_code=202)

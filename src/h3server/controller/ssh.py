@@ -306,15 +306,29 @@ class SSHConnection:
         self._host_id = None
         self._username = None
         self._challenge_expires = 0.0
+        self._local_mode = False
+
+    @_locked
+    def connect_local(self):
+        if os.name!='posix':raise ControllerError('local_target_unsupported')
+        import platform, pwd
+        from h3server.controller.local import LocalTransport
+        if self._state != 'disconnected':raise ControllerError('already_connected')
+        account=pwd.getpwuid(os.getuid())
+        self._local_mode=True;self._local_home=account.pw_dir;self._username=account.pw_name
+        self._local_platform=platform.system();self._transport=LocalTransport();self._state='authenticated'
+        return self.status()
 
     @_locked
     def connect(self, host: str, port: int, username: str, *, timeout: float = 10) -> dict:
         if not math.isfinite(timeout) or not 0 < timeout <= 10:
             raise ValueError("connection timeout must be in (0, 10]")
+        if host=='local' and port==0 and self._local_mode:return self.connect_local()
         expires = time.monotonic() + timeout
         host = _target(host, port, username)
         if self._state != "disconnected":
             raise ControllerError("already_connected")
+        self._local_mode=False
         keys = self._store.load()
         try:
             self._socket = _connect_socket(self._socket_factory, (host, port), timeout)
@@ -394,8 +408,10 @@ class SSHConnection:
     def status(self) -> dict:
         if self._transport is not None and not self._transport.is_active():
             self.close()
-        return {"state": self._state, "fingerprint": _fingerprint(self._key) if self._key else None,
+        result={"state": self._state, "fingerprint": _fingerprint(self._key) if self._key else None,
                 "key_type": self._key.get_name() if self._key else None}
+        if self._local_mode:result.update(mode='local',local_platform=self._local_platform,local_supported=self._local_platform=='Linux')
+        return result
 
     def _require_authentication(self):
         if self.status()["state"] != "authenticated" or not self._transport.is_authenticated():
@@ -413,7 +429,7 @@ class SSHConnection:
         _abort_transport(sock, transport)
         for client in clients:
             _close_quietly(client)
-        return {"state": "disconnected", "fingerprint": None, "key_type": None}
+        return self.status()
 
     def interrupt_setup(self):
         """Interrupt owned setup IO without waiting for its connection lock.
@@ -430,6 +446,11 @@ class SSHConnection:
         The caller must close its client; disconnect also closes owned clients.
         """
         self._require_authentication()
+        if self._local_mode:
+            from h3server.controller.local import LocalFiles
+            client=LocalFiles(Path(self._local_home)/'MinimaxH3Server')
+            self._sftp_clients.append(client)
+            return client
         channel = client = None
         failed = False
         with _TransportDeadline(self._socket, self._transport, 10) as deadline:
@@ -562,6 +583,7 @@ class SSHConnection:
                 channel = self._transport.open_session(timeout=min(30, deadline.remaining()))
                 channel.settimeout(deadline.remaining())
                 nonce = secrets.token_hex(16)
+                if self._local_mode:channel.guardian=True
                 channel.exec_command(protocol.command(nonce))
                 transaction = _PrerequisiteSession(channel, protocol, password, deadline)
                 transaction.receive(nonce, ready=True)
@@ -667,6 +689,7 @@ class SSHConnection:
                 channel = self._transport.open_session(timeout=min(30, deadline.remaining()))
                 channel.settimeout(deadline.remaining())
                 nonce = secrets.token_hex(16)
+                if self._local_mode:channel.guardian=True
                 channel.exec_command(staging_command(root, discovery=discovery, nonce=nonce))
                 session = _PrerequisiteSession(channel, None, None, deadline)
                 try:
@@ -752,6 +775,9 @@ class SSHConnection:
     def remote_home(self) -> str:
         # Fixed shell syntax: expand exactly HOME once, quote it, and never
         # interpret the returned path as code. No HTTP-supplied shell fragments.
+        if self._local_mode:
+            self._require_authentication()
+            return self._local_home
         result = self._execute("printf '%s' \"$HOME\"", 5)
         if not result.succeeded or not _absolute_path(result.stdout):
             raise ControllerError("invalid_remote_home", 502)

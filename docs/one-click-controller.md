@@ -557,6 +557,18 @@ trusted predecessor recovery with a legacy log. They do not run pip, CUDA, codec
 model downloads or real server installation, and do not establish the original
 transient PyAV lookup cause.
 
+## Local or SSH installation target
+
+Use **Installation target** to choose **This controller machine (Local)** or **Remote machine (SSH)**. Disconnect the current target before changing modes. For Local, click **Use this machine and scan**; no SSH service, host-key approval or SSH password is needed. Local refers to the computer running the controller, not the device viewing its page over LAN.
+
+macOS reports real OS/CPU/RAM/disk observations and clearly blocks installation. On supported Linux/NVIDIA systems, Local uses the same pinned installer, approvals, maintenance guards and model/history controls, with local processes/files and authenticated loopback daemon access instead of SSH. Files remain under the current OS account's `~/MinimaxH3Server`, except explicitly approved OS packages/service registration. Already-installed daemon control and scanning need no sudo password.
+
+For a new Linux installation, use **Authorize local installation** to check your sudo password. It stays in memory, is not saved as an SSH connection, and does not itself install anything. Then choose the model and click Install. Existing SSH preferences remain available for switching back. Unsupported platforms cannot use local installation authorization.
+
+Run the controller as your normal user, not with sudo. A local-machine reboot also stops the controller: restart it, select Local and inspect the saved setup; guarded recovery still decides what can resume. Build the native Linux executable with `python scripts/build_controller.py` in the documented build environment when moving to Linux—do not copy the macOS executable. Windows currently supports SSH targets only.
+
+Local target mode can be combined with `--lan-ip`: a browser on another device can control the Linux controller's own machine without SSH. All browsers on that controller share target/connection state and retain the existing full-control access-key security model.
+
 ## Trusted LAN access (optional)
 
 Localhost remains the default. For direct access from other devices on your trusted LAN:

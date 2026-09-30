@@ -38,13 +38,15 @@
       <div class="work-grid"><div class="setup-panels">
         <section class="panel" id="connection" aria-labelledby="connection-heading">
           <div class="panel-heading"><div><p class="eyebrow">01 / SECURE CONNECTION</p><h2 id="connection-heading">Meet your server</h2></div><span class="state-badge" id="ssh-state" role="status">SSH disconnected</span></div>
-          <p class="section-copy">Use an SSH account on your Ubuntu or Debian server. We’ll ask you to verify its identity before sending a password.</p>
+          <p class="section-copy">Use this controller machine locally, or connect to an Ubuntu/Debian server over SSH. Local scanning needs no password; SSH verifies host identity before authentication.</p>
+          <label for="target-mode">Installation target</label><select id="target-mode"><option value="ssh">Remote machine (SSH)</option><option value="local">This controller machine (Local)</option></select>
+          <p id="target-mode-note" class="field-hint">Disconnect before changing targets. Local means the computer running this controller, not the browser device.</p>
           <form id="connect-form">
             <fieldset id="target-fields" disabled><legend class="sr-only">SSH connection details</legend>
-              <div class="form-row"><div class="field"><label for="host">SSH host</label><input id="host" name="host" placeholder="gpu-server.example.com" required maxlength="253" autocomplete="off" spellcheck="false" autocapitalize="none"></div><div class="field port-field"><label for="port">SSH port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" value="22" required inputmode="numeric"></div></div>
+              <div id="ssh-target-details"><div class="form-row"><div class="field"><label for="host">SSH host</label><input id="host" name="host" placeholder="gpu-server.example.com" required maxlength="253" autocomplete="off" spellcheck="false" autocapitalize="none"></div><div class="field port-field"><label for="port">SSH port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" value="22" required inputmode="numeric"></div></div>
               <div class="field"><label for="username">SSH username</label><input id="username" name="username" placeholder="your-username" required maxlength="65" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
               <p class="field-hint">Password authentication is supported. SSH keys and agent authentication are not available in this controller yet.</p>
-              <button class="primary" id="connect" type="submit">Connect to server <span aria-hidden="true">→</span></button>
+              </div><button class="primary" id="connect" type="submit">Connect to server <span aria-hidden="true">→</span></button>
             </fieldset>
           </form>
           <section id="fingerprint-panel" class="challenge" aria-labelledby="fingerprint-heading" hidden>
@@ -61,6 +63,7 @@
             <label class="check-label"><input id="remember-connection" type="checkbox" checked> <span>Remember this connection and reconnect on launch</span></label><p class="field-hint" id="password-note">When remembered, the password is saved in plaintext in owner-only local controller settings—not browser storage. Anyone with access to your account or backups may read it. Saved passwords are sent only after SSH host-key verification.</p>
             <button class="primary" id="authenticate" type="submit">Authenticate</button>
           </form>
+          <form id="local-authorize-form" hidden><h3>Authorize local installation</h3><p class="field-hint">Scanning and controlling an installed daemon do not require a password. Linux installation may need sudo. This password stays in memory, is not saved, and does not start installation.</p><label for="local-sudo-password">Local sudo password</label><input id="local-sudo-password" type="password" autocomplete="off" maxlength="4096" required><button id="local-authorize" type="submit">Authorize installation</button></form>
           <button id="forget-connection" class="text-button" type="button" hidden>Forget saved connection and password</button><p id="saved-connection-note" class="field-hint"></p>
           <button id="forget-recovery" class="text-button" type="button" hidden>Forget setup password / stop automatic setup</button>
            <div class="connection-tools"><button id="reconnect" class="secondary" type="button" disabled>Reconnect</button><button id="disconnect" class="text-button" type="button" disabled>Disconnect</button><button id="refresh" class="text-button" type="button" disabled>Refresh connection</button></div>

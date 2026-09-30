@@ -158,6 +158,10 @@
     preferences = await request('/preferences');
     $('forget-connection').hidden = !preferences.connection;
     if (capabilities.scan === true && !setup.busy) await scanHardware();
+    if (connection.mode === 'local' && !connection.local_supported) {
+      $('operation').textContent = 'Local scan complete. Installation requires supported Linux/NVIDIA hardware; this system is not supported. No changes made.';
+      return;
+    }
     if (!setup.busy && capabilities.release_available === true) {
       try { await observeSavedSetup(); }
       catch (error) { if (error.code !== 'setup_not_found') throw error; }
@@ -220,6 +224,9 @@
     staging_lock_unavailable: 'Another controller or installer owns staging, or its lock could not be verified. Stop other controllers and wait for existing work before retrying Install.',
     staging_lock_lost: 'The staging connection or lock was lost. Reconnect and inspect saved state before retrying; no installation was replayed.',
 
+    local_install_unsupported: 'Local scanning is available, but installation requires a supported Linux/NVIDIA system.',
+    local_target_unsupported: 'Local target mode currently supports macOS scanning and Linux installation/control.',
+    local_target_required: 'Select and connect the Local target first.',
     lan_login_invalid: 'Incorrect LAN access key. Read the key file on the controller computer.',
     lan_login_rate_limited: 'Too many login attempts. Wait one minute and retry.',
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
@@ -326,11 +333,14 @@
   function setConnection(data) {
     if (data.state !== connection.state || data.fingerprint !== connection.fingerprint) $('trust-check').checked = false;
     connection = data;
+    if (data.mode === 'local') lastTarget = {mode:'local'};
+    if (data.state !== 'disconnected') $('target-mode').value = data.mode === 'local' ? 'local' : 'ssh';
     $('forget-recovery').hidden = !data.recovery?.credential_retained;
     if (data.setup) showSetup(!data.setup.busy && inspectedSetup ? inspectedSetup : data.setup);
     if (data.state !== 'authenticated') {
       runtimeReady = false;
       modelState = {}; performanceAvailable = false;
+      showModelLibrary(null);
       clearTimeout(estimateTimer); estimateEpoch++; estimateKey = null;
       $('generation-estimate').textContent = 'Connect to obtain a timing estimate.';
       $('estimate-details').hidden = true;
@@ -350,7 +360,11 @@
       if (!setup.busy && setup.state === 'idle') clearScan();
       $('readiness').textContent = 'SSH disconnected. No generation readiness assumed.';
     }
+    if (data.mode === 'local' && data.state === 'authenticated' && !runtimeReady) {
+      $('readiness').textContent = data.local_supported ? 'Local daemon readiness has not been confirmed.' : 'This local system is unsupported for installation/generation; supported Linux/NVIDIA hardware is required.';
+    }
     if (data.state !== 'awaiting_authentication') $('password').value = '';
+    if (data.state !== 'authenticated' || data.mode !== 'local') $('local-sudo-password').value = '';
     render();
   }
 
@@ -388,7 +402,15 @@
     const trustPending = state === 'awaiting_approval';
     const authenticated = state === 'authenticated';
     const labels = { recovering: 'Automatically reconnecting SSH', disconnected: 'SSH disconnected', awaiting_approval: 'Fingerprint verification needed', awaiting_authentication: 'Host trusted · sign in', authenticated: 'SSH authenticated' };
-    $('ssh-state').textContent = labels[state] || 'SSH state unknown';
+    const localTarget = $('target-mode').value === 'local';
+    $('target-mode').disabled = !available || !disconnected;
+    $('ssh-target-details').hidden = localTarget;
+    for (const id of ['host','port','username']) $(id).disabled = localTarget || !available || !disconnected;
+    $('local-authorize-form').hidden = connection.mode !== 'local' || !authenticated || !connection.local_supported || !!connection.recovery?.setup_credential_retained;
+    $('local-authorize').disabled = !available;
+    const connectLabel = localTarget ? 'Use this machine and scan' : 'Connect to server →';
+    if ($('connect').textContent !== connectLabel) $('connect').textContent = connectLabel;
+    $('ssh-state').textContent = connection.mode === 'local' ? (authenticated ? 'Local machine selected' : 'Local target disconnected') : labels[state] || 'SSH state unknown';
     $('ssh-state').dataset.state = state;
     $('target-fields').disabled = !available || !disconnected;
     $('connect').disabled = !available || !disconnected;
@@ -410,7 +432,9 @@
     $('refresh').disabled = busy;
     $('forget-recovery').disabled = busy;
     $('scan').disabled = !available || !authenticated || capabilities.scan !== true;
-    $('scan-hint').textContent = authenticated
+    $('scan-hint').textContent = authenticated && connection.mode === 'local' && !connection.local_supported
+      ? 'This controller machine is not supported for installation. Local scan is read-only; use supported Linux/NVIDIA hardware to install.'
+      : authenticated
       ? (capabilities.scan === true ? 'Read-only observations only. No installation or CUDA runtime test is performed.' : 'Scanning is unavailable in this controller.')
       : 'Authenticate to enable the read-only scan.';
     for (const id of ['step-connect', 'step-scan', 'step-install']) $(id).removeAttribute('aria-current');
@@ -446,6 +470,8 @@
       : busy ? 'An operation is in progress. Wait for it to finish.'
       : !authenticated ? 'Authenticate to automatically scan hardware and enable Install.'
       : setup.state === 'failed' && !optionalOnlyFailure && !additionalModel ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
+      : connection.mode === 'local' && !connection.local_supported ? 'Local installation is not supported on this platform. Use supported Linux/NVIDIA hardware.'
+      : connection.mode === 'local' && !additionalModel && !connection.recovery?.setup_credential_retained ? 'Authorize local installation with your sudo password above. Scanning does not require authorization.'
       : !additionalModel && !connection.recovery?.setup_credential_retained ? 'Install needs memory-only setup authorization. Disconnect, reconnect and authenticate. Saved unprivileged retries do not need a sudo password.'
       : !additionalModel && !scanned && !pendingInstall ? 'Hardware has not been scanned. Click Scan hardware; if it failed, resolve the scan error first.'
       : !$('install-profile').value ? 'Wait for the model catalog, then choose a profile.'
@@ -665,11 +691,17 @@
 
   async function connect(target) {
     $('password').value = '';
+    $('local-sudo-password').value = '';
     clearScan();
     pendingInstall = null; pendingRetry = null; inspectedSetup = null;
     resetSetupPolling();
     showSetup({ state: 'idle', busy: false });
     lastTarget = target;
+    if (target.mode === 'local') {
+      setConnection(await request('/connection/local', {}));
+      await afterAuthentication();
+      return;
+    }
     setConnection(await request('/connect', target));
     log(connection.state === 'awaiting_approval' ? 'SSH handshake received. Fingerprint approval required; no password sent.' : 'Stored host key matched. Password authentication required.');
     (connection.state === 'awaiting_approval' ? $('fingerprint-heading') : $('auth-heading')).focus();
@@ -677,7 +709,18 @@
 
   $('connect-form').addEventListener('submit', event => {
     event.preventDefault();
-    perform('Connecting to SSH; no credentials sent…', () => connect({ host: $('host').value.trim(), port: Number($('port').value), username: $('username').value.trim() }));
+    const local = $('target-mode').value === 'local';
+    perform(local ? 'Selecting this controller machine; no SSH connection…' : 'Connecting to SSH; no credentials sent…', () => connect(local ? {mode:'local'} : { host: $('host').value.trim(), port: Number($('port').value), username: $('username').value.trim() }));
+  });
+  $('target-mode').addEventListener('change', render);
+  $('local-authorize-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if (busy || !ready) return;
+    const password = $('local-sudo-password').value;
+    $('local-sudo-password').value = '';
+    perform('Checking local sudo authorization; no installation started…', async () => {
+      setConnection(await request('/connection/local/authorize', {password}));
+    });
   });
   $('trust-check').addEventListener('change', render);
   $('approve').addEventListener('click', () => {
@@ -747,7 +790,7 @@
     setConnection(result);
     log('SSH disconnected. Reconnection requires password entry.');
   }));
-  $('reconnect').addEventListener('click', () => perform('Reconnecting SSH; authentication will be required…', () => connect(lastTarget)));
+  $('reconnect').addEventListener('click', () => perform(lastTarget?.mode === 'local' ? 'Reconnecting to this controller machine…' : 'Reconnecting SSH; authentication will be required…', () => connect(lastTarget)));
   $('refresh').addEventListener('click', () => perform('Checking controller connection state…', async () => {
     await refresh();
     log('Connection state refreshed from the controller.');
@@ -1770,7 +1813,7 @@
       await dashboard();
     }, { generationSubmission: true });
   });
-  window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateAbort?.abort(); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateAbort?.abort(); estimateEpoch++; pageActive = false; $('password').value = ''; $('local-sudo-password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
   window.addEventListener('pageshow', event => { if (!event.persisted || pageActive) return; pageActive = true; estimateKey = null; timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000); scheduleEstimate(); void refresh().then(() => { if (connection.state === 'authenticated' && setup.installation_ready && !setup.busy) return dashboard(); }).catch(error => showError(error, false)); });
 
   $('lan-login-form').addEventListener('submit', async event => {
@@ -1798,11 +1841,12 @@
       showPreferences(await request('/preferences'));
       syncDuration('frames');
       showSage();
-      if (preferences.connection) {
+      if (preferences.connection && connection.mode !== 'local') {
         const saved = preferences.connection;
         lastTarget = { host: saved.host, port: saved.port, username: saved.username };
       }
-      if (connection.state === 'disconnected' && preferences.connection) {
+      if (connection.mode === 'local') $('target-mode').value = 'local';
+      if (connection.state === 'disconnected' && preferences.connection && connection.mode !== 'local') {
         try {
           setConnection(await request('/connection/restore', {}));
           if (connection.state === 'authenticated') await afterAuthentication();
