@@ -426,8 +426,9 @@ def backend(paths, profile):
             require(paths, request.settings.sparse_artifact_digest)
     capabilities = CAPABILITIES if profile == 'h3-convrot-int8' else Capabilities(
         lora=CAPABILITIES.lora, sparse_attention=Capability(CapabilityStatus.UNSUPPORTED, ('Sparse not verified for this profile',)))
+    from functools import partial
     return Backend(command=command, readiness=readiness, capabilities=capabilities,
-        validate_video=validate_media_fd, validate_request=validate, diagnostics=readiness.diagnostics,
+        validate_video=partial(validate_media_fd, profile=profile), validate_request=validate, diagnostics=readiness.diagnostics,
         runtime_id=selected.runtime_id, profiles=(profile,), resident=True)
 
 

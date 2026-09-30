@@ -317,6 +317,7 @@
     if (setup.busy) reasons.push('Wait for setup to finish.');
     if (busy && !submittingGeneration) reasons.push('Wait for the current operation to finish.');
     if (!runtimeReady) reasons.push('Generation readiness is not confirmed. Check the readiness status above or click Refresh dashboard.');
+    if (!canvasFits(Number($('width').value), Number($('height').value))) reasons.push('Resolution exceeds this daemon’s canvas limits or is not aligned to 32 pixels. Choose an enabled preset or correct Width and Height.');
     const sparseOn = $('sparse-preset').value !== 'off';
     if (sparseOn && $('use-turbo').checked) reasons.push('Turbo and sparse attention cannot be combined. Turn off Turbo or select Sparse: Off.');
     for (const [name, state, selected, off] of [
@@ -1138,6 +1139,7 @@
     backendCapabilities = capability.adapter_capabilities;
     modelState = capability.resident_models || {};
     performanceAvailable = capability.performance_schema === 1;
+    setResolutionLimits(capability.service_limits || {});
     showSage(capability.optional_features?.sage_attention);
     showTurbo(capability.optional_features?.turbo_lora);
     showSparse(capability.optional_features?.sparse_attention);
@@ -1177,25 +1179,43 @@
   }));
   function resolutionPresets() {
     return [
-      {id:'landscape', label:'Landscape ≈16:9', sizes:{small:[512,288], medium:[1024,576], large:[1344,768]}},
-      {id:'portrait', label:'Portrait ≈9:16', sizes:{small:[288,512], medium:[576,1024], large:[768,1344]}},
+      {id:'landscape', label:'Landscape ≈16:9', sizes:{small:[512,288], p480:[864,480], medium:[1024,576], p720:[1280,736], large:[1344,768], p1080:[1920,1088]}},
+      {id:'portrait', label:'Portrait ≈9:16', sizes:{small:[288,512], p480:[480,864], medium:[576,1024], p720:[736,1280], large:[768,1344], p1080:[1088,1920]}},
       {id:'square', label:'Square 1:1', sizes:{small:[512,512], medium:[768,768], large:[992,992]}},
       {id:'landscape-4-3', label:'Landscape 4:3', sizes:{small:[512,384], medium:[768,576], large:[1152,864]}},
       {id:'portrait-3-4', label:'Portrait 3:4', sizes:{small:[384,512], medium:[576,768], large:[864,1152]}}
     ];
   }
+  function canvasFits(width, height) {
+    const axis = Number($('width').max) || 1344;
+    const pixels = Number($('width').dataset.canvasPixels) || 1344 * 768;
+    return [width, height].every(n => Number.isInteger(n) && n >= 32 && n <= axis && n % 32 === 0) && width * height <= pixels;
+  }
+  function setResolutionLimits(limits) {
+    const axis = limits.axis_max || 1344, pixels = limits.canvas_pixels || 1344 * 768;
+    if ($('width').max === String(axis) && $('width').dataset.canvasPixels === String(pixels)) return;
+    $('width').max = $('height').max = String(axis);
+    $('width').dataset.canvasPixels = String(pixels);
+    $('canvas-limit-note').textContent = `Canvas area at most ${pixels.toLocaleString('en-US')} pixels; axes must be multiples of 32, up to ${axis}. 24 fps, video plus audio.`;
+    syncResolutionPresets();
+  }
   function resolutionOptions(aspect, tier) {
     const select = $('resolution-preset');
     select.replaceChildren();
     for (const [name, size] of Object.entries(resolutionPresets().find(p => p.id === aspect)?.sizes || {})) {
-      const option = node('option', `${name.charAt(0).toUpperCase() + name.slice(1)} · ${size[0]} × ${size[1]}`);
-      option.value = name; select.append(option);
+      const label = {p480:'480p-size', p720:'720p-size (aligned)', p1080:'1080p-size (aligned)'}[name] || name.charAt(0).toUpperCase() + name.slice(1);
+      const supported = canvasFits(...size);
+      const option = node('option', `${label} · ${size[0]} × ${size[1]}${supported ? '' : ' · exceeds daemon limit'}`);
+      option.value = name; option.disabled = !supported; select.append(option);
     }
     const custom = node('option', 'Custom'); custom.value = 'custom'; select.append(custom);
     select.value = tier;
   }
   function syncResolutionPresets() {
     const width = Number($('width').value), height = Number($('height').value);
+    const warning = !canvasFits(width, height) ? 'These dimensions exceed this daemon’s limits or are not aligned to 32 pixels. Select an enabled preset or correct the dimensions.'
+      : width > 1344 || height > 1344 || width * height > 1344 * 768 ? 'Higher-memory native generation: this size is not GPU-benchmarked here and may run out of memory. Start with a short clip. 1080p-size uses 1920 × 1088 (or portrait), not an upscaled or cropped 1920 × 1080 output.' : '';
+    $('resolution-warning').textContent = warning; $('resolution-warning').hidden = !warning;
     for (const preset of resolutionPresets()) {
       for (const [tier, size] of Object.entries(preset.sizes)) {
         if (size[0] === width && size[1] === height) {
@@ -1206,7 +1226,9 @@
     $('aspect-ratio').value = 'custom'; resolutionOptions('custom', 'custom');
   }
   function applyResolutionPreset(aspect, tier) {
-    const size = resolutionPresets().find(p => p.id === aspect)?.sizes[tier];
+    if (tier === 'custom') return;
+    const sizes = resolutionPresets().find(p => p.id === aspect)?.sizes;
+    const size = sizes?.[tier] || sizes?.medium;
     if (!size) return;
     $('width').value = size[0]; $('height').value = size[1];
     syncResolutionPresets();
@@ -1263,8 +1285,8 @@
       }
     }, 450);
   }
-  $('generation-form').addEventListener('input', scheduleEstimate);
-  $('generation-form').addEventListener('change', scheduleEstimate);
+  $('generation-form').addEventListener('input', () => { render(); scheduleEstimate(); });
+  $('generation-form').addEventListener('change', () => { render(); scheduleEstimate(); });
   for (const preset of resolutionPresets()) {
     const option = node('option', preset.label); option.value = preset.id; $('aspect-ratio').append(option);
   }

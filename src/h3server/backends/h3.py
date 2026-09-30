@@ -331,15 +331,17 @@ def install_lora(pipe, lora, rt):
                 raise RuntimeError("LoRA factors were not installed or are unusable in BF16")
 
 
-def _validate_container(stream, settings=None):
+def _validate_container(stream, settings=None, *, profile=None):
+    from h3server.domain import canvas_limits
+    axis_max, canvas_pixels = canvas_limits(settings.profile if settings else profile)
     import av
     with av.open(stream, mode="r") as container:
         videos, audios = list(container.streams.video), list(container.streams.audio)
         if "mp4" not in container.format.name.split(",") or len(videos) != 1 or len(audios) != 1:
             raise ValueError("expected MP4 with one video and audio stream")
         video, audio = videos[0], audios[0]
-        if (video.average_rate != 24 or not 32 <= video.width <= 1344 or not 32 <= video.height <= 1344
-            or video.width * video.height > 1344 * 768 or audio.rate != 32000 or len(audio.layout.channels) != 2):
+        if (video.average_rate != 24 or not 32 <= video.width <= axis_max or not 32 <= video.height <= axis_max
+            or video.width % 32 or video.height % 32 or video.width * video.height > canvas_pixels or audio.rate != 32000 or len(audio.layout.channels) != 2):
             raise ValueError("unexpected H3 media geometry/rate")
         count, samples = 0, 0
         for packet in container.demux(video, audio):
@@ -369,11 +371,11 @@ def validate_media(path, settings):
         _validate_container(stream, settings)
 
 
-def validate_media_fd(fd):
+def validate_media_fd(fd, *, profile=None):
     try:
         with os.fdopen(os.dup(fd), "rb") as stream:
             stream.seek(0)
-            _validate_container(stream)
+            _validate_container(stream, profile=profile)
         return True
     except Exception:
         return False

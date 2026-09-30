@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from starlette.background import BackgroundTask
 
-from h3server.domain import GenerationSettings, H3_PROFILES, JobRequest
+from h3server.domain import GenerationSettings, H3_PROFILES, JobRequest, canvas_limits
 from h3server.backends.catalog import PRUNED_PROFILE_NAMES
 from h3server.events import ReplayGap
 from h3server.paths import AppPaths
@@ -57,8 +57,8 @@ class GenerationInput(BaseModel):
     prompt: Annotated[StrictStr, Field(min_length=1, max_length=16000)]
     num_frames: Annotated[StrictInt | None, Field(ge=120, le=345)] = None
     duration: Annotated[StrictFloat | StrictInt | None, Field(ge=5, le=15)] = None
-    width: Annotated[StrictInt, Field(ge=32, le=1344)] = 1344
-    height: Annotated[StrictInt, Field(ge=32, le=1344)] = 768
+    width: Annotated[StrictInt, Field(ge=32, le=1920)] = 1344
+    height: Annotated[StrictInt, Field(ge=32, le=1920)] = 768
     steps: Annotated[StrictInt, Field(ge=2, le=1000)] = 50
     seed: Annotated[StrictInt, Field(ge=0, le=2**63 - 1)] = 42
     profile: Literal["h3-bf16-cpu-offload-experimental", "h3-int8-group-offload-experimental",
@@ -306,8 +306,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                 "resident_models": worker.models_status(), "performance_schema": 1,
                 "optional_features": {"sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
-                "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
-                                   "canvas_pixels": 1344 * 768, "steps_min": 2, "steps_max": 1000,
+                "service_limits": {"axis_min": 32, "axis_max": canvas_limits(worker.backend.profiles[0])[0], "spatial_multiple": 32,
+                                   "canvas_pixels": canvas_limits(worker.backend.profiles[0])[1], "steps_min": 2, "steps_max": 1000,
                                    "steps_default": 20 if worker.backend.runtime_id.startswith('comfyui-h3-') else 50,
                                    "pending_jobs": worker.queue_limit, "max_output_bytes": worker.max_output_bytes}}
 

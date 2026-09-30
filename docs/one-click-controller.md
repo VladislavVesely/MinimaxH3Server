@@ -56,6 +56,21 @@ as text, never HTML. Missing legacy settings are explicitly marked unavailable.
 Images are not yet a supported input; their durable references must join the job
 request when image support is implemented.
 
+## Resolution presets
+
+Landscape/portrait presets include 480p-size (864×480), 720p-size (1280×736)
+and 1080p-size (1920×1088), with swapped dimensions for portrait. These are native
+H3-aligned canvases, not upscaled/cropped standard-raster exports. Exact dimensions
+are shown in each option; manual Custom input remains available.
+
+Pruned profiles accept up to a 1920-pixel axis and 2,088,960-pixel canvas, in
+multiples of 32. Legacy Diffusers keeps the previous 1344-axis / 1,032,192-pixel
+policy. The connected daemon advertises its limits; unavailable presets are
+disabled and incompatible manual dimensions show an actionable blocker.
+Higher-resolution generation is **unbenchmarked on the target GPU** and can exceed
+available GPU/host memory, especially for longer clips. No full-HD inference or
+quality acceptance is claimed from API/UI validation alone.
+
 ## Retained models and measured estimates
 
 Comfy/pruned generation uses an owned resident child process: the base model,

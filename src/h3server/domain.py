@@ -143,12 +143,18 @@ H3_PROFILES = (
 TURBO_PROFILES = ('h3-convrot-int8', 'h3-convrot-mixed')
 
 
+def canvas_limits(profile):
+    """Service bounds, not a claim of benchmarked GPU memory or image quality."""
+    from h3server.backends.catalog import PRUNED_PROFILE_NAMES
+    return (1920, 1920 * 1088) if profile in PRUNED_PROFILE_NAMES else (1344, 1344 * 768)
+
+
 @dataclass(frozen=True)
 class GenerationSettings:
     """Normalized H3 settings. Canvas/step caps are service resource policy.
 
-    Both orientations fit the default canvas area; these are not assertions of
-    upstream explicit-input maxima. Steps map to the selected runtime's sampler;
+    Both orientations fit the selected profile's service area; these are not
+    assertions of upstream explicit-input maxima or GPU memory sufficiency. Steps map to the selected runtime's sampler;
     progress reports actual stage-local work rather than assuming model calls.
     """
 
@@ -195,9 +201,10 @@ class GenerationSettings:
                 raise ValueError(f"{name} must be an integer")
         if not 124 <= self.num_frames <= 345 or (self.num_frames - 5) % 17:
             raise ValueError("num_frames must be aligned to 17*n+5 within 124..345")
-        if any(not 32 <= side <= 1344 or side % 32 for side in (self.width, self.height)):
-            raise ValueError("canvas axes must be multiples of 32 within 32..1344")
-        if self.width * self.height > 1344 * 768:
+        axis_max, canvas_pixels = canvas_limits(self.profile)
+        if any(not 32 <= side <= axis_max or side % 32 for side in (self.width, self.height)):
+            raise ValueError(f"canvas axes must be multiples of 32 within 32..{axis_max}")
+        if self.width * self.height > canvas_pixels:
             raise ValueError("canvas exceeds service pixel-area limit")
         if not 2 <= self.steps <= 1000 or not 0 <= self.seed <= 2**63 - 1:
             raise ValueError("steps or seed outside service bounds")

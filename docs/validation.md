@@ -1,5 +1,24 @@
 # Validation and acceptance status
 
+## Extended resolution presets
+
+Added aligned 480p/720p/1080p-size landscape and portrait options. Pruned request,
+capability and independent media-validator bounds now allow 1920×1088 or portrait;
+legacy bounds remain unchanged. Presets follow live daemon limits, and invalid
+manual geometry is visibly blocked. Higher-memory sizes display an explicit
+unbenchmarked warning. Default generation dimensions remain unchanged.
+
+209 focused Python tests passed, including aligned HD node IO, profile-specific
+API policy and video/audio-validation fixtures; JS regressions passed. Native
+checks verified all three presets, portrait orientation, validity/warnings,
+estimate payloads, over-area rejection and mobile layout. Live estimate endpoints
+accepted both HD orientations without creating jobs; four deployed source hashes
+matched. Screenshot: `/tmp/h3-hd-presets.png`.
+
+These checks did **not** generate a full-HD GPU video. Full-HD inference speed,
+memory sufficiency and output quality remain unverified; native output uses
+1920×1088 rather than silently promising exact 1920×1080.
+
 ## Current tab: page-view lifetime
 
 Current now retains queued/running jobs and jobs observed/submitted during this

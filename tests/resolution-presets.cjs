@@ -3,13 +3,13 @@ const source=fs.readFileSync(require.resolve('../src/h3server/web/app.js'),'utf8
 const start=source.indexOf('  function resolutionPresets()');
 assert.ok(start>=0,'Resolution presets must be defined');
 const end=source.indexOf('  function generationBody()',start);
-const fields=Object.fromEntries(['width','height','aspect-ratio','resolution-preset'].map(id=>[id,{value:'',children:[],replaceChildren(){this.children=[];},append(o){this.children.push(o);}}]));
+const fields=Object.fromEntries(['width','height','aspect-ratio','resolution-preset','canvas-limit-note','resolution-warning'].map(id=>[id,{value:'',max:'1920',dataset:{canvasPixels:'2088960'},children:[],replaceChildren(){this.children=[];},append(o){this.children.push(o);}}]));
 const c=vm.createContext({$:id=>fields[id],node:(tag,text)=>({textContent:text})});
 vm.runInContext(source.slice(start,end),c);
 const presets=c.resolutionPresets();
 assert.equal(presets.length,5);
 for(const p of presets)for(const [tier,[w,h]] of Object.entries(p.sizes)){
- assert.ok(w%32===0&&h%32===0&&w<=1344&&h<=1344&&w*h<=1344*768,`${p.id}/${tier} outside server limits`);
+ assert.ok(w%32===0&&h%32===0&&w<=1920&&h<=1920&&w*h<=1920*1088,`${p.id}/${tier} outside server limits`);
  fields.width.value=String(w);fields.height.value=String(h);c.syncResolutionPresets();
  assert.equal(fields['aspect-ratio'].value,p.id);assert.equal(fields['resolution-preset'].value,tier);
 }
@@ -20,4 +20,13 @@ fields.width.value='640';fields.height.value='480';c.syncResolutionPresets();
 assert.equal(fields['aspect-ratio'].value,'custom');assert.equal(fields['resolution-preset'].value,'custom');
 assert.equal(fields.width.value,'640');assert.equal(fields.height.value,'480');
 c.applyResolutionPreset('square','medium');assert.equal(fields.width.value,768);assert.equal(fields.height.value,768);
+c.applyResolutionPreset('landscape','p1080');assert.equal(fields.width.value,1920);assert.equal(fields.height.value,1088);
+assert.match(fields['resolution-warning'].textContent,/memory/);
+c.applyResolutionPreset('landscape','custom');assert.equal(fields.width.value,1920,'Choosing Custom must not resize');
+c.applyResolutionPreset('portrait','p720');assert.equal(fields.width.value,736);assert.equal(fields.height.value,1280);
+c.applyResolutionPreset('square','p1080');assert.equal(fields.width.value,768,'Missing tier falls back to medium on aspect switch');
+c.setResolutionLimits({axis_max:1344,canvas_pixels:1344*768});
+c.applyResolutionPreset('landscape','large');assert.equal(fields['resolution-preset'].children.find(o=>o.value==='p1080').disabled,true);
+assert.equal(c.canvasFits(1920,1088),false);
+c.setResolutionLimits({axis_max:1920,canvas_pixels:1920*1088});assert.equal(fields['resolution-preset'].children.find(o=>o.value==='p1080').disabled,false);
 console.log('All resolution presets are valid, selections synchronize, and custom dimensions are preserved');
