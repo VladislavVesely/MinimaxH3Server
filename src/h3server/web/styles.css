@@ -141,6 +141,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 #installation label { margin-top: .8rem; }
 #setup-events { max-height: 18rem; overflow: auto; padding-left: 1.25rem; font-size: .8rem; overflow-wrap: anywhere; }
 .queue-heading { margin-top: 24px; }
+.job-tabs { display: flex; gap: 8px; margin: 12px 0; }
+.job-tabs [role="tab"] { flex: 1; background: #f0f1f7; color: #555875; border: 1px solid #dadde6; }
+.job-tabs [aria-selected="true"] { background: #e8e6ff; color: #4438a8; border-color: #7776d8; }
+.resolution-presets .field { min-width: 0; }
+@media (max-width: 480px) { .resolution-presets { flex-direction: column; gap: 0; } }
 .queue-heading, .job-heading, .terminal-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 #queue-summary, #terminal-job { font-size: 12px; color: #777d91; }
 .job-card { border: 1px solid #dadde6; border-radius: 10px; padding: 16px; margin: 10px 0; }

@@ -1,5 +1,16 @@
 # Validation and acceptance status
 
+## Resolution presets and Active/History tabs
+
+All 15 aspect/size combinations satisfy the existing generation limits. Manual
+sizes remain editable as Custom. Active contains queued/running jobs; History
+contains terminal jobs. Counts, empty states and keyboard tabs were verified.
+Native validation confirmed that changing presets preserves unrelated settings,
+filtering tabs and background polling preserve video elements, and the 375px
+layout does not overflow. No generation/install/unload submitted. Focused
+`resolution-presets.cjs` / `job-tabs.cjs` tests and existing JS regressions pass.
+Screenshot: `/tmp/h3-presets-tabs.png`.
+
 ## Queue submission warning regression
 
 A Queue click no longer displays its own “Wait for the current operation” blocker.

@@ -10,6 +10,7 @@
   let ready = false;
   let busy = false;
   let submittingGeneration = false;
+  let jobsTab = 'active';
   let connection = { state: 'disconnected' };
   let capabilities = {};
   let lastTarget = null;
@@ -298,6 +299,7 @@
       resetDashboardPolling();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
+      renderJobTabs();
       if (!setup.busy && setup.state === 'idle') clearScan();
       $('readiness').textContent = 'SSH disconnected. No generation readiness assumed.';
     }
@@ -1000,6 +1002,28 @@
     }
   }
   const timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
+  function jobMatchesTab(job, tab) {
+    return ['queued', 'running'].includes(job.status) === (tab === 'active');
+  }
+  function renderJobTabs() {
+    for (const tab of ['active', 'history']) {
+      const button = $('jobs-tab-' + tab);
+      const count = currentJobs.filter(job => jobMatchesTab(job, tab)).length;
+      button.textContent = `${tab === 'active' ? 'Active' : 'History'} (${count})`;
+      button.setAttribute('aria-selected', String(tab === jobsTab));
+      button.tabIndex = tab === jobsTab ? 0 : -1;
+    }
+    $('jobs').setAttribute('aria-labelledby', 'jobs-tab-' + jobsTab);
+    for (const card of jobCards.values()) card.item.hidden = !jobMatchesTab(card.item.dataset, jobsTab);
+    const visible = currentJobs.filter(job => jobMatchesTab(job, jobsTab));
+    $('jobs-empty').hidden = visible.length > 0;
+    $('jobs-empty').textContent = jobsTab === 'active' ? 'No active jobs. Queue a generation to get started.' : 'No finished jobs yet.';
+    if (!visible.some(job => job.job_id === selectedJob)) {
+      selectedJob = visible.find(job => job.status === 'running')?.job_id
+        || (jobsTab === 'active' ? visible.at(-1)?.job_id : visible[0]?.job_id) || null;
+    }
+    showJobTerminal();
+  }
   function reconcileJobs(jobs) {
     currentJobs = jobs;
     const queued = jobs.filter(job => job.status === 'queued').slice().reverse();
@@ -1082,6 +1106,7 @@
         card.output.append(video, link, error);
       } else if (job.output?.expired) card.output.append(node('p', 'Output expired by retention policy.'));
     }
+    renderJobTabs();
     updateJobTimes();
   }
   async function dashboard() {
@@ -1136,6 +1161,42 @@
     estimateKey = null;
     await dashboard();
   }));
+  function resolutionPresets() {
+    return [
+      {id:'landscape', label:'Landscape ≈16:9', sizes:{small:[512,288], medium:[1024,576], large:[1344,768]}},
+      {id:'portrait', label:'Portrait ≈9:16', sizes:{small:[288,512], medium:[576,1024], large:[768,1344]}},
+      {id:'square', label:'Square 1:1', sizes:{small:[512,512], medium:[768,768], large:[992,992]}},
+      {id:'landscape-4-3', label:'Landscape 4:3', sizes:{small:[512,384], medium:[768,576], large:[1152,864]}},
+      {id:'portrait-3-4', label:'Portrait 3:4', sizes:{small:[384,512], medium:[576,768], large:[864,1152]}}
+    ];
+  }
+  function resolutionOptions(aspect, tier) {
+    const select = $('resolution-preset');
+    select.replaceChildren();
+    for (const [name, size] of Object.entries(resolutionPresets().find(p => p.id === aspect)?.sizes || {})) {
+      const option = node('option', `${name.charAt(0).toUpperCase() + name.slice(1)} · ${size[0]} × ${size[1]}`);
+      option.value = name; select.append(option);
+    }
+    const custom = node('option', 'Custom'); custom.value = 'custom'; select.append(custom);
+    select.value = tier;
+  }
+  function syncResolutionPresets() {
+    const width = Number($('width').value), height = Number($('height').value);
+    for (const preset of resolutionPresets()) {
+      for (const [tier, size] of Object.entries(preset.sizes)) {
+        if (size[0] === width && size[1] === height) {
+          $('aspect-ratio').value = preset.id; resolutionOptions(preset.id, tier); return;
+        }
+      }
+    }
+    $('aspect-ratio').value = 'custom'; resolutionOptions('custom', 'custom');
+  }
+  function applyResolutionPreset(aspect, tier) {
+    const size = resolutionPresets().find(p => p.id === aspect)?.sizes[tier];
+    if (!size) return;
+    $('width').value = size[0]; $('height').value = size[1];
+    syncResolutionPresets();
+  }
   function generationBody() {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
@@ -1190,6 +1251,28 @@
   }
   $('generation-form').addEventListener('input', scheduleEstimate);
   $('generation-form').addEventListener('change', scheduleEstimate);
+  for (const preset of resolutionPresets()) {
+    const option = node('option', preset.label); option.value = preset.id; $('aspect-ratio').append(option);
+  }
+  syncResolutionPresets();
+  $('aspect-ratio').addEventListener('change', () => {
+    const aspect = $('aspect-ratio').value;
+    const tier = $('resolution-preset').value === 'custom' ? 'medium' : $('resolution-preset').value;
+    if (aspect === 'custom') resolutionOptions('custom', 'custom');
+    else applyResolutionPreset(aspect, tier);
+  });
+  $('resolution-preset').addEventListener('change', () => applyResolutionPreset($('aspect-ratio').value, $('resolution-preset').value));
+  for (const id of ['width', 'height']) $(id).addEventListener('input', syncResolutionPresets);
+  for (const tab of ['active', 'history']) {
+    const button = $('jobs-tab-' + tab);
+    button.addEventListener('click', () => { jobsTab = tab; renderJobTabs(); });
+    button.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      jobsTab = event.key === 'Home' ? 'active' : event.key === 'End' ? 'history' : tab === 'active' ? 'history' : 'active';
+      renderJobTabs(); $('jobs-tab-' + jobsTab).focus();
+    });
+  }
   $('unload-models').addEventListener('click', () => perform('Releasing retained models…', async () => {
     modelState = await request('/remote/models/unload', {});
     estimateKey = null; // Explicit unload changes cold/reused timing semantics.
@@ -1206,6 +1289,7 @@
     perform('Submitting local generation job…', async () => {
       const accepted = await request('/remote/jobs', generationBody());
       selectedJob = accepted.job_id || accepted.job?.job_id || null;
+      jobsTab = 'active';
       await dashboard();
     }, { generationSubmission: true });
   });
