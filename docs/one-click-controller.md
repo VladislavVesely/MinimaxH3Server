@@ -45,6 +45,26 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Export the last video frame
+
+Available completed videos in Current and History offer **Download last frame
+(PNG)** and **Use last frame as first frame**. Export uses the actual final decoded
+frame, not a screenshot or approximate seek: native resolution, RGB PNG with
+compression level zero, no resizing, palette conversion or JPEG encoding. It adds
+no image loss but cannot undo compression already present in the video. Current H3
+outputs are 8-bit; higher-bit-depth outputs are refused rather than reduced.
+
+Reuse uploads the exact PNG through the normal managed-asset path, replaces the
+first-frame draft slot and selects Frames mode. Prompt, dimensions, last-frame
+choice and other settings remain unchanged; **Use dimensions** can copy the frame
+size if wanted. No generation starts automatically. Reuse requires a supported
+pruned profile. A reused image is an independent input, so deleting its source
+video does not remove the copy from a subsequent job.
+
+Export is CPU-only, bounded and read-only; no permanent export cache is created.
+Only one export runs at a time. Missing/expired outputs, timeouts and unsupported
+precision produce errors, never a lower-quality fallback.
+
 ## Delete jobs and their files
 
 Every card in **Current** and **History** has a confirmed **Delete job** action.

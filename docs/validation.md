@@ -1,5 +1,26 @@
 # Validation and acceptance status
 
+## Uncompressed last-frame PNG export
+
+Local focused tests: 91 passed, one codec test skipped because the controller
+Python environment lacks PyAV. No dependency installation was performed. Tests
+cover authentication, unavailable outputs, bounded concurrency, timeout/error
+handling and refusal to reduce higher-bit-depth inputs. Five JS scripts passed,
+including exact-byte reuse, profile/target guards and error handling.
+
+Real deployed codec verification passed on a three-frame H.264 fixture (including
+delayed decoder flush) and an existing owned 512×288 generated video. PNG pixels
+exactly equalled an independent final-frame RGB decode. Every PNG DEFLATE block
+was a stored/uncompressed block. Original video size/mtime were unchanged, and
+no persistent export file or inference job was created.
+
+The rebuilt native controller downloaded a real PNG through its authenticated SSH
+proxy and reused byte-identical data in the first-frame slot. Only the upload was
+intercepted, avoiding test assets on the server. Prompt/dimensions stayed unchanged,
+no generation was submitted, and 375px layout passed. Screenshot:
+`/tmp/h3-last-frame-reuse.png`. Current H3 8-bit output was verified; no claim of
+recovering pre-video-compression pixels or supporting high-bit-depth conversion.
+
 ## Queue first-click preservation
 
 Reproduced missing first-click submissions in the installed WebKit engine after

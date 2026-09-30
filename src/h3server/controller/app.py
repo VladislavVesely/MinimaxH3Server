@@ -668,6 +668,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def remote_cancel(job_id: str, body: EmptyRequest):
         return proxy.request('POST', f'/api/v1/jobs/{job_id}/cancel', body={})
 
+    @app.get(API + '/remote/jobs/{job_id}/last-frame')
+    @observed
+    def remote_last_frame(job_id: str):
+        return proxy.request('GET', f'/api/v1/jobs/{job_id}/last-frame')
+
     @app.get(API + '/remote/jobs/{job_id}/video')
     @observed
     def remote_video(job_id: str, request: Request, download: bool = False):

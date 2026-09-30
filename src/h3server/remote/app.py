@@ -465,6 +465,33 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
+    from threading import Lock
+    frame_export_lock = Lock()
+    class FrameExportBusy(Exception):pass
+
+    @app.get('/api/v1/jobs/{job_id}/last-frame')
+    async def last_frame(job_id: JobID):
+        from fastapi.responses import Response
+        from h3server.last_frame import extract
+        def export():
+            if not frame_export_lock.acquire(blocking=False):raise FrameExportBusy()
+            try:
+                fd = worker.open_video(job_id)
+                try:return extract(fd)
+                finally:os.close(fd)
+            finally:frame_export_lock.release()
+        try:
+            async with asyncio.timeout(30):
+                data = await asyncio.to_thread(export)
+        except FrameExportBusy:raise HTTPException(409,'last_frame_export_busy') from None
+        except KeyError:raise HTTPException(404,'job_not_found') from None
+        except TimeoutError:raise HTTPException(504,'last_frame_export_timeout') from None
+        except ArithmeticError:raise HTTPException(422,'last_frame_precision_unsupported') from None
+        except (OSError,ValueError):raise HTTPException(410,'last_frame_unavailable') from None
+        return Response(data,media_type='image/png',headers={
+            'Content-Disposition':f'attachment; filename="{job_id}-last-frame.png"',
+            'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
+
     @app.get("/api/v1/jobs/{job_id}/video", response_class=StreamingResponse)
     def video(job_id: JobID, download: bool = False, range_header: Annotated[str | None, Header(alias="Range")] = None):
         try:

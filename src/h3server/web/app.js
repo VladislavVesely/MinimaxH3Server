@@ -230,6 +230,11 @@
     operation_failed: 'Operation failed. Check target permissions, exact approvals and the saved checkpoint; no completion is assumed.',
     backend_not_ready: 'The local runtime or verified model is not ready. Review diagnostics before submitting.',
     insufficient_storage: 'Insufficient server disk space. Free space or adjust retention before retrying.',
+    last_frame_unavailable: 'The video is missing, expired or cannot be decoded. No frame was exported.',
+    last_frame_export_busy: 'Another last-frame export is still running. Wait for it to finish, then try again.',
+    last_frame_export_timeout: 'Frame extraction timed out. No lower-quality fallback was used; try again when the server is less busy.',
+    last_frame_precision_unsupported: 'This video has more than 8 bits per channel. Export was refused rather than reducing its precision.',
+    frame_inputs_unsupported: 'First-frame inputs require a supported pruned profile. You can still download the PNG.',
     required_generation_file_missing: 'An input or required runtime file is missing. Re-upload any deleted references in this draft, or refresh model readiness.',
     queue_full: 'The server job queue is full. Wait for existing jobs or cancel one explicitly.',
     output_unavailable_or_expired: 'This output expired or is unavailable. It cannot be previewed or downloaded.',
@@ -461,7 +466,9 @@
     $('steps').max = $('use-turbo').checked ? 8 : 1000;
     $('turbo-strength').disabled = !$('use-turbo').checked;
     $('turbo-low-vram').disabled = !$('use-turbo').checked;
-    for (const button of $('jobs').querySelectorAll('button')) button.disabled = !available || !authenticated;
+    for (const button of $('jobs').querySelectorAll('button')) {
+      button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames'));
+    }
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
 
@@ -1069,6 +1076,40 @@
     }
     showJobTerminal();
   }
+  async function fetchLastFrame(jobId) {
+    const response = await fetch(API + '/remote/jobs/' + jobId + '/last-frame', {credentials:'same-origin', cache:'no-store', redirect:'error'});
+    if (!response.ok) {
+      let data = {}; try { data = await response.json(); } catch {}
+      throw {code:data.detail || data.error?.code || 'last_frame_unavailable'};
+    }
+    if (!response.headers.get('content-type')?.startsWith('image/png')) throw {code:'invalid_response'};
+    const blob = await response.blob();
+    if (!blob.size || blob.size > 32 * 1024 * 1024) throw {code:'invalid_response'};
+    return blob;
+  }
+  function lastFrameButton(jobId, reuse) {
+    const button = node('button', reuse ? 'Use last frame as first frame' : 'Download last frame (PNG)', 'secondary'); button.type = 'button';
+    if (reuse) button.dataset.requiresFrames = 'true';
+    button.disabled = busy || (reuse && !inputModes.includes('frames'));
+    button.title = reuse ? 'Replace the draft’s first frame; other settings stay unchanged. Requires a pruned profile.' : 'Uncompressed PNG at native video resolution; no resizing or JPEG conversion';
+    button.addEventListener('click', () => perform(reuse ? 'Preparing last frame for the next generation…' : 'Exporting uncompressed last frame…', async () => {
+      if (reuse && !inputModes.includes('frames')) throw {code:'frame_inputs_unsupported'};
+      const epoch = assetEpoch;
+      const blob = await fetchLastFrame(jobId);
+      if (epoch !== assetEpoch) throw {code:'asset_target_changed'};
+      const name = jobId + '-last-frame.png';
+      if (reuse) {
+        await uploadInputAssets('first_frame', [new File([blob], name, {type:'image/png'})]);
+        $('input-mode').value = 'frames'; showInputAssets(); render(); scheduleEstimate();
+        $('frame-assets').scrollIntoView({block:'center'});
+      } else {
+        const url = URL.createObjectURL(blob), link = node('a');
+        link.href = url; link.download = name; document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    }));
+    return button;
+  }
   function reconcileJobs(jobs) {
     observePageJobs(jobs);
     currentJobs = jobs;
@@ -1168,7 +1209,10 @@
         const error = node('p', 'Preview unavailable or output expired. Refresh the dashboard.'); error.hidden = true;
         video.addEventListener('error', () => { error.hidden = false; });
         const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
-        card.output.append(video, link, error);
+        const actions = node('div', undefined, 'job-output-actions');
+        actions.append(link, lastFrameButton(job.job_id, false), lastFrameButton(job.job_id, true));
+        card.output.append(video, actions,
+          node('p', 'Last frame: uncompressed PNG, native resolution. No additional image loss; existing video compression cannot be undone.', 'field-hint'), error);
       } else if (job.output?.expired) card.output.append(node('p', 'Output expired by retention policy.'));
     }
     renderJobTabs();

@@ -82,7 +82,7 @@ class RemoteProxy:
         return json.loads(data)
 
     def request(self, method, path, *, body=None, range_header=None, binary=None):
-        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:assets/[a-f0-9]{64}(?:/content)?|health|capabilities|models|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
+        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:assets/[a-f0-9]{64}(?:/content)?|health|capabilities|models|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/(?:video(?:\?download=true)?|last-frame))?)', path)
                 or method == 'POST' and re.fullmatch(r'/api/v1/(?:assets/(?:image|video|audio)|models/unload|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/(?:cancel|delete))?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
         if binary is not None:
@@ -118,7 +118,7 @@ class RemoteProxy:
             response = http.getresponse()
             # No Location, Set-Cookie, auth challenge or arbitrary remote headers.
             outgoing = {k: v for k, v in response.getheaders() if k.lower() in
-                        {'content-type', 'content-length', 'content-range', 'accept-ranges', 'content-disposition', 'retry-after'}}
+                        {'content-type', 'content-length', 'content-range', 'accept-ranges', 'content-disposition', 'retry-after', 'cache-control', 'x-content-type-options'}}
             closed = False
             def close():
                 nonlocal closed
