@@ -48,9 +48,15 @@ async function login(page, controller) {
   await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
 }
 
+async function generationView(page) {
+  await page.locator('[data-workspace="generate"]').click();
+  await page.locator('#generation-advanced > summary').click();
+}
+
 test('real authenticated proxy queues, replays, downloads Range and cancels test-only jobs', async ({ page, controller }) => {
   const urls = []; page.on('request', request => urls.push(request.url()));
   await login(page, controller);
+  await generationView(page);
   await page.getByRole('button', {name:'Refresh dashboard'}).click();
   await expect(page.locator('#readiness')).toContainText('Runtime ready: true');
   await expect(page.getByLabel('Managed LoRA ID (optional, BF16 only)')).toBeVisible();
@@ -71,7 +77,7 @@ test('real authenticated proxy queues, replays, downloads Range and cancels test
   await page.getByLabel('Prompt', {exact:true}).fill('TEST ONLY cancel');
   await page.getByRole('button', {name:'Queue generation'}).click();
   await page.getByRole('button', {name:'Cancel job'}).click();
-  await expect(page.locator('#jobs')).toContainText('cancelled');
+  await expect(page.locator('.job-card[data-status="cancelled"]')).toHaveCount(1);
 });
 
 test('invalid source settings and local proxy session protections remain enforced', async ({page,controller}) => {
@@ -93,13 +99,14 @@ test('completed video survives queued job polling; errors, expiry and deleted ca
   page.on('request', request => { if (request.url().endsWith('/cancel')) cancellations++; });
   page.on('response', response => { if (response.url().endsWith('/remote/jobs') && response.request().method() === 'GET') snapshots++; });
   await login(page, controller);
+  await generationView(page);
   await page.getByRole('button', { name: 'Refresh dashboard' }).click();
   await page.getByLabel('Prompt', { exact: true }).fill('TEST ONLY stable fixture output');
   await page.getByRole('button', { name: 'Queue generation' }).click();
   const video = page.locator('#jobs video');
   await expect(video).toBeVisible({ timeout: 10000 });
   const handle = await video.elementHandle();
-  const jobId = await video.evaluate(element => element.closest('.job-card').querySelector('h4').textContent);
+  const jobId = await video.evaluate(element => element.closest('.job-card').querySelector('h4').title);
   await handle.evaluate(element => {
     window.fixtureVideo = element;
     window.fixtureCard = element.closest('.job-card');
@@ -123,16 +130,16 @@ test('completed video survives queued job polling; errors, expiry and deleted ca
     (record.type === 'attributes' && record.attributeName === 'src') ||
     [...record.removedNodes].some(node => node === window.fixtureCard || node === window.fixtureVideo)
   ))).toBe(false);
-  await expect(page.getByText('Preview unavailable or output expired. Refresh the dashboard.', { exact: true })).toHaveCount(1);
+  await expect(page.getByText(/This browser could not decode the video preview|Preview could not load\./)).toHaveCount(1);
   await controller.control({ action: 'expire-output', job_id: jobId });
   await expect(page.getByText('Output expired by retention policy.', { exact: true })).toBeVisible({ timeout: 8000 });
   await expect(video).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Download MP4' })).toHaveCount(0);
-  await expect(page.getByText('Preview unavailable or output expired. Refresh the dashboard.', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/This browser could not decode the video preview|Preview could not load\./)).toHaveCount(0);
   await controller.control({ action: 'delete-job', job_id: jobId });
-  await expect(page.getByRole('heading', { name: jobId, exact: true })).toHaveCount(0, { timeout: 8000 });
+  await expect(page.locator(`h4[title="${jobId}"]`)).toHaveCount(0, { timeout: 8000 });
   await page.locator('.job-card').filter({ hasText: 'queued' }).getByRole('button', { name: 'Cancel job' }).click();
-  await expect(page.locator('#jobs')).toContainText('cancelled');
+  await expect(page.locator('.job-card[data-status="cancelled"]')).toHaveCount(1);
   expect(cancellations).toBe(1);
   expect(errors).toEqual([]);
 });
@@ -141,6 +148,7 @@ test.describe('pruned dashboard isolation', () => {
   test.use({ prunedProfile: 'h3-gguf-q4-k-m' });
   test('legacy completed metadata is not pruned inference evidence; polling preserves explicit steps', async ({page,controller}) => {
     await login(page, controller);
+    await generationView(page);
     await controller.control({action:'historical-legacy-output'});
     await page.locator('#dashboard-refresh').click();
     await expect(page.locator('#readiness')).toContainText('Generation tested: not proven');
@@ -360,6 +368,7 @@ for (const profile of ['h3-gguf-q4-k-m','h3-convrot-mixed']) {
       await page.reload(); await completed(page);
       await expect(page.locator('#install-profile')).toHaveValue(profile);
       await expect(page.locator('#selected-profile')).toContainText(total+' bytes');
+      await generationView(page);
       await page.locator('#dashboard-refresh').click();
       await expect(page.locator('#generation-profile')).toHaveValue(profile);
       await expect(page.locator('#generation-profile option')).toHaveCount(1);

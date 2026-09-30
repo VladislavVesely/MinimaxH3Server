@@ -1,0 +1,50 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict');
+const {chromium,webkit}=require('./browser/node_modules/@playwright/test');
+(async()=>{
+ const safari=process.env.H3_ENGINE==='webkit';
+ const browser=await(safari?webkit:chromium).launch({headless:true,...(safari?{executablePath:process.env.HOME+'/Library/Caches/ms-playwright/webkit-2359/pw_run.sh'}:{channel:'chrome'})});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));let mutations=0;
+ try {
+  await page.route('http://studio.test/**',route=>{const pathname=new URL(route.request().url()).pathname;if(route.request().method()!=='GET'){mutations++;return route.abort();}
+   if(pathname==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync('src/h3server/web/index.html','utf8').replace('<script src="/assets/app.js" defer></script>','')});
+   const file=path.join('src/h3server/web',path.basename(pathname));return fs.existsSync(file)?route.fulfill({path:file,contentType:pathname.endsWith('.css')?'text/css':'application/javascript'}):route.fulfill({status:404,body:''});
+  });
+  await page.goto('http://studio.test/');
+  assert.equal(await page.locator('[data-workspace]').count(),4,'Four distinct studio workspaces must exist');
+  await page.evaluate(()=>{window.originalPrompt=document.getElementById('prompt');window.originalJobs=document.getElementById('jobs');window.originalTimeline=document.getElementById('joiner-timeline');document.getElementById('generation-fields').disabled=false;document.getElementById('prompt').value='Keep this exact draft';});
+  await page.locator('[data-workspace="generate"]').click();
+  assert.equal(await page.locator('#generation').isVisible(),true);assert.equal(await page.locator('#current-queue').isVisible(),true);assert.equal(await page.locator('#connection').isVisible(),false);
+  await page.locator('#generation-advanced > summary').click();
+  assert.equal(await page.locator('#generation-advanced').evaluate(el=>el.open),true,'First summary click must open advanced controls, not be undone by focus handling');
+  await page.locator('#generation-advanced > summary').click();
+  assert.equal(await page.locator('#generation-advanced').evaluate(el=>el.open),false);
+  await page.evaluate(()=>document.getElementById('frames').value='');
+  await page.locator('#generate').click();
+  assert.equal(await page.locator('#generation-custom').evaluate(el=>el.open),true,'Invalid hidden controls must reveal themselves rather than block submission invisibly');
+  await page.evaluate(()=>{document.getElementById('frames').value='124';document.getElementById('generation-custom').open=false;});
+  await page.locator('[data-workspace="history"]').click();assert.equal(await page.locator('#generation').isVisible(),false);assert.equal(await page.locator('#current-queue').isVisible(),true);
+  await page.locator('#jobs-tab-history').focus();
+  await page.evaluate(()=>H3Studio.show('generate',{tab:false}));
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'jobs-tab-history','Moving the shared job panel must retain keyboard focus');
+  await page.locator('[data-workspace="joiner"]').click();assert.equal(await page.locator('#joiner').isVisible(),true);
+  await page.evaluate(()=>document.getElementById('joiner-scrollbar').hidden=false);
+  assert.equal((await page.locator('#joiner-scrollbar').boundingBox()).height,18,'Timeline scrollbar must retain its tested hit area');
+  await page.evaluate(()=>document.getElementById('joiner-scrollbar').hidden=true);
+  await page.locator('[data-workspace="generate"]').click();assert.equal(await page.locator('#prompt').inputValue(),'Keep this exact draft');
+  assert.equal(await page.evaluate(()=>originalPrompt===document.getElementById('prompt')&&originalJobs===document.getElementById('jobs')&&originalTimeline===document.getElementById('joiner-timeline')),true);
+  await page.locator('[data-workspace="install"]').click();
+  await page.evaluate(()=>{const profiles=['int8','mixed','gguf'].map((id,i)=>({profile_name:id,label:['ConvRot INT8','ConvRot Mixed','GGUF Q4_K_M'][i],weight_bytes:35000000000,publisher_vram_guidance:'Publisher guidance; memory fit is not guaranteed.'}));const select=document.getElementById('install-profile');select.replaceChildren(...profiles.map(p=>new Option(p.label,p.profile_name)));select.disabled=false;window.profileChanges=0;select.addEventListener('change',()=>profileChanges++);window.fixture={profiles,library:{profiles:profiles.map((p,i)=>({profile:p.profile_name,installed:i===0,compatible:i!==2}))},connection:{state:'authenticated',mode:'local'},setup:{}};H3Studio.update(fixture);});
+  assert.equal(await page.locator('[data-model="int8"] input').isChecked(),true);assert.equal(await page.locator('[data-model="int8"] input').isDisabled(),true);
+  await page.locator('[data-model="mixed"] input').check();await page.locator('[data-model="gguf"] input').check();
+  assert.equal(await page.locator('.model-card input:checked').count(),3);assert.equal(await page.evaluate(()=>profileChanges),0,'Planning multiple variants must not change approved selection or install');
+  await page.locator('[data-model="mixed"] button').click();assert.equal(await page.locator('#install-profile').inputValue(),'mixed');assert.equal(await page.evaluate(()=>profileChanges),1);
+  await page.evaluate(()=>{window.modelCheckbox=document.querySelector('[data-model="mixed"] input');H3Studio.update(fixture);});
+  assert.equal(await page.evaluate(()=>modelCheckbox===document.querySelector('[data-model="mixed"] input')),true,'Polling must preserve checkbox focus/node identity');
+  assert.equal(mutations,0);assert.deepEqual(errors,[]);
+  await page.screenshot({path:'/tmp/h3-studio-install-'+(safari?'webkit':'chrome')+'.png',fullPage:true});
+  await page.locator('[data-workspace="generate"]').click();await page.screenshot({path:'/tmp/h3-studio-generate-'+(safari?'webkit':'chrome')+'.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.locator('[data-workspace="history"]').isVisible(),true);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'Mobile must not overflow horizontally');
+  console.log((safari?'WebKit':'Chrome')+': workspace identity, Current alongside generation, model multi-selection without mutations, stable polling and mobile layout passed');
+ } finally {await page.unrouteAll({behavior:'wait'});await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

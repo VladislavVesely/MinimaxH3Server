@@ -531,6 +531,7 @@
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
+    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup});
   }
 
   async function refresh() {
@@ -1195,6 +1196,7 @@
       syncDuration('frames'); syncResolutionPresets(); showInputAssets(); render(); scheduleEstimate();
       notice.textContent = `Inputs from job ${job.job_id.slice(0,8)} copied into the generation draft. Nothing was queued or installed. Review the settings, then click Queue generation when ready.`;
     } catch (error) { notice.textContent = 'Could not reuse inputs. ' + (error.message || 'The saved inputs are unavailable.') + (applied ? ' Review the draft before queueing; its display could not be fully refreshed.' : ' Existing draft unchanged.'); }
+    globalThis.H3Studio?.show('generate');
     notice.scrollIntoView({block:'center'}); notice.focus({preventScroll:true});
   }
   function jobInputs(request) {
@@ -1345,6 +1347,7 @@
       if (reuse) {
         await uploadInputAssets('first_frame', [new File([blob], name, {type:'image/png'})]);
         $('input-mode').value = 'frames'; showInputAssets(); render(); scheduleEstimate();
+        globalThis.H3Studio?.show('generate');
         $('frame-assets').scrollIntoView({block:'center'});
       } else {
         const url = URL.createObjectURL(blob), link = node('a');

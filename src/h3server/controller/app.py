@@ -46,6 +46,8 @@ BODY_LIMIT = 16384
 CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
+              "/assets/studio.js": ("studio.js", "text/javascript"),
+              "/assets/studio.css": ("studio.css", "text/css"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
               "/assets/joiner.js": ("joiner.js", "text/javascript"),
               "/assets/job-selection.js": ("job-selection.js", "text/javascript"),

@@ -3,30 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Server setup · H3 Server</title>
+  <title>H3 Studio · Install</title>
   <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/studio.css">
   <script src="/assets/job-timing.js" defer></script>
   <script src="/assets/joiner.js" defer></script>
   <script src="/assets/job-selection.js" defer></script>
   <script src="/assets/app.js" defer></script>
+  <script src="/assets/studio.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to setup</a>
-  <aside class="sidebar" aria-label="Setup navigation">
+  <a class="skip-link" href="#main">Skip to workspace</a>
+  <aside class="sidebar" aria-label="Studio navigation">
     <a class="brand" href="#main" aria-label="H3 Server home"><span class="brand-mark">H3</span><span>H3 Server<small>SELF-HOSTED STUDIO</small></span></a>
     <p class="nav-label">WORKSPACE</p>
-    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">02</span></a><a class="nav-item" href="#joiner"><span aria-hidden="true">⇥</span> Video joiner <span class="nav-tag">03</span></a></nav>
+    <nav aria-label="Workspace"><a class="nav-item selected" data-workspace="install" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Install <span class="nav-tag">01</span></a><a class="nav-item" data-workspace="generate" href="#generation"><span aria-hidden="true">▷</span> Generate <span class="nav-tag">02</span></a><a class="nav-item" data-workspace="history" href="#history"><span aria-hidden="true">◷</span> History <span class="nav-tag">03</span></a><a class="nav-item" data-workspace="joiner" href="#joiner"><span aria-hidden="true">⇥</span> Video joiner <span class="nav-tag">04</span></a></nav>
     <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
       <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
       <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
-      <li id="step-install"><span class="step-number">4</span><span>Install &amp; validate<small>Select a model &amp; install</small></span></li>
+      <li id="step-install"><span class="step-number">3</span><span>Install &amp; validate<small>Select a model &amp; install</small></span></li>
     </ol></div>
     <div class="sidebar-note"><span class="tiny-dot" aria-hidden="true"></span> Local controller<p>Your infrastructure. No hosted generation fallback.</p></div>
   </aside>
   <div class="workspace">
     <header class="topbar"><span>Workspace <span aria-hidden="true">/</span> <strong>Server setup</strong></span><span class="session-badge" id="session" role="status">Establishing local session…</span></header>
     <main id="main" tabindex="-1">
-      <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Your server. Your studio.</h1><p>Start with a secure connection. Understand your hardware before making a single change.</p></div><span class="pill">EXPERIMENTAL LOCAL RUNTIME</span></section>
+      <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Set up your studio</h1><p id="page-description">Connect your machine, discover its hardware and build your model library.</p></div><span class="pill">EXPERIMENTAL LOCAL RUNTIME</span></section>
       <div class="assurances"><span><b aria-hidden="true">↗</b> SSH transport</span><span><b aria-hidden="true">◇</b> Explicit fingerprint trust</span><span><b aria-hidden="true">○</b> Consent before changes</span></div>
       <noscript><p class="notice">JavaScript is required for the local setup UI. No connection or installation has been started.</p></noscript>
       <section id="lan-access" hidden aria-labelledby="lan-access-title">
@@ -156,7 +158,7 @@
             <button id="generate" class="primary" type="submit" aria-describedby="generate-disabled-reason">Queue generation</button>
           </fieldset><p id="generate-disabled-reason" class="generation-blocker" role="status" aria-live="polite" hidden></p><p id="generation-estimate" role="status">No timing estimate yet.</p><details id="estimate-details" hidden><summary>Estimated phase and sampling-step times</summary><p class="field-hint">The first sampling step includes model transfers and sampler preparation. Observed averages are not guarantees.</p><p id="estimate-phases" class="field-hint"></p><pre id="estimate-steps" class="timing-steps"></pre></details></form>
           <button id="export-timings" class="secondary" type="button" disabled>Download timing data</button><p class="field-hint">Latest 50 successful measurements, including hardware/software and settings—not prompts, credentials or machine identifiers. Nothing uploads automatically.</p>
-          <div class="queue-heading"><h3>Generation queue</h3><p id="queue-summary" role="status">No jobs loaded</p></div><div class="job-tabs" role="tablist" aria-label="Generation jobs"><button id="jobs-tab-current" type="button" role="tab" aria-controls="jobs" aria-selected="true">Current (0)</button><button id="jobs-tab-history" type="button" role="tab" aria-controls="jobs" aria-selected="false" tabindex="-1">History (0)</button></div><p class="field-hint">Current keeps unfinished jobs and jobs from this page view. Reload the page to move finished jobs to History.</p><p id="jobs-empty" class="field-hint" role="status">No jobs in this page view. Queue a generation to get started.</p><div class="job-selection-actions"><button id="jobs-select-all" type="button" disabled>Select all in this tab</button><button id="jobs-clear-selection" type="button" disabled>Clear selection</button><button id="jobs-delete-selected" type="button" disabled>Delete selected (0)</button></div><p class="field-hint">Bulk deletion includes only selected stopped jobs in the active tab. Cancel queued/running jobs first. Switching tabs clears the selection.</p><p id="jobs-selection-status" role="status" aria-live="polite"></p><div id="jobs" role="tabpanel" aria-labelledby="jobs-tab-current" tabindex="0"></div><section class="job-terminal" aria-label="Generation terminal"><div class="terminal-heading"><h3>Terminal</h3><span id="terminal-job">Select a job to view its output</span></div><pre id="job-events" tabindex="0" aria-label="Selected job terminal output">Waiting for a job.</pre></section>
+          </section><section id="current-queue" class="panel queue-panel" aria-label="Generation jobs"><div class="queue-heading"><h3>Current generations</h3><p id="queue-summary" role="status">No jobs loaded</p></div><div class="job-tabs" role="tablist" aria-label="Generation jobs"><button id="jobs-tab-current" type="button" role="tab" aria-controls="jobs" aria-selected="true">Current (0)</button><button id="jobs-tab-history" type="button" role="tab" aria-controls="jobs" aria-selected="false" tabindex="-1">History (0)</button></div><p class="field-hint">Current keeps unfinished jobs and jobs from this page view. Reload the page to move finished jobs to History.</p><p id="jobs-empty" class="field-hint" role="status">No jobs in this page view. Queue a generation to get started.</p><div class="job-selection-actions"><button id="jobs-select-all" type="button" disabled>Select all in this tab</button><button id="jobs-clear-selection" type="button" disabled>Clear selection</button><button id="jobs-delete-selected" type="button" disabled>Delete selected (0)</button></div><p class="field-hint">Bulk deletion includes only selected stopped jobs in the active tab. Cancel queued/running jobs first. Switching tabs clears the selection.</p><p id="jobs-selection-status" role="status" aria-live="polite"></p><div id="jobs" role="tabpanel" aria-labelledby="jobs-tab-current" tabindex="0"></div><section class="job-terminal" aria-label="Generation terminal"><div class="terminal-heading"><h3>Terminal</h3><span id="terminal-job">Select a job to view its output</span></div><pre id="job-events" tabindex="0" aria-label="Selected job terminal output">Waiting for a job.</pre></section>
         </section>
       <section id="joiner" class="panel joiner-panel" aria-labelledby="joiner-heading">
         <p class="eyebrow">03 / LOSSLESS STREAM COPY</p><h2 id="joiner-heading">Video joiner</h2>

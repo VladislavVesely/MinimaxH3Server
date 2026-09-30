@@ -557,6 +557,14 @@ trusted predecessor recovery with a legacy log. They do not run pip, CUDA, codec
 model downloads or real server installation, and do not establish the original
 transient PyAV lookup cause.
 
+## Studio workspaces
+
+The sidebar separates **Install**, **Generate**, **History**, and **Video joiner**. Generate keeps the existing **Current** queue beside the form on wide screens (below it on mobile); History uses the same existing historical-job filter. Switching views does not submit work, reset your draft or clear the joiner. Existing Current/History selection-clearing and page-local membership rules are unchanged.
+
+Install displays a checkbox library: known installed variants are checked/read-only, and you can check multiple additional variants to plan your library. These planning choices are page-local, not an install queue. **Review** selects one variant in the existing review selector. **Install** still applies only to that displayed variant and its explicitly selected optional components. Review/install the next variant separately. Unchecking a planned variant never uninstalls a model; there is no automatic batch installer or new compatibility override.
+
+Custom dimensions/frame counts and acceleration controls are expandable in Generate; all original settings remain available. Active acceleration choices appear in the disclosure heading. Canvas warnings, generation blockers, license/installation scope, progress and errors remain visible. Model memory controls, timing exports and session diagnostics have dedicated expandable sections. Keyboard timeline controls and lossless joining are unchanged.
+
 ## Local or SSH installation target
 
 Use **Installation target** to choose **This controller machine (Local)** or **Remote machine (SSH)**. Disconnect the current target before changing modes. For Local, click **Use this machine and scan**; no SSH service, host-key approval or SSH password is needed. Local refers to the computer running the controller, not the device viewing its page over LAN.

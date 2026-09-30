@@ -184,7 +184,7 @@ test('reload preserves the real pending fingerprint challenge and requires fresh
 test('selected details and one Install replace comparison and approval wizard', async ({ page, controller }) => {
   await open(page, controller);
   await connect(page); await approve(page);
-  await expect(page.locator('#password-note')).toContainText('sudo');
+  await expect(page.locator('#password-note')).toContainText('plaintext in owner-only local controller settings');
   await expect(page.locator('#retain-recovery')).toHaveCount(0);
   const authentication = page.waitForRequest(r => r.url().endsWith('/authenticate'));
   await authenticate(page);
@@ -192,7 +192,8 @@ test('selected details and one Install replace comparison and approval wizard', 
   await page.locator('#scan').click();
   await expect(page.locator('#hardware')).toContainText('Unknown');
   await expect(page.locator('#review-panel')).toHaveCount(0);
-  await expect(page.locator('#installation input[type="checkbox"]')).toHaveCount(0);
+  await expect(page.locator('.model-card input[type="checkbox"]')).toHaveCount(await page.locator('#install-profile option').count());
+  await expect(page.locator('#installation input[type="radio"]')).toHaveCount(0);
   await expect(page.locator('#sudo-password')).toHaveCount(0);
   await expect(page.getByRole('button', {name:'Install', exact:true})).toBeEnabled();
   await page.locator('#install-profile').selectOption('h3-gguf-q5-k-m');
