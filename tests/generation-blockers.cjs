@@ -7,7 +7,7 @@ assert.ok(start >= 0, 'Queue blocking reasons must have a shared implementation'
 const section = source.slice(start, source.indexOf('  function render()', start));
 function reasons(overrides = {}, selections = {}) {
   const fields = {'sparse-preset': {value: 'off'}, 'use-turbo': {checked: false}, 'use-sage': {checked: false}, ...selections};
-  const state = {ready: true, busy: false, setup: {busy: false}, connection: {state: 'authenticated'}, runtimeReady: true,
+  const state = {ready: true, busy: false, submittingGeneration: false, setup: {busy: false}, connection: {state: 'authenticated'}, runtimeReady: true,
     sparseState: {installed: true, supported: true}, turboState: {installed: true, supported: true}, sageState: {installed: true, supported: true}, ...overrides};
   const context = vm.createContext({...state, $: id => fields[id]});
   vm.runInContext(section, context);
@@ -18,6 +18,8 @@ assert.match(reasons({}, {'sparse-preset': {value: 'quality'}, 'use-turbo': {che
 assert.match(reasons({connection: {state: 'disconnected'}}).join(' '), /Connect/);
 assert.match(reasons({runtimeReady: false}).join(' '), /readiness/i);
 assert.match(reasons({busy: true}).join(' '), /operation/);
+assert.deepEqual(reasons({busy: true, submittingGeneration: true}), [], 'Own Queue submission must not display a wait warning');
+assert.match(reasons({busy: true, submittingGeneration: true, runtimeReady: false}).join(' '), /readiness/, 'Real blockers remain visible');
 assert.match(reasons({setup: {busy: true}}).join(' '), /setup/);
 for (const [key, selector, selected, label] of [['sparseState','sparse-preset',{value:'quality'},'Sparse'], ['turboState','use-turbo',{checked:true},'Turbo'], ['sageState','use-sage',{checked:true},'SageAttention']]) {
   assert.match(reasons({[key]: {busy:true, installed:true, supported:true}}).join(' '), /Wait/);

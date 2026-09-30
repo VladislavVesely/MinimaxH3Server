@@ -1,5 +1,14 @@
 # Validation and acceptance status
 
+## Queue submission warning regression
+
+A Queue click no longer displays its own “Wait for the current operation” blocker.
+The button shows neutral “Submitting…” text and stays disabled until the request
+finishes; genuine readiness/setup/feature blockers remain visible. Focused JS
+checks cover duplicate prevention and success/failure cleanup. Rebuilt-native
+validation held a browser-only mocked POST, verified no warning and no duplicate
+request, then verified button restoration. No GPU generation was submitted.
+
 ## Estimate refresh regression
 
 Dashboard polling no longer restarts timing lookups for unchanged inputs or

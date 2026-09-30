@@ -9,6 +9,7 @@
   let csrf = null;
   let ready = false;
   let busy = false;
+  let submittingGeneration = false;
   let connection = { state: 'disconnected' };
   let capabilities = {};
   let lastTarget = null;
@@ -309,7 +310,7 @@
     if (!ready) reasons.push('Open a valid local controller session.');
     if (connection.state !== 'authenticated') reasons.push('Connect and authenticate to the server.');
     if (setup.busy) reasons.push('Wait for setup to finish.');
-    if (busy) reasons.push('Wait for the current operation to finish.');
+    if (busy && !submittingGeneration) reasons.push('Wait for the current operation to finish.');
     if (!runtimeReady) reasons.push('Generation readiness is not confirmed. Check the readiness status above or click Refresh dashboard.');
     const sparseOn = $('sparse-preset').value !== 'off';
     if (sparseOn && $('use-turbo').checked) reasons.push('Turbo and sparse attention cannot be combined. Turn off Turbo or select Sparse: Off.');
@@ -415,7 +416,8 @@
       : !sparseState.supported ? 'Sparse is not verified for this active model profile.' : 'Ready. Quality-first is the recommended starting preset; actual runtime/fallback appears in job output.';
     $('use-turbo').disabled = sparseOn && !$('use-turbo').checked;
     const generationReasons = generationBlockReasons();
-    $('generate').disabled = generationReasons.length > 0;
+    $('generate').disabled = busy || generationReasons.length > 0;
+    $('generate').textContent = submittingGeneration ? 'Submitting…' : 'Queue generation';
     $('generate-disabled-reason').hidden = generationReasons.length === 0;
     $('generate-disabled-reason').textContent = generationReasons.length ? 'Cannot queue generation: ' + generationReasons.join(' ') : '';
     $('models-status').textContent = !authenticated ? 'Resident model status unavailable while disconnected.'
@@ -451,9 +453,10 @@
     }
   }
 
-  async function perform(label, action) {
+  async function perform(label, action, { generationSubmission = false } = {}) {
     if (busy) return;
     busy = true;
+    submittingGeneration = generationSubmission;
     $('error').hidden = true;
     $('operation').textContent = label;
     log(label);
@@ -474,6 +477,7 @@
       showError(error);
     } finally {
       busy = false;
+      submittingGeneration = false;
       render();
     }
   }
@@ -1203,7 +1207,7 @@
       const accepted = await request('/remote/jobs', generationBody());
       selectedJob = accepted.job_id || accepted.job?.job_id || null;
       await dashboard();
-    });
+    }, { generationSubmission: true });
   });
   window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
 
