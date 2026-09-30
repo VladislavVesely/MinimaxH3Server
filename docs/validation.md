@@ -1,5 +1,22 @@
 # Validation and acceptance status
 
+## Reuse generation inputs
+
+Eight focused JavaScript checks and 62 reference/controller-security Python tests
+passed. Packaged Chrome and WebKit verified Reuse inputs on Current and History
+cards: prompt/model/seed/dimensions/frame count, exact Turbo step counts and other
+options, image/video/audio references, first/last frames, clearing obsolete draft
+assets/options, persistence across polling, missing-asset rollback and mobile
+layout. Unit checks cover unsafe integers, unknown fields, changed pins,
+unavailable models, unrepresentable LoRAs and target changes during asset reads.
+
+All generation and feature-install POSTs were intercepted; zero were attempted.
+A separate acceptance reused a real saved reference job with exact prompt,
+settings and retained assets, again with zero generation/install attempts. No
+original job or file was modified; no daemon deployment was needed. Native
+helpers: `/tmp/h3-reuse-native.cjs`, `/tmp/h3-reuse-real.cjs`; status screenshots:
+`/tmp/h3-reuse-chrome.png`, `/tmp/h3-reuse-webkit.png`.
+
 ## Timeline keyboard and scrollbar repair
 
 Reproduced Delete and Space failures: after clicking a clip, replacement of its

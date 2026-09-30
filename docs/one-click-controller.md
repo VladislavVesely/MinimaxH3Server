@@ -1,5 +1,19 @@
 # One-click controller contract
 
+## Reusing a generation combination
+
+Click **Reuse inputs** on a job in Current or History to replace the generation
+form's draft with its recorded prompt, model, seed, resolution, length, steps,
+Sage/Turbo/sparse settings, supported LoRA and reference/first/last-frame assets.
+This only prefills the form: **nothing is queued or installed**. Review it, then
+click Queue generation yourself. Original jobs and asset files stay unchanged.
+
+Assets are reused by their original immutable IDs after metadata checks. Missing
+assets, unavailable models, changed component pins, unsafe seed precision or inputs
+this form cannot represent leave the draft unchanged with an explanation. Jobs
+without recorded settings have a disabled button. Previous draft assets/options
+are replaced, not merged; ordinary readiness blockers remain in effect.
+
 The primary browser flow uses a single composite Install intent. It does not call
 `setup/plan`, `setup/install`, `setup/reboot`, `setup/activate` or `setup/download`
 separately. Those low-level APIs still require their existing explicit approvals.

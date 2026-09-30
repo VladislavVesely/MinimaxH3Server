@@ -485,7 +485,7 @@
     $('turbo-strength').disabled = !$('use-turbo').checked;
     $('turbo-low-vram').disabled = !$('use-turbo').checked;
     for (const button of $('jobs').querySelectorAll('button')) {
-      button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames')) || (button.dataset.joiner === 'true' && !joiner?.canAdd());
+      button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames')) || (button.dataset.joiner === 'true' && !joiner?.canAdd()) || button.dataset.reuseMissing === 'true';
       if (button.dataset.joiner === 'true') button.title = joiner?.blocker() || 'Video joiner is unavailable.';
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
@@ -1009,6 +1009,71 @@
     if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) return 'Outside exact browser integer range';
     return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
   }
+  function prepareJobReuse(record, options) {
+    if (!record?.settings || typeof record.prompt !== 'string') throw Error('Complete generation inputs were not recorded for this job.');
+    const supported = new Set('profile seed width height num_frames steps sage_attention turbo_lora turbo_strength turbo_low_vram turbo_artifact_digest sparse_preset sparse_artifact_digest input_mode reference_images reference_videos reference_audios first_frame last_frame reference_artifact_digest'.split(' '));
+    if (Object.keys(record.settings).some(key => !supported.has(key)) || Object.keys(record).some(key => !['prompt','settings','loras','sparse_attention'].includes(key))) throw Error('The saved job contains inputs this generation form cannot reproduce.');
+    const settings = {input_mode:'text', reference_images:[], reference_videos:[], reference_audios:[], first_frame:null, last_frame:null,
+      sage_attention:false, turbo_lora:false, turbo_strength:1, turbo_low_vram:false, sparse_preset:'off', ...record.settings};
+    if (!options.profiles.includes(settings.profile)) throw Error('The saved model is not available on this daemon. The draft was not changed.');
+    for (const key of ['seed','width','height','num_frames','steps']) {
+      if (!Number.isSafeInteger(settings[key])) throw Error(`The saved ${key} is missing or outside the exact browser integer range.`);
+    }
+    if (!['text','frames','references'].includes(settings.input_mode) || !['off','quality','balanced','draft'].includes(settings.sparse_preset)) throw Error('The saved input mode or sparse preset is unsupported.');
+    for (const [enabled, saved, active] of [
+      [settings.turbo_lora, settings.turbo_artifact_digest, options.turbo],
+      [settings.sparse_preset !== 'off', settings.sparse_artifact_digest, options.sparse],
+      [settings.input_mode === 'references', settings.reference_artifact_digest, options.reference]
+    ]) if (enabled && (!saved || saved !== active)) throw Error('The saved component pin differs from the active version. Reuse would change the combination; the draft was not changed.');
+    const loras = record.loras || [];
+    if (!Array.isArray(loras) || loras.length > 1 || (loras.length && (!options.lora || settings.profile.includes('int8') || !/^[A-Za-z0-9_-]{1,128}$/.test(loras[0])))) throw Error('The saved LoRA combination cannot be represented by this generation form.');
+    if (record.sparse_attention != null) throw Error('This older job uses a legacy sparse-attention input that this form cannot reproduce.');
+    for (const [key, maximum] of [['reference_images',9],['reference_videos',3],['reference_audios',3],['first_frame',1],['last_frame',1]]) {
+      const values = key.startsWith('reference_') ? settings[key] : settings[key] ? [settings[key]] : [];
+      if (!Array.isArray(values) || values.length > maximum || values.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) throw Error('Saved asset identifiers or counts are invalid.');
+    }
+    return {prompt:record.prompt, settings, lora:loras[0] || ''};
+  }
+  async function reuseJobInputs(job) {
+    const notice = $('reuse-inputs-status');
+    notice.hidden = false; notice.textContent = 'Reading saved inputs and checking assets…';
+    const epoch = assetEpoch;
+    let applied = false;
+    const options = () => ({profiles:Array.from($('generation-profile').options, option => option.value),
+      turbo:capabilities.turbo_artifact_digest, sparse:capabilities.sparse_artifact_digest,
+      reference:referenceState.artifact_digest, lora:backendCapabilities.lora?.status === 'supported'});
+    try {
+      const draft = prepareJobReuse(job.request, options()), assets = {}, checked = new Map();
+      for (const key of Object.keys(assetDraft)) {
+        assets[key] = [];
+        const ids = key.startsWith('reference_') ? draft.settings[key] : draft.settings[key] ? [draft.settings[key]] : [];
+        for (const id of ids) {
+          if (!checked.has(id)) {
+            let asset;
+            try { asset = await request('/remote/assets/' + id); }
+            catch { throw Error('A saved asset is missing or could not be checked. Reconnect or restore the asset before reusing this job.'); }
+            checked.set(id, asset);
+          }
+          const asset = checked.get(id), kind = key === 'reference_videos' ? 'video' : key === 'reference_audios' ? 'audio' : 'image';
+          if (asset.id !== id || asset.kind !== kind) throw Error('Saved asset metadata does not match the job.');
+          assets[key].push({...asset});
+        }
+      }
+      if (epoch !== assetEpoch || connection.state !== 'authenticated') throw Error('The connection changed while reading inputs. Try again on the original server.');
+      prepareJobReuse(job.request, options()); // Recheck pins/profiles after asynchronous metadata reads.
+      const s = draft.settings;
+      applied = true;
+      $('prompt').value = draft.prompt; $('generation-profile').value = s.profile;
+      for (const [id,key] of [['seed','seed'],['width','width'],['height','height'],['frames','num_frames'],['steps','steps'],['turbo-strength','turbo_strength'],['input-mode','input_mode'],['sparse-preset','sparse_preset']]) $(id).value = String(s[key]);
+      for (const [id,key] of [['use-sage','sage_attention'],['use-turbo','turbo_lora'],['turbo-low-vram','turbo_low_vram']]) $(id).checked = s[key];
+      $('lora').value = draft.lora;
+      assetEpoch++;
+      for (const key of Object.keys(assetDraft)) assetDraft[key] = assets[key];
+      syncDuration('frames'); syncResolutionPresets(); showInputAssets(); render(); scheduleEstimate();
+      notice.textContent = `Inputs from job ${job.job_id.slice(0,8)} copied into the generation draft. Nothing was queued or installed. Review the settings, then click Queue generation when ready.`;
+    } catch (error) { notice.textContent = 'Could not reuse inputs. ' + (error.message || 'The saved inputs are unavailable.') + (applied ? ' Review the draft before queueing; its display could not be fully refreshed.' : ' Existing draft unchanged.'); }
+    notice.scrollIntoView({block:'center'}); notice.focus({preventScroll:true});
+  }
   function jobInputs(request) {
     const details = node('details', undefined, 'job-inputs');
     details.append(node('summary', 'Inputs'));
@@ -1212,7 +1277,15 @@
             await dashboard();
           });
         });
-        heading.append(selectionLabel, title, logs, remove);
+        const reuse = node('button', 'Reuse inputs', 'secondary'); reuse.type = 'button';
+        reuse.dataset.reuseMissing = String(!job.request?.settings);
+        reuse.disabled = busy || !job.request?.settings;
+        reuse.title = job.request?.settings ? 'Replace the generation draft with this job’s saved inputs. Does not queue generation.' : 'Complete generation inputs were not recorded for this job.';
+        reuse.addEventListener('click', () => {
+          if (busy || reuse.disabled) return;
+          void perform('Prefilling saved generation inputs…', () => reuseJobInputs(currentJobs.find(value => value.job_id === job.job_id) || job));
+        });
+        heading.append(selectionLabel, title, logs, reuse, remove);
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
