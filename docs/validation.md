@@ -1,5 +1,33 @@
 # Validation and acceptance status
 
+## Optional references and Sage/Turbo correction
+
+The previous validator incorrectly treated Turbo as unsupported for all conditioned
+inputs and required at least one reference asset. Reference mode now permits zero
+assets while retaining its pinned Ref2VA checkpoint, and Sage + Turbo is allowed
+with references and frames. Sparse remains separately guarded only when selected.
+Red tests reproduced both UI blockers and API rejection before the fix.
+
+185 focused Python tests and five JS scripts passed. Rebuilt-native browser checks
+verified an enabled Queue button with empty references + Sage/Turbo, the correct
+submitted Ref2VA payload, and 375px layout; its POST was intercepted, not generated.
+Screenshot: `/tmp/h3-reference-turbo-optional.png`.
+
+Four real ConvRot INT8, 6-step, Sage + Turbo jobs completed at 512×288. Each had
+independent decoding of 124 video frames and stereo 32 kHz audio, plus runtime
+evidence of Turbo application and successful Sage kernel execution:
+
+| Inputs | Job | Elapsed |
+| --- | --- | --- |
+| Ref2VA prompt only, no attachments | `3725b1a11f4b4671af31284d1247443e` | 149.251s |
+| Reference image | `c19a1280c8eb4368b468b0d813606f5c` | 53.569s |
+| First + last frames | `0f12f2caf8d64df99a4ceccfd2f6e5bb` | 56.108s |
+| Reference image + video + audio | `ed74f1da26704297832748497c1a2e66` | 53.710s |
+
+These establish execution on the target RTX 4090, not general quality, identity
+fidelity or maximum-resolution compatibility. Deployment used idle maintenance and
+an exact prior-source hash guard; no model, dependency or history replacement.
+
 ## Native reference assets and first/last-frame inputs
 
 Implemented separate Text / References / First+last modes. Immutable uploads are
@@ -7,7 +35,8 @@ bounded, content-addressed, owner-only and decoded before acceptance; browser
 requests retain origin/session/CSRF validation and the fixed authenticated SSH
 proxy. No caller paths/URLs or hosted inference. History retains original asset
 links. Frame conditioning uses FL2VA; ConvRot INT8 references use a separately
-approved Ref2VA checkpoint. Turbo/sparse combinations are blocked explicitly.
+approved Ref2VA checkpoint. Initial acceptance below preceded the subsequent
+Sage/Turbo correction; only sparse remains blocked for conditioned inputs.
 
 Pinned Ref2VA original: 20,970,379,689 bytes, SHA256
 `ed7e9aa541b945f44298650f0dc2e2e867bfd3b67cd07bcc90f6081c168f0d3d`.

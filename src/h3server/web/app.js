@@ -1272,11 +1272,10 @@
     if (referenceState.busy) reasons.push('Ref2VA download is running. Wait for its integrity checks to finish.');
     if (mode === 'text') return reasons;
     if (!inputModes.includes(mode)) reasons.push('This daemon/profile does not support the selected input mode. Use a supported pruned profile or Text mode.');
-    if ($('use-turbo').checked || $('sparse-preset').value !== 'off') reasons.push('Turn off Turbo and sparse attention: these combinations are not verified with reference or frame inputs.');
+    if ($('sparse-preset').value !== 'off') reasons.push('Sparse attention is not verified with reference or frame inputs. Select Sparse: Off.');
     if (mode === 'frames' && !assetDraft.first_frame.length && !assetDraft.last_frame.length) reasons.push('Upload a first or last frame image (or both).');
     if (mode === 'references') {
       if (!referenceState.installed) reasons.push('Install the separate Ref2VA checkpoint using the button below.');
-      if (!assetDraft.reference_images.length && !assetDraft.reference_videos.length && !assetDraft.reference_audios.length) reasons.push('Upload at least one reference image, video or audio file.');
       if (assetDraft.reference_videos.reduce((s,a)=>s+(a.duration||0),0)>15.1) reasons.push('Reference videos must total at most 15 seconds. Remove a clip.');
     }
     return reasons;

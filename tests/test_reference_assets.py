@@ -12,13 +12,20 @@ def test_conditioned_settings_roundtrip(values):
     assert restored==request.settings
     assert restored.input_mode==values['input_mode']
 
-@pytest.mark.parametrize('values', [dict(input_mode='frames'),dict(input_mode='references'),dict(first_frame=ID),dict(input_mode='references',first_frame=ID),dict(input_mode='frames',reference_images=[ID]),dict(input_mode='frames',first_frame='../escape'),dict(input_mode='references',reference_images=[ID]*10),dict(input_mode='references',reference_audios=ID),dict(input_mode='bad')])
+@pytest.mark.parametrize('values', [dict(input_mode='frames'),dict(first_frame=ID),dict(input_mode='references',first_frame=ID),dict(input_mode='frames',reference_images=[ID]),dict(input_mode='frames',first_frame='../escape'),dict(input_mode='references',reference_images=[ID]*10),dict(input_mode='references',reference_audios=ID),dict(input_mode='bad')])
 def test_invalid_conditioning(values):
     with pytest.raises(ValueError):GenerationInput(prompt='fixture',profile='h3-convrot-int8',**values)
 
-@pytest.mark.parametrize('feature', [dict(turbo_lora=True,steps=6),dict(sparse_preset='quality')])
-def test_unverified_adapter_combination_fails(feature):
-    with pytest.raises(ValueError):GenerationInput(prompt='fixture',profile='h3-convrot-int8',input_mode='frames',first_frame=ID,**feature)
+def test_unverified_sparse_combination_fails():
+    with pytest.raises(ValueError):GenerationInput(prompt='fixture',profile='h3-convrot-int8',input_mode='frames',first_frame=ID,sparse_preset='quality')
+
+@pytest.mark.parametrize('values', [dict(input_mode='references'),dict(input_mode='references',reference_images=[ID]),dict(input_mode='frames',first_frame=ID)])
+def test_sage_turbo_conditioning_and_optional_references(values):
+    request=GenerationInput(prompt='fixture',profile='h3-convrot-int8',sage_attention=True,turbo_lora=True,steps=6,**values).to_request()
+    assert request.settings.sage_attention and request.settings.turbo_lora
+    assert request.settings.input_mode==values['input_mode']
+    from h3server.backends.pruned import parse_request
+    assert parse_request(asdict(request))==request
 
 @pytest.mark.parametrize('mode', ['frames','references'])
 def test_runtime_conditions_with_assets_not_text_fallback(tmp_path,monkeypatch,mode):
@@ -41,6 +48,23 @@ def test_runtime_conditions_with_assets_not_text_fallback(tmp_path,monkeypatch,m
         assert captured['ref_images'] and captured['ref_videos'] and captured['ref_audios']
         assert captured['vae']=='vae' and captured['audio_vae']=='vae'
         assert any('Ref2VA.safetensors' in str(c) for c in calls)
+
+
+def test_prompt_only_reference_still_uses_ref2va_and_turbo(tmp_path,monkeypatch):
+    from test_pruned_runtime import runtime
+    from h3server.backends import pruned,conditioning,turbo
+    from types import SimpleNamespace as NS
+    rt,calls=runtime.__wrapped__();captured={};rt.turbo=object();rt.reference_filename='Ref2VA.safetensors'
+    def execute(**kw):captured.update(kw);return NS(result=('positive','latent'))
+    rt.reference_condition=NS(execute=execute)
+    monkeypatch.setattr(conditioning,'load',lambda rt,s:dict(ref_images={},ref_videos={},ref_audios={}))
+    monkeypatch.setattr(turbo,'apply',lambda m,s,n:calls.append(('turbo_applied',s.turbo_lora,s.sage_attention)) or m)
+    monkeypatch.setattr(turbo,'sample',lambda *args:calls.append(('turbo_sample',)) or 'sampled')
+    r=GenerationInput(prompt='fixture',profile='h3-convrot-int8',input_mode='references',turbo_lora=True,sage_attention=True,steps=6).to_request()
+    pruned.generate(r,tmp_path/'video.mp4',rt,emit=lambda e:None)
+    assert captured['ref_images']=={} and captured['ref_videos']=={} and captured['ref_audios']=={}
+    assert ('turbo_applied',True,True) in calls and ('turbo_sample',) in calls
+    assert any('Ref2VA.safetensors' in str(c) for c in calls)
 
 
 def test_performance_excludes_asset_ids_and_separates_modes(monkeypatch,tmp_path):

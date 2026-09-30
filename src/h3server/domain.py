@@ -198,13 +198,13 @@ class GenerationSettings:
         frames = bool(self.first_frame or self.last_frame)
         if ((self.input_mode == 'text' and (ids or frames)) or
             (self.input_mode == 'frames' and (not frames or ids)) or
-            (self.input_mode == 'references' and (not ids or frames))):
+            (self.input_mode == 'references' and frames)):
             raise ValueError('Assets do not match input mode')
         if self.input_mode != 'text':
             if self.profile not in PRUNED_PROFILE_NAMES:
                 raise ValueError('Conditioned inputs require a pruned runtime profile')
-            if self.turbo_lora or self.sparse_preset != 'off':
-                raise ValueError('Turbo and sparse are not verified with conditioned inputs; disable them')
+            if self.sparse_preset != 'off':
+                raise ValueError('Sparse attention is not verified with conditioned inputs; select Sparse: Off')
         if self.input_mode == 'references' and self.reference_artifact_digest is None:
             from h3server.backends.reference import DIGEST
             object.__setattr__(self, 'reference_artifact_digest', DIGEST)

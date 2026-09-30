@@ -9,5 +9,9 @@ fields['input-mode'].value='frames';assert.match(c.conditioningReasons().join(' 
 c.assetDraft.first_frame=[{id:'a'.repeat(64)}];assert.equal(c.conditioningBody().first_frame,'a'.repeat(64));assert.equal(c.conditioningReasons().length,0);
 fields['input-mode'].value='references';c.assetDraft.reference_audios=[{id:'b'.repeat(64)}];assert.equal(c.conditioningBody().reference_audios.length,1);assert.equal(c.conditioningBody().first_frame,undefined);
 c.referenceState.installed=false;assert.match(c.conditioningReasons().join(' '),/Ref2VA/);
-fields['use-turbo'].checked=true;assert.match(c.conditioningReasons().join(' '),/Turbo/);
+c.referenceState.installed=true;c.assetDraft.reference_audios=[];
+fields['use-turbo'].checked=true;assert.equal(c.conditioningReasons().length,0,'Sage/Turbo with optional empty references must not be blocked');
+assert.equal(c.conditioningBody().input_mode,'references','Empty references must keep the explicitly chosen Ref2VA model');
+fields['sparse-preset'].value='quality';assert.match(c.conditioningReasons().join(' '),/Sparse/);
+assert.doesNotMatch(c.conditioningReasons().join(' '),/Turbo/);
 console.log('Conditioning modes isolate assets, preserve text requests and expose real blockers');

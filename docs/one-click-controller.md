@@ -72,7 +72,9 @@ an idle queue and confirms the MiniMax H3 Community License. Restore/connect nev
 starts a download. Runtime caching switches diffusion weights and retains the
 encoder where safe rather than keeping two large diffusion models resident.
 
-Upload up to 9 images, 3 videos and 3 audio files. Use `<Picture 1>`, `<Video 1>`
+Reference attachments are optional: with none selected, the prompt runs on the
+selected Ref2VA checkpoint (not an implicit switch to FL2VA). Upload up to 9
+images, 3 videos and 3 audio files. Use `<Picture 1>`, `<Video 1>`
 and `<Audio 1>` tags in prompts; numbering follows the order within each type.
 Removing an attachment renumbers its type, so adjust prompt tags. Video references
 use visuals only; upload audio separately for sound references. Videos resample
@@ -90,8 +92,11 @@ paths are never accepted. Source bytes and metadata live under owner-only
 symlink substitution and changed content. Browser uploads retain CSRF/origin and
 SSH host-key protections; authenticated previews support byte ranges.
 
-Turbo and sparse combinations remain explicitly blocked for conditioned inputs.
-SageAttention follows the existing compatible-kernel fallback policy. Larger
+SageAttention and Turbo can be used with reference and frame inputs. Turbo keeps
+its existing supported-profile, 4–8-step and pinned-adapter requirements.
+Sparse attention remains blocked for conditioned inputs; its warning appears
+only when sparse is actually selected. SageAttention follows the existing
+compatible-kernel fallback policy. Larger
 assets increase memory pressure; target acceptance used small fixtures, not the
 maximum counts/resolution/duration. Timing exports separate input modes and
 conditioning geometry, omitting source hashes, filenames and media contents.
