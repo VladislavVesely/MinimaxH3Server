@@ -1,0 +1,14 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('src/h3server/web/app.js','utf8');
+const start=source.indexOf("    $('generate').disabled = busy || generationReasons.length > 0;");
+assert.ok(start>=0);
+const end=source.indexOf("    $('generate-disabled-reason').hidden",start);
+let label='Queue generation',writes=0;const button={disabled:false,get textContent(){return label;},set textContent(v){label=v;writes++;}};
+const c=vm.createContext({$:()=>button,busy:false,generationReasons:[],submittingGeneration:false});
+vm.runInContext('function update(){'+source.slice(start,end)+'}',c);
+c.update();c.update();assert.equal(writes,0,'Blur/poll renders must preserve the button text node: WebKit otherwise loses the pending click');
+c.busy=true;c.submittingGeneration=true;c.update();assert.equal(label,'Submitting…');assert.equal(button.disabled,true);assert.equal(writes,1);
+c.update();assert.equal(writes,1);
+c.busy=false;c.submittingGeneration=false;c.update();assert.equal(label,'Queue generation');assert.equal(button.disabled,false);assert.equal(writes,2);
+c.generationReasons=['fixture blocker'];c.update();assert.equal(button.disabled,true);assert.equal(writes,2);
+console.log('Queue button preserves text identity across blur/polls and still updates submission state/blockers');

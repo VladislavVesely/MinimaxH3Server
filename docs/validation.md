@@ -1,5 +1,23 @@
 # Validation and acceptance status
 
+## Queue first-click preservation
+
+Reproduced missing first-click submissions in the installed WebKit engine after
+editing seed, prompt or duration. Event traces showed an enabled button at unchanged
+coordinates, mouse-down → field change/blur → mouse-up, but no click/submit. Chrome
+did not reproduce it. The change handler called render, which unconditionally
+replaced the Queue button's text node. Changing only that assignment to preserve
+unchanged text made the same WebKit cases submit on their first click.
+
+A red/green JS regression checks text identity across repeated renders, real label
+changes, busy state and blockers. Five focused JS scripts passed. The rebuilt
+controller passed first-click tests after edits to seed, prompt, steps, duration
+and Turbo strength, plus keyboard submission and rapid-double-click deduplication,
+in Chrome and the installed WebKit engine. All generation POSTs were intercepted;
+no GPU jobs were created. An initial verification run timed out waiting for the
+control to re-enable; the instrumented rerun and subsequent Chrome run passed.
+No pointer-down submission workaround, validation bypass or automatic retry added.
+
 ## Clone visual-asset dimensions
 
 Six focused JS scripts passed: asset dimensions, resolution presets, reference

@@ -440,7 +440,10 @@
     $('use-turbo').disabled = sparseOn && !$('use-turbo').checked;
     const generationReasons = generationBlockReasons();
     $('generate').disabled = busy || generationReasons.length > 0;
-    $('generate').textContent = submittingGeneration ? 'Submitting…' : 'Queue generation';
+    const generationLabel = submittingGeneration ? 'Submitting…' : 'Queue generation';
+    // A blur/change render can run between mouse-down and mouse-up. Replacing
+    // the unchanged text node here makes WebKit discard that pending click.
+    if ($('generate').textContent !== generationLabel) $('generate').textContent = generationLabel;
     $('generate-disabled-reason').hidden = generationReasons.length === 0;
     $('generate-disabled-reason').textContent = generationReasons.length ? 'Cannot queue generation: ' + generationReasons.join(' ') : '';
     $('models-status').textContent = !authenticated ? 'Resident model status unavailable while disconnected.'
