@@ -52,6 +52,7 @@
   let inputModes = ['text'];
   let referenceState = {};
   let assetEpoch = 0;
+  const assetDimensionUpdates = [];
   const assetDraft = {reference_images:[], reference_videos:[], reference_audios:[], first_frame:[], last_frame:[]};
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
 
@@ -430,6 +431,7 @@
     $('dashboard-refresh').disabled = !available || !authenticated;
     $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
     for (const field of Object.keys(assetDraft)) $('upload-' + field).disabled = busy || referenceState.busy;
+    for (const update of assetDimensionUpdates) update();
     $('install-reference').disabled = !available || !authenticated || busy || setup.busy || referenceState.busy || referenceState.installed || !referenceState.supported;
     const sparseOn = $('sparse-preset').value !== 'off';
     $('sparse-generation-state').textContent = $('use-turbo').checked ? 'Turbo selected: keep sparse Off, or turn Turbo off to use sparse (20 steps).'
@@ -1281,6 +1283,25 @@
     $('width').value = size[0]; $('height').value = size[1];
     syncResolutionPresets();
   }
+  function assetDimensions(asset) {
+    if (!['image', 'video'].includes(asset.kind) || ![asset.width, asset.height].every(n => Number.isSafeInteger(n) && n > 0)) return null;
+    const width = Math.max(32, Math.round(asset.width / 32) * 32);
+    const height = Math.max(32, Math.round(asset.height / 32) * 32);
+    const exact = width === asset.width && height === asset.height;
+    const fits = canvasFits(width, height);
+    const message = `Source ${asset.width} × ${asset.height} → output ${width} × ${height}. `
+      + (exact ? 'Exact 32 px-aligned match. ' : 'Rounded to the nearest 32 px (ties round up, minimum 32); not an exact match. Aspect ratio may change. ')
+      + 'Source file unchanged.'
+      + (fits ? '' : ' This size exceeds the daemon’s axis or canvas-area limits. Choose a smaller output size manually.');
+    return {width, height, exact, fits, message};
+  }
+  function applyAssetDimensions(asset) {
+    const size = assetDimensions(asset);
+    if (busy || !size?.fits) return false;
+    $('width').value = size.width; $('height').value = size.height;
+    syncResolutionPresets(); render(); scheduleEstimate();
+    return true;
+  }
   function conditioningBody() {
     const mode = $('input-mode').value;
     if (mode === 'text') return {};
@@ -1307,7 +1328,8 @@
     $('input-mode-status').hidden = inputModes.includes(mode);
     $('input-mode-status').textContent = inputModes.includes(mode) ? '' : 'This daemon/profile does not support this input mode. First/last frames require a pruned profile; references currently require ConvRot INT8.';
     $('reference-model-status').textContent = referenceState.installed ? 'Ref2VA INT8 checkpoint verified and available.' : referenceState.busy ? `Downloading Ref2VA: ${Math.round((referenceState.completed || 0)/1048576)} / ${Math.round((referenceState.total || 0)/1048576)} MiB` : referenceState.error || 'References require a separate ~21 GB INT8 checkpoint (~42 GB disk with its verified runtime copy). Your FL2VA model is preserved.';
-    if (!rebuild) return;
+    if (!rebuild) { for (const update of assetDimensionUpdates) update(); return; }
+    assetDimensionUpdates.length = 0;
     for (const [field, assets] of Object.entries(assetDraft)) {
       const root = $('assets-' + field); root.replaceChildren();
       assets.forEach((asset,index) => {
@@ -1319,6 +1341,21 @@
         if (asset.kind === 'image') { preview.alt = label; preview.loading = 'lazy'; }
         else { preview.controls = true; preview.preload = 'metadata'; }
         card.append(preview);
+        if (assetDimensions(asset)) {
+          const dimensions = node('button', 'Use dimensions', 'secondary'); dimensions.type = 'button';
+          const note = node('p', undefined, 'field-hint asset-dimensions'); note.setAttribute('role', 'status');
+          note.id = `asset-dimensions-${field}-${index}`; dimensions.setAttribute('aria-describedby', note.id);
+          const update = () => {
+            const size = assetDimensions(asset);
+            dimensions.disabled = busy || !size.fits;
+            dimensions.title = size.fits ? 'Copy these aligned dimensions into the generation Width and Height' : 'Rounded dimensions exceed the daemon’s limits';
+            const current = Number($('width').value) === size.width && Number($('height').value) === size.height;
+            const message = size.message + (current ? ' Current output uses this size.' : '');
+            if (note.textContent !== message) note.textContent = message;
+          };
+          dimensions.addEventListener('click', () => { applyAssetDimensions(asset); update(); });
+          assetDimensionUpdates.push(update); update(); card.append(dimensions, note);
+        }
         const remove = node('button', 'Remove', 'secondary'); remove.type = 'button';
         remove.addEventListener('click', () => { assetDraft[field].splice(index,1); showInputAssets(); render(); scheduleEstimate(); });
         card.append(remove); root.append(card);

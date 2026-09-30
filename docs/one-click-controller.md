@@ -90,6 +90,14 @@ Reference attachments are optional: with none selected, the prompt runs on the
 selected Ref2VA checkpoint (not an implicit switch to FL2VA). Upload up to 9
 images, 3 videos and 3 audio files. Use `<Picture 1>`, `<Video 1>`
 and `<Audio 1>` tags in prompts; numbering follows the order within each type.
+Each visual preview (first/last frame, reference image or video) offers **Use
+dimensions**. It copies the source width/height to the output, independently rounded
+to the nearest multiple of 32 (ties upward, minimum 32). The preview shows original
+→ output dimensions and explains when this is not an exact match; aspect ratio may
+change. Oversized results are disabled with an explanation, not silently downscaled.
+Audio has no dimensions button. This changes the generation canvas, never the
+source file, and updates presets and timing estimates.
+
 Removing an attachment renumbers its type, so adjust prompt tags. Video references
 use visuals only; upload audio separately for sound references. Videos resample
 to 24fps, are limited to the output length and shorten to H3's 17n+5 frame grid.

@@ -1,5 +1,21 @@
 # Validation and acceptance status
 
+## Clone visual-asset dimensions
+
+Six focused JS scripts passed: asset dimensions, resolution presets, reference
+inputs, estimate refresh, generation blockers and job deletion. Regression cases
+include exact sizes, nearest-32 rounding/ties/minimum, portrait, video, invalid or
+nonvisual metadata, axis/area limits, busy-state protection and synchronized
+presets/estimates. No Python runtime behavior changed.
+
+Rebuilt-native browser checks used intercepted upload-metadata fixtures for first
+and last frames, reference images/video/audio, portrait 1080×1920 → 1088×1920,
+video 1920×1080 → 1920×1088, exact sizes and oversized-source rejection. Verified
+mismatch notices, audio exclusion, unchanged preview identity through a background
+poll and 375px layout. No server files or GPU jobs were created. Screenshot:
+`/tmp/h3-asset-dimensions.png`. This is UI acceptance, not new resolution inference
+evidence. Source media is never modified.
+
 ## Explicit job deletion
 
 185 focused Python tests passed across deletion, worker, API, store/replay,
