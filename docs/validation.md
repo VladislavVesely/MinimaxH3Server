@@ -629,3 +629,9 @@ Validation: **80 focused Python tests**, nine JS checks, native Chrome/WebKit in
 ### All model-option labels
 
 Removed the compatibility condition that suppressed installation labels. Every catalog option now has a status; incompatible profiles retain Installed/Not installed plus a separate “Requires different runtime” annotation. Profiles omitted by the daemon (or not yet observed) explicitly show “Installation status unknown” rather than a guessed state. Ten focused Python UI tests and three JS checks passed. Read-only native Chrome and WebKit checks verified labels on all seven options, including GGUF alternatives, with zero remote mutations. This is controller-only; no daemon restart or download was required.
+
+## Opt-in trusted LAN controller
+
+`--lan-ip` binds an explicit RFC1918 IPv4 interface, with a per-process private access-key file and browser login. Default loopback behavior, one-use bootstrap, exact Host/Origin, cookies, CSRF and request limits remain. LAN peers are checked independently of untrusted forwarding headers. LAN HTTP uses cryptographic `getRandomValues` IDs rather than secure-context-only `randomUUID`.
+
+Validation: **107 focused Python tests**, three JS checks, packaged Chrome/WebKit bare-address login at the Mac's private HTTP origin (confirmed `isSecureContext=false`), repeated key login from separate browsers, owner-only key-file permissions, and no remote mutations. An independent HTTP request from the Ubuntu machine reached `192.168.1.61:8787`: access mode returned 200 and unauthenticated controller status returned 401. The running socket binds only that address. No server daemon restart, model download, generation, router change, or closure of older controllers was performed. HTTP remains unencrypted and is not an Internet-exposure feature.

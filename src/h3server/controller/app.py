@@ -1,4 +1,4 @@
-"""Local-only controller factory; the launcher must bind to loopback, not 0.0.0.0.
+"""Controller factory: loopback by default, explicitly authenticated private LAN optional.
 
 Supply the exact listener origin (including its port). Launch the browser at
 ``origin + '/#token=' + app.state.session.bootstrap_token``; the fragment never
@@ -70,8 +70,9 @@ class LocalSecurity:
     messages). A total receive deadline also prevents an endless slow body.
     """
 
-    def __init__(self, app, *, origin: str, session: BrowserSession):
+    def __init__(self, app, *, origin: str, session: BrowserSession, lan=False):
         self.app = app
+        self.lan = lan
         self.origin = origin
         self.authority = urlsplit(origin).netloc
         self.session = session
@@ -93,6 +94,11 @@ class LocalSecurity:
         async def reject(code, status):
             await _error(code, status)(scope, receive, secured_send)
 
+        if self.lan:
+            from h3server.controller.lan import lan_peer
+            if not lan_peer((scope.get('client') or ('',))[0]):
+                await reject('lan_peer_forbidden',403)
+                return
         headers = {}
         for name, value in scope["headers"]:
             headers.setdefault(name.decode("latin-1").lower(), []).append(value.decode("latin-1"))
@@ -107,8 +113,8 @@ class LocalSecurity:
         if unsafe and scope.get("query_string"):
             await reject("invalid_request", 422)
             return
-        bootstrap = scope["path"] == API + "/bootstrap"
-        public = (scope["path"] == "/" or scope["path"] in WEB_ASSETS) and scope["method"] in {"GET", "HEAD"}
+        bootstrap = scope["path"] == API + "/bootstrap" or (self.lan and scope['path'] == API + '/lan-login')
+        public = (scope["path"] in {"/", API + '/access'} or scope["path"] in WEB_ASSETS) and scope["method"] in {"GET", "HEAD"}
         if not public and not bootstrap:
             cookie_headers = headers.get("cookie", [])
             cookies = SimpleCookie()
@@ -259,13 +265,18 @@ class ActionRequest(StrictRequest):
 
 def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None = None,
                connection: SSHConnection | None = None, socket_factory=socket.create_connection,
-               transport_factory=paramiko.Transport, release=None) -> FastAPI:
+               transport_factory=paramiko.Transport, release=None, lan_access_key: str | None = None) -> FastAPI:
     """No network/FS actions at construction; all SSH/scan IO runs in workers.
 
     A supplied connection/session supports embedding and tests. Credentials are
     accepted only at the explicit authenticate step after host-key trust.
     """
     match = re.fullmatch(r"http://(127\.0\.0\.1|localhost|\[::1\]):([1-9][0-9]{0,4})", origin)
+    if lan_access_key is not None:
+        from h3server.controller.lan import private_ipv4
+        match = re.fullmatch(r'http://([0-9.]+):([1-9][0-9]{0,4})',origin)
+        if not match or not private_ipv4(match[1]) or len(lan_access_key)<32:
+            raise ValueError('LAN mode requires an exact private IPv4 origin and an access key')
     if not match or int(match[2]) > 65535:
         raise ValueError("origin must be an exact loopback HTTP origin with an explicit port")
     session = session if session is not None else BrowserSession()
@@ -331,7 +342,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     app.state.recovery = recovery
     app.state.setup = setup
     app.state.joiner = joiner
-    app.add_middleware(LocalSecurity, origin=origin, session=session)
+    app.add_middleware(LocalSecurity, origin=origin, session=session, lan=lan_access_key is not None)
 
     @app.exception_handler(JoinerError)
     async def joiner_error(request, exc):
@@ -396,6 +407,28 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             raise HTTPException(status_code=404)
         filename, media_type = selected
         return Response(files("h3server").joinpath("web", filename).read_bytes(), media_type=media_type)
+
+    @app.get(API + '/access')
+    def access_mode():
+        return {'lan':lan_access_key is not None}
+
+    login_attempts = []
+    @app.post(API + '/lan-login')
+    async def lan_login(body: BootstrapRequest):
+        import hmac, time
+        if lan_access_key is None:
+            raise ControllerError('lan_disabled',404)
+        now=time.monotonic()
+        login_attempts[:] = [t for t in login_attempts if now-t<60]
+        if len(login_attempts)>=10:
+            raise ControllerError('lan_login_rate_limited',429)
+        login_attempts.append(now)
+        if not hmac.compare_digest(body.token.get_secret_value().encode('utf-8',errors='surrogatepass'),lan_access_key.encode()):
+            raise ControllerError('lan_login_invalid',401)
+        cookie,csrf=session.authorize_lan()
+        response=JSONResponse({'csrf_token':csrf})
+        response.set_cookie('h3_session',cookie,httponly=True,samesite='strict',path='/',max_age=int(session.session_ttl))
+        return response
 
     @app.post(API + "/bootstrap")
     async def bootstrap(body: BootstrapRequest):

@@ -43,6 +43,14 @@ class BrowserSession:
             self._session_expires = self._clock() + self.session_ttl
             return self._cookie, self._csrf
 
+    def authorize_lan(self) -> tuple[str, str]:
+        """Called only after the controller has verified its LAN access key."""
+        with self._lock:
+            self._consumed = True
+            self.bootstrap_token = ''
+            self._session_expires = self._clock() + self.session_ttl
+            return self._cookie, self._csrf
+
     def authenticated(self, cookie: str) -> bool:
         with self._lock:
             matches = self._equal(cookie, self._cookie)

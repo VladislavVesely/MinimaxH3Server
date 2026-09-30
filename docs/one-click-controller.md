@@ -557,6 +557,22 @@ trusted predecessor recovery with a legacy log. They do not run pip, CUDA, codec
 model downloads or real server installation, and do not establish the original
 transient PyAV lookup cause.
 
+## Trusted LAN access (optional)
+
+Localhost remains the default. For direct access from other devices on your trusted LAN:
+
+```sh
+./dist/h3-controller --lan-ip 192.168.1.61 --port 8787
+```
+
+Replace the IP with an RFC1918 IPv4 address assigned to the controller computer. Open `http://192.168.1.61:8787` on the other device. No SSH tunnel or macOS Remote Login is needed for browser access. The existing controller-to-GPU-server SSH connection is unchanged.
+
+The launcher prints the path of an owner-only `lan-access-*.txt` file in its state directory (on macOS, `~/Library/Application Support/H3Server/`). Enter that file's access key in the LAN login form. Keys are regenerated on each launch and become invalid when that controller exits. The key grants **full control**, including saved-server access; browsers share controller connection/workspace state, not separate user accounts.
+
+**HTTP is unencrypted**, including login/session data and anything entered into the page. Use only on a trusted LAN; never configure router port forwarding. If macOS asks, allow incoming connections for this executable. Guest Wi-Fi isolation or firewall rules can still block another device. Only the supplied private IPv4 interface is bound; exact Host/Origin checks, cookies, CSRF and private-peer checks remain enabled. Forwarded headers are not trusted. Public IPs, wildcard binding and arbitrary hostnames are refused.
+
+Start another controller rather than stopping one holding joiner work. To disable sharing, stop only that LAN controller. Stale access-key files can then be removed; they no longer authorize anything.
+
 ## Installing another model
 
 Select another profile and click **Install**. Compatible profiles (for example ConvRot INT8 and mixed INT4/INT8) reuse the verified runtime instead of entering failed-setup recovery. The progress bar counts downloaded, verified and reused bytes. Matching pinned encoder/VAE files are verified and privately reflinked or copied; originals are never hardlinked, removed or overwritten. Mixed currently shares about 20 GB of its roughly 35.9 GB snapshot with INT8.

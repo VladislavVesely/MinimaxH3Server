@@ -29,6 +29,11 @@
       <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">LET’S BUILD SOMETHING LOCAL</p><h1 id="page-title">Your server. Your studio.</h1><p>Start with a secure connection. Understand your hardware before making a single change.</p></div><span class="pill">EXPERIMENTAL LOCAL RUNTIME</span></section>
       <div class="assurances"><span><b aria-hidden="true">↗</b> SSH transport</span><span><b aria-hidden="true">◇</b> Explicit fingerprint trust</span><span><b aria-hidden="true">○</b> Consent before changes</span></div>
       <noscript><p class="notice">JavaScript is required for the local setup UI. No connection or installation has been started.</p></noscript>
+      <section id="lan-access" hidden aria-labelledby="lan-access-title">
+        <h2 id="lan-access-title">LAN access</h2>
+        <p>This connection uses unencrypted HTTP. Use only on your trusted LAN. Enter the access key saved on the controller computer.</p>
+        <form id="lan-login-form"><label for="lan-access-key">Access key</label><input id="lan-access-key" type="password" autocomplete="current-password" required maxlength="128"><button type="submit">Unlock controller</button></form>
+      </section>
       <div id="error" class="error-box" role="alert" tabindex="-1" hidden></div>
       <div class="work-grid"><div class="setup-panels">
         <section class="panel" id="connection" aria-labelledby="connection-heading">

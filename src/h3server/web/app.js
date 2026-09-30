@@ -220,6 +220,8 @@
     staging_lock_unavailable: 'Another controller or installer owns staging, or its lock could not be verified. Stop other controllers and wait for existing work before retrying Install.',
     staging_lock_lost: 'The staging connection or lock was lost. Reconnect and inspect saved state before retrying; no installation was replayed.',
 
+    lan_login_invalid: 'Incorrect LAN access key. Read the key file on the controller computer.',
+    lan_login_rate_limited: 'Too many login attempts. Wait one minute and retry.',
     bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
     session_required: 'Local session unavailable or expired. Open a fresh launch URL from the local controller.',
     csrf_forbidden: 'The local session changed. Reload this page before trying again.',
@@ -895,7 +897,7 @@
   $('retry-setup').addEventListener('click', () => perform('Retrying the eligible failed stage; completed work is preserved…', async () => {
     if (!setup.retry?.eligible) return;
     pendingRetry ||= {profile: setup.profile, artifact_set_digest: setup.artifact_set_digest,
-      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, plan_digest: setup.plan_digest, request_id: crypto.randomUUID()};
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, plan_digest: setup.plan_digest, request_id: requestId()};
     try {
       const result = await request('/setup/retry', pendingRetry);
       inspectedSetup = null;
@@ -945,6 +947,10 @@
     if (value.error) return available + `Last ${profileLabel(value.profile)} installation ${value.state === 'cancelled' ? 'cancelled' : 'failed'}: ${value.error}. Click Install to retry; installed models remain available.`;
     if (value.state === 'installed') return available + `${profileLabel(value.profile)} is installed and available in Generation profile. Existing verified files are reused, not downloaded again.`;
     return available + 'Installed models are available in Generation profile. Select a model marked Not installed and click Install to add it; shared files are verified and reused.';
+  }
+  function requestId() {
+    // getRandomValues remains available on private-LAN HTTP; randomUUID does not.
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
   }
   function modelOptionStatus(value, name) {
     if (value?.busy && value.profile === name) return 'Installing…';
@@ -1017,7 +1023,7 @@
     // Retain only the public intent ID across an ambiguous response, never secrets.
     await savePreferences();
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest,
-      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, request_id: crypto.randomUUID() };
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, request_id: requestId() };
     try {
       const result = await request('/setup/start', pendingInstall);
       inspectedSetup = null;
@@ -1767,6 +1773,17 @@
   window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateAbort?.abort(); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
   window.addEventListener('pageshow', event => { if (!event.persisted || pageActive) return; pageActive = true; estimateKey = null; timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000); scheduleEstimate(); void refresh().then(() => { if (connection.state === 'authenticated' && setup.installation_ready && !setup.busy) return dashboard(); }).catch(error => showError(error, false)); });
 
+  $('lan-login-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const token = $('lan-access-key').value;
+    $('lan-access-key').value = '';
+    try {
+      csrf = (await request('/lan-login', {token})).csrf_token;
+      $('lan-access').hidden = true;
+      $('error').hidden = true;
+      await start();
+    } catch (error) { showError(error); }
+  });
   async function start() {
     busy = true;
     render();
@@ -1806,6 +1823,17 @@
       ready = false;
       $('session').textContent = 'Local session unavailable';
       $('operation').textContent = 'A valid local session is required.';
+      try {
+        if ((await request('/access')).lan) {
+          $('lan-access').hidden = false;
+          $('lan-access-key').focus();
+          if (['session_required', 'bootstrap_invalid'].includes(error.code)) {
+            $('error').hidden = true;
+            $('operation').textContent = 'Enter the LAN access key to unlock this controller.';
+            return;
+          }
+        }
+      } catch (_) { /* Original session error remains authoritative. */ }
       showError(error);
     } finally {
       bootstrapToken = null;
