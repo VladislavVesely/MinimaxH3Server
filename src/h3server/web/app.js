@@ -40,6 +40,8 @@
   let dashboardEpoch = 0;
   let dashboardRequest = 0;
   const jobCards = new Map();
+  const videoPreviews = new WeakMap();
+  let previewObserver = null;
   const jobLogs = new Map();
   const jobPhases = new Map();
   let selectedJob = null;
@@ -320,6 +322,7 @@
       showInputAssets();
       resetDashboardPolling();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
+      releaseVideoPreviews($('jobs'));
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
       renderJobTabs();
       if (!setup.busy && setup.state === 'idle') clearScan();
@@ -1076,6 +1079,39 @@
     }
     showJobTerminal();
   }
+  function prepareVideoPreview(video, url, notice) {
+    video.preload = 'none'; video.playsInline = true;
+    notice.textContent = 'Preview loads when visible.'; notice.hidden = false;
+    videoPreviews.set(video, {url, notice, started:false});
+    video.addEventListener('loadeddata', () => { notice.hidden = true; });
+    video.addEventListener('error', () => {
+      notice.hidden = false;
+      notice.textContent = video.error?.code === 3 || video.error?.code === 4
+        ? 'This browser could not decode the video preview. The original MP4 is available through Download MP4.'
+        : 'Preview could not load. Check the connection or whether the output expired; Download MP4 remains available for existing outputs.';
+    });
+    if (typeof IntersectionObserver === 'undefined') { startVideoPreview(video); return; }
+    if (!previewObserver) previewObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) startVideoPreview(entry.target);
+    }, {rootMargin:'240px 0px'});
+    previewObserver.observe(video);
+  }
+  function startVideoPreview(video) {
+    const state = videoPreviews.get(video);
+    if (!state || state.started) return;
+    state.started = true;
+    previewObserver?.unobserve(video);
+    state.notice.textContent = 'Loading video preview…'; state.notice.hidden = false;
+    // WebKit metadata-only preload leaves a gray player without a decoded frame.
+    // Only nearby visible players load media, not every card in hidden history.
+    video.preload = 'auto'; video.src = state.url; video.load();
+  }
+  function releaseVideoPreviews(root) {
+    for (const video of root.querySelectorAll('video')) {
+      previewObserver?.unobserve(video); videoPreviews.delete(video);
+      video.pause(); video.removeAttribute('src'); video.load();
+    }
+  }
   async function fetchLastFrame(jobId) {
     const response = await fetch(API + '/remote/jobs/' + jobId + '/last-frame', {credentials:'same-origin', cache:'no-store', redirect:'error'});
     if (!response.ok) {
@@ -1122,7 +1158,7 @@
     const present = new Set(jobs.map(job => job.job_id));
     for (const [id, card] of jobCards) {
       if (!present.has(id)) {
-        for (const video of card.output.querySelectorAll('video')) { video.pause(); video.removeAttribute('src'); video.load(); }
+        releaseVideoPreviews(card.output);
         card.item.remove(); jobCards.delete(id); jobLogs.delete(id); jobPhases.delete(id);
       }
     }
@@ -1202,12 +1238,15 @@
         : job.output?.expired ? 'expired' : null;
       if (identity === card.outputIdentity) continue;
       card.outputIdentity = identity;
+      releaseVideoPreviews(card.output);
       card.output.replaceChildren();
       if (available) {
         const url = API + '/remote/jobs/' + job.job_id + '/video';
-        const video = node('video'); video.controls = true; video.preload = 'metadata'; video.src = url;
-        const error = node('p', 'Preview unavailable or output expired. Refresh the dashboard.'); error.hidden = true;
-        video.addEventListener('error', () => { error.hidden = false; });
+        const video = node('video'); video.controls = true;
+        const dimensions = job.request?.settings;
+        if (dimensions?.width > 0 && dimensions?.height > 0) { video.width = dimensions.width; video.height = dimensions.height; }
+        const error = node('p'); error.setAttribute('role', 'status');
+        prepareVideoPreview(video, url, error);
         const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
         const actions = node('div', undefined, 'job-output-actions');
         actions.append(link, lastFrameButton(job.job_id, false), lastFrameButton(job.job_id, true));

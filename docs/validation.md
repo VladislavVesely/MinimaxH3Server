@@ -1,5 +1,25 @@
 # Validation and acceptance status
 
+## History video preview loading
+
+Reproduced a gray WebKit preview: after metadata loading, readyState remained 1
+with no decoded frame, though native playback and HTTP 206 byte-range streaming
+worked. The page also preloaded every output, including hidden history cards.
+Changing only preload to auto on an isolated video produced readyState 4 before
+Play. The fix applies that behavior only to players near the visible viewport,
+using IntersectionObserver; hidden history no longer eagerly fetches every MP4.
+Intrinsic dimensions reserve layout space, with inline playback and visible
+loading/decoding-error feedback. Polling never resets an initialized player.
+Removed, expired and disconnected cards release observation and media resources.
+
+Five focused JS scripts passed. Rebuilt-native WebKit and Chrome checks used two
+existing owned generated clips: zero media requests while History was hidden,
+actual first-frame pixels before Play, native playback controls (WebKit mouse,
+Chrome keyboard), continuing playback across a dashboard poll and seeking.
+Screenshots: `/tmp/h3-playback-webkit.png`, `/tmp/h3-playback-chrome.png`.
+No files were rewritten/transcoded and no job mutations or inference were run.
+The browser test harness was corrected to drain pending routes before teardown.
+
 ## Uncompressed last-frame PNG export
 
 Local focused tests: 91 passed, one codec test skipped because the controller

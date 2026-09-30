@@ -45,6 +45,13 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Video previews
+
+Current and History load video previews near the visible viewport, rather than
+preloading the whole history. The player loads a decoded frame before Play, shows
+loading/error feedback and retains playback through dashboard refreshes. Preview
+and Download MP4 use the same original video; no lower-quality transcode is made.
+
 ## Export the last video frame
 
 Available completed videos in Current and History offer **Download last frame
