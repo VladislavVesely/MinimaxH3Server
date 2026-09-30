@@ -20,6 +20,10 @@
   let pageActive = true;
   let jobCursor = 0;
   let runtimeReady = false;
+  let modelState = {};
+  let performanceAvailable = false;
+  let estimateTimer = null;
+  let estimateEpoch = 0;
   let backendCapabilities = {};
   let profileCatalog = [];
   let activeProfileKey = null;
@@ -150,6 +154,7 @@
   }
 
   const messages = {
+    models_busy_wait_for_queue_and_maintenance: 'Models cannot be unloaded while jobs are running or queued, or during maintenance. Wait for these operations to finish.',
     invalid_checkpoint: 'The saved setup record is incomplete or inconsistent. Keep the checkpoint files and inspect the original plan and deployment record; nothing was started or retried.',
     setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
     saved_connection_missing: 'No saved connection is available. Enter the SSH details and authenticate once.',
@@ -280,6 +285,10 @@
     if (data.setup) showSetup(!data.setup.busy && inspectedSetup ? inspectedSetup : data.setup);
     if (data.state !== 'authenticated') {
       runtimeReady = false;
+      modelState = {}; performanceAvailable = false;
+      clearTimeout(estimateTimer); estimateEpoch++;
+      $('generation-estimate').textContent = 'Connect to obtain a timing estimate.';
+      $('estimate-details').hidden = true;
       sageState = { installed: false, busy: false, supported: false };
       turboState = { installed: false, busy: false, supported: false };
       sparseState = { installed: false, busy: false, supported: false };
@@ -408,6 +417,17 @@
     $('generate').disabled = generationReasons.length > 0;
     $('generate-disabled-reason').hidden = generationReasons.length === 0;
     $('generate-disabled-reason').textContent = generationReasons.length ? 'Cannot queue generation: ' + generationReasons.join(' ') : '';
+    $('models-status').textContent = !authenticated ? 'Resident model status unavailable while disconnected.'
+      : !modelState.supported ? 'Retained models are not available for this daemon/runtime.'
+      : modelState.loaded ? (modelState.busy ? 'Generation active. Last completed-run cache: ' : 'Retained components: ') + modelState.components.join(', ').replaceAll('_', ' ') + '. GPU/CPU placement is managed automatically.'
+      : modelState.busy ? 'Generation active; retained-component status will update on completion.'
+      : 'No models currently retained. The next generation loads them; they remain available between jobs where memory permits.';
+    $('unload-models').disabled = !available || !authenticated || !modelState.can_unload;
+    $('unload-models-reason').textContent = !authenticated ? 'Connect to check retained models.'
+      : busy ? 'Wait for the current operation.' : modelState.busy ? 'Cannot unload while jobs are running or queued. Wait for the queue to finish.'
+      : modelState.maintenance ? 'Cannot unload during installation or maintenance.'
+      : !modelState.loaded ? 'No retained models to unload.' : 'Releases retained models from memory, not model files. The next generation will start cold.';
+    $('export-timings').disabled = !available || !authenticated || !performanceAvailable;
     $('steps').min = $('use-turbo').checked ? 4 : 2;
     $('steps').max = $('use-turbo').checked ? 8 : 1000;
     $('turbo-strength').disabled = !$('use-turbo').checked;
@@ -964,6 +984,14 @@
       const live = ['queued', 'running'].includes(job.status);
       const stale = live && (connection.state !== 'authenticated' || age > 15);
       card.timing.textContent = H3JobTiming.timingText(job, stale ? 0 : age) + (stale ? ' (last update)' : '');
+      if (live && job.estimate?.samples > 0) {
+        card.timing.textContent += ' · ' + estimateText(job.estimate);
+        const t = job.timing;
+        if (job.status === 'running' && t && Number.isFinite(t.started_at) && Number.isFinite(t.observed_at)) {
+          const remaining = job.estimate.mean_seconds - (t.observed_at + (stale ? 0 : age) - t.started_at);
+          card.timing.textContent += remaining > 0 ? ' · Roughly ' + timeLabel(remaining) + ' remaining' : ' · Taking longer than the measured average';
+        }
+      }
     }
   }
   const timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
@@ -1064,6 +1092,8 @@
     for (const job of data.jobs) job.timingReceivedAt = performance.now();
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
+    modelState = capability.resident_models || {};
+    performanceAvailable = capability.performance_schema === 1;
     showSage(capability.optional_features?.sage_attention);
     showTurbo(capability.optional_features?.turbo_lora);
     showSparse(capability.optional_features?.sparse_attention);
@@ -1085,6 +1115,7 @@
     const generated = data.jobs.some(job => profiles.includes(job.request?.settings?.profile) && job.status === 'completed' && job.output && !job.output.expired);
     $('readiness').textContent = `Daemon connected. Active backend: ${capability.backend}; profiles: ${profiles.join(', ')}. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
     reconcileJobs(data.jobs);
+    scheduleEstimate();
     await jobEvents(current);
     if (!current()) return;
     render();
@@ -1097,9 +1128,7 @@
     }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy ? 2000 : 5000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', dashboard));
-  $('generation-form').addEventListener('submit', event => {
-    event.preventDefault();
-    perform('Submitting local generation job…', async () => {
+  function generationBody() {
       const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
         ...(sparseState.artifact_digest === capabilities.sparse_artifact_digest ? {
@@ -1109,12 +1138,64 @@
         turbo_strength: Number($('turbo-strength').value), turbo_low_vram: $('turbo-low-vram').checked,
         turbo_artifact_digest: $('use-turbo').checked ? capabilities.turbo_artifact_digest : null };
       if (!$('lora-field').hidden && $('lora').value) body.loras = [$('lora').value];
-      const accepted = await request('/remote/jobs', body);
+      return body;
+  }
+  function timeLabel(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'unavailable';
+    const s = Math.round(seconds);
+    return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  }
+  function estimateText(value) {
+    if (!value || !(value.samples > 0) || !Number.isFinite(value.mean_seconds)) return 'No estimate yet. ' + (value?.reason || 'No matching measured runs.');
+    const spread = value.samples > 1 ? `; observed ${timeLabel(value.minimum_seconds)}–${timeLabel(value.maximum_seconds)}` : '; provisional';
+    return `Estimate ~${timeLabel(value.mean_seconds)} (${value.cache === 'warm_partial' ? 'reused base/encoder, decoder reload' : value.cache === 'encoder_reuse' ? 'encoder retained, other weights reloaded' : value.cache}; ${value.samples} matching ${value.samples === 1 ? 'run' : 'runs'}${spread}). Queue delay excluded.`;
+  }
+  function scheduleEstimate() {
+    clearTimeout(estimateTimer);
+    const epoch = ++estimateEpoch;
+    $('estimate-details').hidden = true;
+    if (!performanceAvailable || connection.state !== 'authenticated') {
+      $('generation-estimate').textContent = 'Timing estimates are not available from this daemon yet.';
+      return;
+    }
+    $('generation-estimate').textContent = 'Checking measurements for these settings…';
+    estimateTimer = setTimeout(async () => {
+      try {
+        const body = generationBody();
+        // Only length affects timing lookup; do not send an unsubmitted prompt.
+        body.prompt = 'x'.repeat(Math.max(1, Math.min(16000, Array.from(body.prompt).length)));
+        const estimate = await request('/remote/performance/estimate', body);
+        if (!pageActive || epoch !== estimateEpoch) return;
+        $('generation-estimate').textContent = estimateText(estimate);
+        $('estimate-details').hidden = !(estimate.samples > 0);
+        $('estimate-phases').textContent = Object.entries(estimate.stages || {}).map(([name, value]) => `${name.replaceAll('_', ' ')}: ~${timeLabel(value.mean_seconds)} (${value.samples} samples)`).join(' · ');
+        $('estimate-steps').textContent = (estimate.sampling_steps || []).map((value, i) => `Step ${i + 1}: ${value.mean_seconds.toFixed(2)}s (${value.samples} samples)`).join('\n');
+      } catch {
+        if (epoch === estimateEpoch) $('generation-estimate').textContent = 'Estimate unavailable. Check the selected settings and connection; no generation was submitted.';
+      }
+    }, 450);
+  }
+  $('generation-form').addEventListener('input', scheduleEstimate);
+  $('generation-form').addEventListener('change', scheduleEstimate);
+  $('unload-models').addEventListener('click', () => perform('Releasing retained models…', async () => {
+    modelState = await request('/remote/models/unload', {});
+    await dashboard();
+  }));
+  $('export-timings').addEventListener('click', () => perform('Preparing local timing data…', async () => {
+    const data = await request('/remote/performance');
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'}));
+    const link = node('a'); link.href = url; link.download = 'h3-performance.json'; document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }));
+  $('generation-form').addEventListener('submit', event => {
+    event.preventDefault();
+    perform('Submitting local generation job…', async () => {
+      const accepted = await request('/remote/jobs', generationBody());
       selectedJob = accepted.job_id || accepted.job?.job_id || null;
       await dashboard();
     });
   });
-  window.addEventListener('pagehide', () => { clearInterval(timingTimer); pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
 
   async function start() {
     busy = true;

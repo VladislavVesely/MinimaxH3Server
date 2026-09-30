@@ -16,7 +16,7 @@ def fixture_backend(tmp_path, body=None):
     script = tmp_path / "fixture_backend.py"
     script.write_text(body or '''import json, pathlib, sys
 request = json.loads(pathlib.Path(sys.argv[2]).read_text())
-print(json.dumps({"stage":"denoising", "status":"running", "message":"secret-password", "progress":{"completed":1,"total":2,"unit":"steps"}}), flush=True)
+print(json.dumps({"stage":"denoising", "status":"running", "message":"password=secret-password", "progress":{"completed":1,"total":2,"unit":"steps"}}), flush=True)
 pathlib.Path(request["output_path"]).write_bytes(b"fixture-mp4")
 ''')
     return Backend(command=(sys.executable, str(script)), readiness=lambda: (), validate_video=lambda fd: os.read(fd, 20) == b"fixture-mp4")

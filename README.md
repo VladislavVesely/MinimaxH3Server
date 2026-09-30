@@ -91,6 +91,18 @@ executable on PATH. To deploy a separately authenticated wheel:
   work. **Turbo + sparse is blocked** because the upstream sparse path bypasses
   some Turbo adapters. Presets are remembered; actual sparse execution/fallback
   is recorded in job output. See [validation and limitations](docs/plans/2026-09-29-sparse-attention.md).
+- **Retained models**: the Comfy/pruned runtime keeps its base model, text encoder
+  and VAEs between jobs where memory permits. GPU/CPU offloading remains automatic;
+  under host-memory pressure, decoder caches—and, if necessary, diffusion weights—
+  may reload while retaining the text encoder rather than exhausting RAM. **Unload models** explicitly releases the idle worker, never model files;
+  queued/running work blocks unload. Native faults, forced cancellation and server
+  shutdown also release the worker. The experimental legacy Diffusers path remains
+  isolated rather than claiming unverified residency.
+- **Timing estimates** use successful, hardware/software/configuration-matched runs,
+  separating cold starts, full reuse and partial reuse. Phase and sampling-step
+  averages expose sample counts and observed spread. No matching samples means no
+  estimate—not a guessed countdown. Prompt-free timing data can be downloaded for
+  future community analysis; nothing is automatically uploaded.
 - Seconds and frames update each other at 24fps. Seconds snap to the nearest valid
   H3 length (`17*n+5`, 124–345 frames); the effective duration is shown explicitly.
 - macOS saved settings: `~/Library/Application Support/H3Server/preferences.json`.

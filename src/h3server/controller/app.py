@@ -584,6 +584,26 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def install_sage(body: EmptyRequest):
         return proxy.request('POST', '/api/v1/features/sageattention', body={})
 
+    @app.get(API + '/remote/models')
+    @observed
+    def remote_models():
+        return proxy.request('GET', '/api/v1/models')
+
+    @app.post(API + '/remote/models/unload')
+    @observed
+    def remote_unload(body: EmptyRequest):
+        return proxy.request('POST', '/api/v1/models/unload', body={})
+
+    @app.post(API + '/remote/performance/estimate')
+    @observed
+    def remote_estimate(body: dict = Body()):
+        return proxy.request('POST', '/api/v1/performance/estimate', body=body)
+
+    @app.get(API + '/remote/performance')
+    @observed
+    def remote_performance(offset: int = Query(default=0, ge=0, le=2**31-1)):
+        return proxy.request('GET', f'/api/v1/performance?offset={offset}')
+
     @app.get(API + '/remote/health')
     @observed
     def remote_health():

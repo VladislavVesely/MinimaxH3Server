@@ -31,7 +31,7 @@ def fake_gates(monkeypatch, rt, paths):
     monkeypatch.setattr(pruned, 'require_consent', lambda p, **kw: calls.append(('consent',kw)))
     monkeypatch.setattr(pruned, 'verify_snapshot', lambda p, **kw: calls.append(('weights',kw)) or paths.models)
     monkeypatch.setattr(pruned, 'verify_provisioned', lambda *a: calls.append(('runtime',a)) or paths.environments)
-    monkeypatch.setattr(pruned, 'load_runtime', lambda *a: rt)
+    monkeypatch.setattr(pruned, 'load_runtime', lambda *a, **kw: rt)
     monkeypatch.setattr(pruned, 'check_gpu', lambda *a: None)
     return calls
 

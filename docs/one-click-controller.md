@@ -56,6 +56,62 @@ as text, never HTML. Missing legacy settings are explicitly marked unavailable.
 Images are not yet a supported input; their durable references must join the job
 request when image support is implemented.
 
+## Retained models and measured estimates
+
+Comfy/pruned generation uses an owned resident child process: the base model,
+text encoder and VAEs remain available between jobs with no idle expiry. This is
+object/component retention, not a claim that every weight stays in VRAM. Standard
+GPU/CPU offloading still applies. On constrained hosts, decoder caches may be
+released immediately before encoder transfer and reloaded for decoding. If this
+is insufficient, the encoder is retained while diffusion weights are reloaded
+after encoding. Changing Turbo variants can also reload the base on constrained
+hosts: merged weights plus anonymous CPU-offload copies require additional RAM;
+reloading restores reclaimable disk-backed weights while keeping the encoder.
+Sparse request-local routing patches rebuild without reloading base weights.
+No downloaded files are deleted. Pageable host memory avoids
+locking most RAM. An unsafe transfer fails clearly rather than exhausting the host.
+
+An explicit **Unload models** action releases the idle worker and its GPU/CPU
+allocations, not downloaded files or history. It rejects running/queued work or
+maintenance. Profile/service changes start a fresh worker. Forced cancellation,
+native faults and shutdown are safety exceptions to retention. The legacy
+Diffusers adapter keeps its previous isolated behavior; its residency is not
+advertised as supported.
+
+APIs (authenticated daemon; corresponding controller `/remote` routes require the
+local session and CSRF for POST):
+- `GET /api/v1/models`: supported/loaded/components/profile/busy/can_unload.
+- `POST /api/v1/models/unload`, body `{}`: idle release; 409 when busy, no force flag.
+- `POST /api/v1/performance/estimate`: normalized generation input; performs no
+  generation, model loading or downloads. The UI sends only placeholder text of
+  equivalent codepoint length, not an unsubmitted prompt.
+- `GET /api/v1/performance?offset=0`: latest 50 successful raw samples, schema version
+  and pagination cursor. The UI downloads one page; nothing uploads automatically.
+
+`state/performance.sqlite` stores unique per-job successful measurements and
+transactional running averages/counts/variance/min/max. It is independent of the
+existing job database and survives output retention. Failures/cancellations never
+enter successful averages; old untimed runs are not reconstructed. Runtime estimate failures do not block generation; save failures are reported
+separately without invalidating a completed video.
+
+Records contain model/artifact identity, all generation settings, LoRA/attention
+choices and actual attention route, prompt-length bucket (not text), GPU/VRAM,
+CPU/RAM, OS, driver/CUDA/Torch/Triton/Sage and runtime-source/environment identities.
+Exports omit job IDs, prompts, credentials, hostnames, device serials/UUIDs and
+filesystem paths. They are self-reported measurements, not trusted community
+attestations. Seeds are recorded but do not split average groups; irrelevant
+inactive Turbo settings are ignored when matching.
+
+Cold, warm, `warm_partial` (base/encoder retained) and `encoder_reuse` (encoder
+retained, other weights reloaded) samples remain separate. Estimates require the same
+measured hardware/software/configuration group; sample count and observed spread
+are shown, not a guaranteed confidence interval. The first sampling-step duration
+includes GPU transfers and sampler/adapter preparation. Missing phases stay
+unavailable; CUDA phase/step boundaries are synchronized. Total execution time
+includes worker startup and independent output validation, excludes queue delay.
+Running jobs can exceed their measured average; the UI says so instead of freezing
+an artificial countdown at zero.
+
 ## Optional sparse attention
 
 Select **Install optional sparse attention**, then Install. Existing environments

@@ -30,6 +30,10 @@ from h3server.remote.worker import BackendUnavailable, QueueFull, Worker, _direc
 from h3server.store import Store
 
 
+class EmptyInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+
 class MaintenanceInput(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     operation: str = Field(pattern=r'^[a-f0-9]{32}$')
@@ -45,7 +49,7 @@ class TurboInstallInput(BaseModel):
 class GenerationInput(BaseModel):
     """Canvas area<=1,032,192 is service policy, not an upstream hard maximum.
 
-    Frames round UP to 17*n+5. Nominal 15 seconds is invalid after alignment.
+    Frames use the nearest supported 17*n+5 alignment; 15 seconds maps to 345 frames.
     Steps map to the runtime sampler (legacy default 50, pruned default 20).
     Denoising progress reports actual stage-local work.
     """
@@ -118,7 +122,7 @@ def load_token(paths: AppPaths) -> str:
     return token
 
 
-def _job_data(store, job):
+def _job_data(store, job, worker=None):
     import time
     job, output = store.get_job_snapshot(job.job_id)
     value = asdict(job)
@@ -130,6 +134,7 @@ def _job_data(store, job):
         value['effective_geometry'] = dict(width=s.width, height=s.height, num_frames=s.num_frames,
                                            fps=24, duration=s.duration)
     value["output"] = asdict(output) if output else None
+    if worker is not None: value['estimate'] = worker.job_estimate(job)
     return value
 
 
@@ -244,6 +249,26 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         except ValueError:
             raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
 
+    @app.get('/api/v1/models')
+    def models_status():
+        return worker.models_status()
+
+    @app.post('/api/v1/models/unload')
+    def unload_models(payload: EmptyInput):
+        try: return worker.unload_models()
+        except ValueError:
+            raise HTTPException(409, 'models_busy_wait_for_queue_and_maintenance') from None
+
+    @app.post('/api/v1/performance/estimate')
+    def estimate(payload: GenerationInput):
+        try: return worker.estimate(payload.to_request())
+        except ValueError:
+            raise HTTPException(422, 'unsupported_request') from None
+
+    @app.get('/api/v1/performance')
+    def performance(offset: Annotated[int, Query(ge=0, le=2**31-1)] = 0):
+        return worker.performance.export(offset=offset)
+
     @app.get('/api/v1/maintenance')
     def maintenance_status():
         return worker.maintenance_status()
@@ -278,6 +303,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                                    for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
+                "resident_models": worker.models_status(), "performance_schema": 1,
                 "optional_features": {"sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": 1344, "spatial_multiple": 32,
@@ -297,27 +323,27 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             raise HTTPException(429, "queue_full", headers={"Retry-After": "5"}) from None
         except OSError:
             raise HTTPException(507, "insufficient_storage") from None
-        return _job_data(store, job)
+        return _job_data(store, job, worker)
 
     @app.get("/api/v1/jobs")
     def jobs(limit: Annotated[int, Query(ge=1, le=1000)] = 100,
              offset: Annotated[int, Query(ge=0, le=2**31 - 1)] = 0):
         rows = store.list_jobs(limit=limit, offset=offset)
-        return {"jobs": [_job_data(store, job) for job in rows], "next_offset": offset + len(rows)}
+        return {"jobs": [_job_data(store, job, worker) for job in rows], "next_offset": offset + len(rows)}
 
     JobID = Annotated[str, APIPath(pattern=r"^[0-9a-f]{32}$")]
 
     @app.get("/api/v1/jobs/{job_id}")
     def detail(job_id: JobID):
         try:
-            return _job_data(store, store.get_job(job_id))
+            return _job_data(store, store.get_job(job_id), worker)
         except KeyError:
             raise HTTPException(404, "job_not_found") from None
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
     def cancel(job_id: JobID):
         try:
-            return _job_data(store, worker.cancel(job_id))
+            return _job_data(store, worker.cancel(job_id), worker)
         except KeyError:
             raise HTTPException(404, "job_not_found") from None
 

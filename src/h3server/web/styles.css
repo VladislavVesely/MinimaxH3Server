@@ -76,6 +76,7 @@ input:not([type="checkbox"]) { width: 100%; height: 44px; background: #fcfcfd; b
 input::placeholder { color: #858998; }
 input:disabled { opacity: .75; }
 .field-hint { color: var(--muted); font-size: 11px; line-height: 1.65; }
+.timing-steps { white-space: pre-wrap; overflow: auto; max-height: 220px; font-size: 12px; }
 .generation-blocker { padding: 12px 14px; border: 1px solid #e3b66b; border-left: 4px solid #a76412; border-radius: 6px; background: #fff7e7; color: #704109; font-size: 13px; line-height: 1.6; }
 #scan-hint, #install-note { margin-top: 12px; margin-bottom: 0; }
 .connection-tools { border-top: 1px solid #eceef3; padding-top: 18px; margin-top: 24px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }

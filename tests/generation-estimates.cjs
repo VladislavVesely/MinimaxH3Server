@@ -1,0 +1,10 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(require.resolve('../src/h3server/web/app.js'),'utf8');
+const start=source.indexOf('  function timeLabel('),end=source.indexOf('  function scheduleEstimate()',start);
+const c=vm.createContext({});vm.runInContext(source.slice(start,end),c);
+assert.match(c.estimateText({samples:0,reason:'No matching samples.'}),/No estimate yet/);
+assert.match(c.estimateText({samples:1,mean_seconds:82,cache:'warm_partial'}),/1m 22s.*reused base\/encoder.*provisional/);
+assert.match(c.estimateText({samples:2,mean_seconds:90,minimum_seconds:80,maximum_seconds:100,cache:'warm'}),/2 matching runs; observed 1m 20s–1m 40s/);
+assert.match(c.estimateText({samples:1,mean_seconds:NaN}),/No estimate yet/);
+assert.equal(c.timeLabel(-1),'unavailable');
+console.log('Generation estimate formatting passed');

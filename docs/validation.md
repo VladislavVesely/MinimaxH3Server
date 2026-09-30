@@ -1,5 +1,72 @@
 # Validation and acceptance status
 
+## Resident models and measurements — 2026-09-29
+
+Implemented opt-in resident JSONL workers for the pinned Comfy/pruned runtime,
+idle-only unload, memory-aware component retention, private durable timing samples
+and hardware/software/configuration-specific estimates. Experimental legacy
+Diffusers remains isolated. No dependency/model upgrades were made.
+
+RTX 4090 / ~30 GiB host RAM / 8 GiB swap acceptance included five successive jobs
+in one owned worker, with independent full-frame and audio decoding:
+
+| Job | Configuration | Measured execution |
+|---|---|---:|
+| `8d5dbf2dae0049918e7e86269f43c930` | Cold Turbo 6 steps + Sage, 512×288×124 | 99.782 s |
+| `905f520ad7c0415b8b450bfff3d13ef5` | Same settings, retained components | 88.668 s |
+| `9b207bf902a849bd8424a0352545f1e4` | Turbo removed, dense Sage, 20 steps | 52.788 s |
+| `313e0d623224479ebfacb5f08b927032` | Quality sparse, Sage off, 20 steps | 84.856 s |
+| `8b66efe6cc344087a69373d74d259ebf` | Same sparse preset, 576×320×141 | 55.376 s |
+
+Cold/warm Turbo decoded video hashes matched. Removing Turbo restored the exact
+decoded video of a clean cold dense baseline (`f77db3ce49f74f589c8fd53d687ae4c7`).
+Both sparse runs confirmed 2,000 native kernel calls. These are observations,
+not broad performance or quality claims. Cache-pressure modes remain separate.
+
+Additional repeated-sparse testing exposed stale request-local patches. Sparse
+routing/session plans now rebuild each request without reloading base weights;
+old object patches are restored with `unpatch_model(unpatch_weights=False)`
+before constructing the new clone. Merely ejecting injections left old cube-order
+closures active and failed a real repeated-run test. After the fix,
+`51f989d347b0425fa58e7a6119eed7d3` and `33ea7df4cef047b9bd71659f459cd2c2`
+both decoded 141 frames plus audio: 113.616 s cold versus 69.347 s reused;
+loading was 49.134 s versus 0.997 s. Sparse output is not bit-exact deterministic:
+mean absolute decoded RGB difference was 1.187/255 (RMSE 2.135), comparable to
+independent cold/cold runs (1.203/255, RMSE 2.147), rather than the stale-plan
+prototype's 9.984/255 (RMSE 16.396). This is a narrow consistency check, not a
+quality benchmark.
+
+The initial all-components retention prototype hit a kernel-confirmed host-RAM
+OOM on a reused run. Pageable memory, staged LoRA preparation, decoder eviction
+and an encoder-preserving diffusion-reload fallback replaced that unsafe policy.
+A later dense-to-Turbo switch also exposed host-RAM pressure during FC2 merging /
+encoder offload, not encoding. Changed Turbo variants now reload reclaimable
+base-weight mappings on constrained hosts while retaining the encoder. Safety-guard
+failures and OOM runs were not recorded as successful performance samples.
+
+Final memory-policy acceptance repeated sparse → dense → changed Turbo → same
+Turbo in one worker: `e79853223f9f419ab6d929e54c4a8411` (112.128 s),
+`1385ff42bd1644db86467cdf56dad72c` (81.898 s),
+`803a8015578e4d9f860be75ffdea6145` (52.015 s), and
+`25dd239b344a4ca58f4307921edb6593` (50.886 s). Every video/audio decoded;
+dense and both Turbo results matched their exact clean decoded baselines.
+The final Turbo runs retained the encoder and reloaded other weights as required
+(`encoder_reuse`), rather than pretending full model reuse. Six deployed source
+hashes matched local files; final native checks passed with models left loaded.
+
+Real idle API/UI unload released the worker; observed device use returned to
+408 MiB without deleting history/models. Running/queued unload returned 409.
+Native checks covered matching estimates and per-step averages, prompt-free
+hardware/configuration exports, actionable unload state, 375px layout, unchanged
+preferences and no automatic generation/installation/unload. Screenshot:
+`/tmp/h3-resident-estimates.png`.
+
+146 focused Python tests, 6 selected transport tests, 3 selected setup tests,
+JS estimate/blocker/inputs/toggle/timing checks and syntax/diff checks passed.
+No full suite or subagents were used. Other hardware/profiles, full-resolution
+resident workloads, legacy Diffusers residency and Windows-native acceptance
+remain unverified.
+
 ## Optional sparse attention — 2026-09-29
 
 Pinned existing-weight sparse attention installed and numerically GPU-probed on

@@ -101,6 +101,7 @@ class Backend:
     diagnostics: Callable[[], dict] = lambda: {}
     runtime_id: str = 'diffusers-minimax-h3-t2va'
     profiles: tuple[str, ...] = H3_PROFILES
+    resident: bool = False
 
 
 def _job_id(value: str) -> str:
@@ -154,6 +155,69 @@ class Worker:
         self._process = None
         self._terminated_process = None
         self._active = None
+        self._resident_process = None
+        self._resident_components = []
+        self._resident_profile = None
+        self._reuse_mode = 'warm'
+        from h3server.performance import PerformanceStore
+        self.performance = PerformanceStore(paths.state / 'performance.sqlite', root=paths.root)
+        self._hardware = None
+        self._job_estimates = {}
+
+    def estimate(self, request):
+        from h3server.performance import configuration
+        with self._lock:
+            if request.settings is None:
+                return {'samples': 0, 'reason': 'No normalized settings recorded.'}
+            mode = self._reuse_mode if self.models_status()['loaded'] and self._resident_profile == request.settings.profile else 'cold'
+            if self._hardware is None:
+                return {'samples': 0, 'cache': mode, 'reason': 'No hardware-verified sample in this server session yet.'}
+            try:
+                return self.performance.estimate(configuration(request), self._hardware, mode)
+            except Exception:
+                return {'samples': 0, 'cache': mode, 'reason': 'Timing statistics are unavailable; generation can still proceed.'}
+
+    def job_estimate(self, job):
+        with self._lock:
+            if job.status is JobStatus.RUNNING:
+                return self._job_estimates.get(job.job_id, {'samples': 0, 'reason': 'No estimate captured for this run.'})
+            if job.status is JobStatus.QUEUED: return self.estimate(job.request)
+            return None
+
+    @staticmethod
+    def _alive(process):
+        return process is not None and process.returncode is None and os.waitid(
+            os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+
+    def _drop_resident(self):
+        process = self._resident_process
+        if process is not None:
+            self._terminate(process)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None: stream.close()
+        self._resident_process = None
+        self._resident_components = []
+        self._resident_profile = None
+        self._reuse_mode = 'warm'
+
+    def models_status(self):
+        with self._lock:
+            state = self.maintenance_status()
+            loaded = self._alive(self._resident_process) and bool(self._resident_components)
+            return {'supported': self.backend.resident, 'loaded': loaded, 'observation': 'last_completed_run',
+                    'components': list(self._resident_components) if loaded else [],
+                    'profile': self._resident_profile if loaded else None,
+                    'busy': not state['idle'], 'maintenance': bool(state['active']),
+                    'can_unload': loaded and state['idle'] and not state['active'],
+                    'placement': 'GPU/CPU placement is managed automatically; residency is not a VRAM guarantee.'}
+
+    def unload_models(self):
+        with self._lock:
+            state = self.maintenance_status()
+            if not state['idle'] or state['active']:
+                raise ValueError('models busy: queued/running work or maintenance')
+            self._drop_resident()
+            return self.models_status()
 
     def readiness(self) -> tuple[str, ...]:
         if self._stopping.is_set() or (self._thread is not None and not self._thread.is_alive()):
@@ -161,7 +225,7 @@ class Worker:
         try:
             from h3server.backends.h3 import RuntimeReadiness
             if isinstance(self.backend.readiness, RuntimeReadiness):
-                reasons = self.backend.readiness(refresh=self._active is None)
+                reasons = self.backend.readiness(refresh=self._active is None and not self._alive(self._resident_process))
             else:
                 reasons = self.backend.readiness()
             if not isinstance(reasons, tuple) or any(not isinstance(item, str) for item in reasons):
@@ -274,10 +338,13 @@ class Worker:
                 job = self.store.get_job(self._active)
                 if job.status is JobStatus.RUNNING:
                     self.store.transition_job(job.job_id, JobStatus.INTERRUPTED)
-                self._cleanup_partial(job.job_id)
+                if job.status is not JobStatus.COMPLETED:
+                    self._cleanup_partial(job.job_id)
         if self._thread is not None:
             self._thread.join()
             self._thread = None
+        with self._lock:
+            self._drop_resident()
         if self._owner_fd is not None:
             os.close(self._owner_fd)
             self._owner_fd = None
@@ -392,32 +459,57 @@ class Worker:
 
     def _execute(self, job):
         process = None
+        keep_resident = False
+        report = None
+        run_started = time.monotonic()
         try:
             with self._lock:
+                self._job_estimates[job.job_id] = self.estimate(job.request)
                 if self.store.get_job(job.job_id).status is not JobStatus.RUNNING:
                     return
                 # A queued request may outlive the adapter that accepted it.
-                job.request.validate_capabilities(self.backend.capabilities)
+                try:
+                    job.request.validate_capabilities(self.backend.capabilities)
+                except ValueError:
+                    raise ValueError('Queued LoRA/attention features are no longer supported by the active backend; check the profile and options') from None
                 self.backend.validate_request(job.request)
                 self._disk_check()
                 request_path = self._prepare(job)
-                process = subprocess.Popen(
-                    [*self.backend.command, "--request", str(request_path)],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    env=self._environment(), cwd=self.paths.root, start_new_session=True,
-                    pass_fds=(self._owner_fd,) if self._owner_fd is not None else (),
-                )
+                if self.backend.resident:
+                    if not self._alive(self._resident_process) or self._resident_profile != job.request.settings.profile:
+                        self._drop_resident()
+                        self._resident_process = subprocess.Popen(
+                            [*self.backend.command, '--resident'], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=self._environment(),
+                            cwd=self.paths.root, start_new_session=True,
+                            pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())
+                        self._resident_profile = job.request.settings.profile
+                    process = self._resident_process
+                    process.stdin.write((json.dumps({'job_id': job.job_id, 'request_path': str(request_path)})+'\n').encode())
+                    process.stdin.flush()
+                else:
+                    process = subprocess.Popen(
+                        [*self.backend.command, '--request', str(request_path)],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        env=self._environment(), cwd=self.paths.root, start_new_session=True,
+                        pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())
                 self._process = process
-            self._consume(process, job.job_id)
+            report = self._consume(process, job.job_id)
             with self._lock:
                 if self.store.get_job(job.job_id).status is not JobStatus.RUNNING:
                     return
-                result = self._wait_exit(process, 5)
-                self._terminate(process)
-                if result.si_code != os.CLD_EXITED or result.si_status != 0:
-                    detail = (f'exit code {result.si_status}' if result.si_code == os.CLD_EXITED
-                              else f'signal {result.si_status} (check GPU/system memory and kernel logs)')
-                    raise RuntimeError('Backend process terminated: ' + detail)
+                if self.backend.resident:
+                    if report is None or report['ok'] is not True or not self._alive(process):
+                        exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                        detail = '' if exited is None else f' (exit/signal {exited.si_status}; check system/GPU memory if killed)'
+                        raise RuntimeError('Resident backend failed; models will be released for safe recovery' + detail)
+                else:
+                    result = self._wait_exit(process, 5)
+                    self._terminate(process)
+                    if result.si_code != os.CLD_EXITED or result.si_status != 0:
+                        detail = (f'exit code {result.si_status}' if result.si_code == os.CLD_EXITED
+                                  else f'signal {result.si_status} (check GPU/system memory and kernel logs)')
+                        raise RuntimeError('Backend process terminated: ' + detail)
                 fd = self._open_output(job.job_id)
             # Parsing may be slow. Cancellation can still acquire the scheduler
             # lock, kill the process group and revoke/delete the partial output.
@@ -440,6 +532,21 @@ class Worker:
                         os.unlink("request.json", dir_fd=directory)
                     self.store.transition_job(job.job_id, JobStatus.COMPLETED,
                                               output=OutputMetadata("video.mp4", info.st_size, "video/mp4"))
+                    if self.backend.resident:
+                        self._resident_components = report['components']
+                        keep_resident = True
+                        measurement = report['measurement']
+                        if measurement is not None:
+                            from h3server.performance import configuration
+                            self._hardware = measurement['hardware']
+                            self._reuse_mode = measurement['cache'] if measurement['cache'] != 'cold' else 'warm'
+                            measurement['metrics']['total_seconds'] = round(time.monotonic() - run_started, 6)
+                            try:
+                                self.performance.record(job.job_id, configuration(job.request), self._hardware,
+                                    measurement['metrics'], measurement['cache'], measurement['actual_attention'])
+                            except Exception:
+                                self.store.append_event('job', job.job_id, Event('performance', StageStatus.FAILED,
+                                    'Video completed, but timing statistics could not be saved.'))
             finally:
                 os.close(fd)
         except Exception as error:
@@ -450,18 +557,19 @@ class Worker:
                     self.store.append_event('job', job.job_id, Event('worker', StageStatus.FAILED, message))
                     self.store.transition_job(job.job_id, JobStatus.FAILED)
         finally:
-            try:
-                self._terminate(process)
-            finally:
-                # Even a native/process termination error must close our pipe.
-                # Propagate the error, retaining ownership/process state so stop
-                # or service recovery can retry; do not silently orphan it.
-                if process is not None and process.stdout is not None:
-                    process.stdout.close()
             with self._lock:
+                if not keep_resident:
+                    try:
+                        self._terminate(process)
+                    finally:
+                        if process is not None and process.stdout is not None:
+                            process.stdout.close()
+                    if self.backend.resident:
+                        self._drop_resident()
                 if self.store.get_job(job.job_id).status is not JobStatus.COMPLETED:
                     self._cleanup_partial(job.job_id)
                 self._active = self._process = None
+                self._job_estimates.pop(job.job_id, None)
 
     def _consume(self, process, job_id):
         buffer = b""
@@ -496,9 +604,31 @@ class Worker:
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     count += 1
-                    if len(line) > MAX_LINE_BYTES or count > MAX_WORKER_EVENTS:
-                        raise ValueError("worker event limit")
-                    event = decode_event(line.decode("utf-8"))
+                    if len(line) > (131072 if self.backend.resident else MAX_LINE_BYTES) or count > MAX_WORKER_EVENTS:
+                        raise ValueError('worker event limit')
+                    if self.backend.resident:
+                        frame = json.loads(line)
+                        if type(frame) is not dict or frame.get('job_id') != job_id:
+                            raise ValueError('resident job binding mismatch')
+                        if frame.get('type') == 'result':
+                            if set(frame) != {'type','job_id','ok','components','measurement'} or type(frame['ok']) is not bool or buffer:
+                                raise ValueError('invalid resident completion')
+                            components = frame['components']
+                            if type(components) is not list or len(components) > 5 or any(c not in {'diffusion_model','text_encoder','video_vae','audio_vae','pipeline'} for c in components):
+                                raise ValueError('invalid resident components')
+                            m = frame['measurement']
+                            if m is not None:
+                                from h3server.performance import validate_measurement
+                                if type(m) is not dict or set(m) != {'hardware','metrics','cache','actual_attention'} or m['cache'] not in {'cold','warm','warm_partial','encoder_reuse'}:
+                                    raise ValueError('invalid resident measurement')
+                                validate_measurement(m['metrics'], m['hardware'], m['actual_attention'])
+                            return frame
+                        if set(frame) != {'type','job_id','event'} or frame['type'] != 'event':
+                            raise ValueError('unknown resident frame')
+                        line = json.dumps(frame['event']).encode()
+                    if len(line) > MAX_LINE_BYTES:
+                        raise ValueError('worker event limit')
+                    event = decode_event(line.decode('utf-8'))
                     if event.stage not in STAGES or (event.progress and event.progress.unit not in UNITS):
                         raise ValueError("unknown worker event vocabulary")
                     from h3server.installer.diagnostics import safe_log
@@ -512,8 +642,8 @@ class Worker:
                     with self._lock:
                         if self.store.get_job(job_id).status is JobStatus.RUNNING:
                             self.store.append_event("job", job_id, event)
-                if len(buffer) > MAX_LINE_BYTES:
-                    raise ValueError("worker line limit")
+                if len(buffer) > (131072 if self.backend.resident else MAX_LINE_BYTES):
+                    raise ValueError('worker line limit')
 
     def _open_output(self, job_id, *, allow_empty=False):
         with _directory(self.paths.root, "tmp", "jobs", _job_id(job_id)) as directory:

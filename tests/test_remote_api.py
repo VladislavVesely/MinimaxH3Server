@@ -44,7 +44,7 @@ def test_auth_all_routes_and_openapi(tmp_path):
     {"unknown": 1}, {"negative_prompt": "no"}, {"sparse_attention": False},
     {"num_frames": True}, {"width": True}, {"steps": True}, {"seed": True},
     {"width": 33}, {"width": 1344, "height": 1344}, {"width": 1376},
-    {"num_frames": 346}, {"duration": 15}, {"duration": 4},
+    {"num_frames": 346}, {"duration": 16}, {"duration": 4},
     {"duration": 5, "num_frames": 124}, {"steps": 1}, {"seed": -1},
     {"profile": "invented"}, {"loras": ["unavailable"]}, {"prompt": " "},
 ])
@@ -65,7 +65,9 @@ def test_geometry_and_normalization(tmp_path, geometry):
     request = value.to_request()
     assert request.settings.num_frames == 124
     assert request.settings.duration == 124 / 24
-    assert schema(prompt="test", num_frames=125).to_request().settings.num_frames == 141
+    assert schema(prompt="test", num_frames=125).to_request().settings.num_frames == 124
+    assert schema(prompt="test", num_frames=135).to_request().settings.num_frames == 141
+    assert schema(prompt="test", duration=15).to_request().settings.num_frames == 345
     assert schema(prompt="test", num_frames=345).to_request().settings.num_frames == 345
 
 

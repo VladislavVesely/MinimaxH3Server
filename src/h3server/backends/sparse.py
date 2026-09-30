@@ -143,10 +143,12 @@ def apply(model, settings, node):
 def trace_execution():
     # Instrument successful native sparse launches, not a requested configuration.
     from h3_optimizations.native import int8_attention, selftest
+    original = getattr(int8_attention, '_h3_trace_original', int8_attention._check_sparse_attention)
+    int8_attention._h3_trace_original = original
+    int8_attention._check_sparse_attention = original
     if not selftest.check(force=True):  # Never count/cache a self-test as generation evidence.
         raise RuntimeError('Sparse native GPU recheck failed; disable sparse to retain the normal attention path')
     counts = {'native_sparse_calls': 0}
-    original = int8_attention._check_sparse_attention
     def traced(*args):
         result = original(*args)
         counts['native_sparse_calls'] += 1
