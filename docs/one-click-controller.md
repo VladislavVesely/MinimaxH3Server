@@ -67,9 +67,14 @@ Open **Video joiner** in the sidebar. Choose/drop local MP4 files, or use
 thumbnail-filled blocks whose widths follow clip duration. Drag a whole block
 before/after another (or use Earlier/Later), select and remove unwanted clips,
 and select **Export joined video**. Click a block or scrub the time ruler to seek
-the large preview; use Timeline zoom and horizontal scrolling for longer
-sequences. The ruler also supports arrow keys, Home and End. Selected blocks
-support Enter/Space and Delete/Backspace. No split/trim operations are performed;
+the large preview; use Timeline zoom and the visible horizontal scrollbar for
+longer sequences. The scrollbar appears only when the track overflows and stays
+in sync with native scrolling and resizing. The ruler also supports arrow keys,
+Home and End. While focus is in the timeline, **Space plays/pauses from the current
+playhead**, and **Delete/Backspace removes the selected clip** without needing a
+right-click. Enter selects a keyboard-focused block. Holding a key does not
+repeatedly delete clips or toggle playback, and typing elsewhere is unaffected.
+Automatic hardware discovery does not steal focus from the joiner. No split/trim operations are performed;
 export always includes whole clips regardless of the preview playhead.
 
 Filmstrip thumbnails are browser-generated display previews, cached only in page

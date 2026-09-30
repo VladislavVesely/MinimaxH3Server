@@ -744,7 +744,8 @@
     if (connection.state !== 'authenticated') throw { code: 'authentication_required' };
     renderScan(data);
     log('Read-only scan returned. Review unknown observations and experimental profiles; no generation readiness is proven.');
-    $('hardware-heading').focus();
+    // Automatic read-only discovery must not interrupt an active local edit.
+    if (!$('joiner').contains(document.activeElement)) $('hardware-heading').focus();
   }
   $('scan').addEventListener('click', () => perform('Scanning hardware with read-only commands…', scanHardware));
   function eventLine(record) {

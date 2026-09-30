@@ -1,5 +1,28 @@
 # Validation and acceptance status
 
+## Timeline keyboard and scrollbar repair
+
+Reproduced Delete and Space failures: after clicking a clip, replacement of its
+DOM node moved focus to BODY. Also reproduced automatic hardware discovery
+stealing focus to `hardware-heading` during playback. Stable timeline focus,
+scoped shortcuts and a discovery focus guard resolve both. Space preserves the
+selected playback time; no document-global deletion handler is installed.
+
+Six focused JS checks and 47 Python joiner/security checks passed. Packaged Chrome
+and WebKit acceptance verified click→Delete without right-click, held-key repeat
+suppression, subsequent Backspace, Space play/pause from a nonzero selected time,
+playback across clip boundaries, ruler→Space, typing isolation, native drag→Delete
+of the moved clip, and a real visible 18px scrollbar with mouse/keyboard/native
+scroll synchronization. Overflow controls hide when clips fit or are removed;
+375px layout passes after resize observation settles. A source-change layout shift
+in WebKit was measured at 448→374→448px and fixed by reserving the preview aspect
+ratio; existing live-ruler/filmstrip/export acceptance passes again.
+
+No real History jobs or original user files were removed. Only isolated synthetic
+joiner copies were used. Screenshots: `/tmp/h3-timeline-scroll-chrome.png`,
+`/tmp/h3-timeline-scroll-webkit.png`. No daemon deployment, installation or
+inference was needed. Existing controller workspaces remain open.
+
 ## Visual filmstrip joiner
 
 Whole clips now appear as adjacent thumbnail blocks proportional to duration,

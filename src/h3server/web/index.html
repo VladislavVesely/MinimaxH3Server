@@ -155,13 +155,16 @@
         <p id="joiner-empty" class="field-hint">Your timeline is empty. Add videos to build a filmstrip.</p>
         <p id="joiner-now" class="field-hint">Add clips to preview them.</p>
         <video id="joiner-player" controls playsinline preload="auto" aria-label="Joiner preview" hidden></video>
+        <div id="joiner-editor" class="joiner-editor">
         <div class="joiner-timeline-tools"><output id="joiner-time">0:00.0 / 0:00.0</output><label for="joiner-zoom">Timeline zoom</label><input id="joiner-zoom" type="range" min="20" max="160" value="80" step="10" disabled></div>
-        <div id="joiner-scroll" class="joiner-scroll"><div id="joiner-track" class="joiner-track">
+        <div id="joiner-scroll" class="joiner-scroll" tabindex="0" role="region" aria-describedby="joiner-selected" aria-label="Video timeline. Space plays or pauses; Delete removes the selected clip."><div id="joiner-track" class="joiner-track">
           <div id="joiner-ruler" class="joiner-ruler" role="slider" tabindex="0" aria-label="Timeline playhead" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></div>
           <ol id="joiner-timeline" class="joiner-timeline" aria-label="Video joiner timeline"></ol>
           <div id="joiner-playhead" class="joiner-playhead" aria-hidden="true"></div>
         </div></div>
-        <p class="field-hint">Drag a filmstrip block to rearrange the whole video. Click a block or drag along the time ruler to preview; zoom and scroll for longer sequences. No trimming or splitting.</p>
+        <input id="joiner-scrollbar" class="joiner-scrollbar" type="range" min="0" max="0" value="0" step="1" aria-label="Scroll timeline horizontally" aria-controls="joiner-scroll" hidden>
+        </div>
+        <p class="field-hint">Drag a filmstrip block to rearrange the whole video. Click a block or drag along the time ruler to preview; zoom and scroll for longer sequences. With focus in the timeline, Space plays/pauses from the playhead and Delete removes the selected clip. No trimming or splitting.</p>
         <p id="joiner-selected" class="field-hint">Select a video block.</p>
         <div class="joiner-selected-actions"><button id="joiner-earlier" type="button" disabled>← Earlier</button><button id="joiner-later" type="button" disabled>Later →</button><button id="joiner-remove" type="button" disabled>Remove selected clip</button></div>
         <div class="joiner-actions"><button id="joiner-play" type="button" disabled>Play sequence</button><button id="joiner-export" class="primary" type="button" disabled>Export joined video</button><a id="joiner-download" download="joined.mp4" hidden>Download joined MP4</a><button id="joiner-clear" type="button" disabled>Clear workspace</button></div>

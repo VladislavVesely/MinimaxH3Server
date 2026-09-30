@@ -198,6 +198,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 #joiner-time { font-variant-numeric:tabular-nums; margin-right:auto; }
 #joiner-zoom { width:140px; padding:0; }
 .joiner-scroll { overflow-x:auto; border:1px solid #414859; border-radius:6px; background:#171b26; padding-bottom:12px; }
+.joiner-scroll:focus-visible { outline:2px solid #7764cc; outline-offset:2px; }
+#joiner-scrollbar { display:block; appearance:none; -webkit-appearance:none; width:100%; height:18px; padding:0; margin:5px 0 10px; background:#e2e6ee; border:1px solid #b7bfce; border-radius:5px; cursor:ew-resize; }
+#joiner-scrollbar::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:var(--scroll-thumb,48px); max-width:100%; height:12px; background:#66748b; border:1px solid #4b5669; border-radius:3px; }
+#joiner-scrollbar::-moz-range-thumb { width:var(--scroll-thumb,48px); max-width:100%; height:12px; background:#66748b; border:1px solid #4b5669; border-radius:3px; }
+#joiner-scrollbar:focus-visible { outline:2px solid #7764cc; outline-offset:2px; }
 .joiner-track { position:relative; min-width:100%; }
 .joiner-ruler { height:32px; position:relative; color:#c4ccdc; background:#232938; cursor:crosshair; touch-action:none; overflow:hidden; }
 .joiner-ruler span { position:absolute; top:0; height:32px; border-left:1px solid #586176; padding:4px; font:10px monospace; white-space:nowrap; pointer-events:none; }
@@ -215,6 +220,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 .joiner-playhead::before { content:''; position:absolute; top:0; left:-4px; border-left:5px solid transparent; border-right:5px solid transparent; border-top:8px solid #ffcf70; }
 .joiner-selected-actions,.joiner-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0; }
 #joiner-selected { overflow-wrap:anywhere; }
-#joiner-player { display:block; width:100%; max-height:28rem; margin:12px 0; background:#191c30; }
+#joiner-player { display:block; width:100%; height:auto; object-fit:contain; max-height:28rem; margin:12px 0; background:#191c30; }
 #joiner-status,#joiner-summary,#joiner-now { overflow-wrap:anywhere; }
 @media (max-width:760px) { .sidebar { flex-wrap:wrap; } .sidebar nav { flex-wrap:wrap; } .sidebar .nav-item:not(.selected) { display:flex; } }

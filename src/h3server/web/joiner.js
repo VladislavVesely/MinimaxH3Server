@@ -38,9 +38,20 @@
       offset -= items[i].duration;
     }
   }
+  function timelineShortcut(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const action = [' ', 'Spacebar'].includes(event.key) ? 'play' : ['Delete', 'Backspace'].includes(event.key) ? 'remove' : null;
+    return action && event.repeat ? 'ignore' : action;
+  }
+  function scrollMetrics(content, viewport, position) {
+    const maximum = Math.max(0, content - viewport);
+    return {maximum, position:Math.max(0, Math.min(maximum, position)), visible:maximum > 0};
+  }
   function create({api, getCsrf, onChange = () => {}}) {
     const $ = id => document.getElementById(id);
     const player = $('joiner-player');
+    const editor = $('joiner-editor'), scroller = $('joiner-scroll'), scrollbar = $('joiner-scrollbar');
+    const focusTimeline = () => scroller.focus({preventScroll:true});
     let items = [], selected = null, busy = false, available = false, initialized = false;
     let sequence = false, retained = 0, retainedExports = 0, dragging = null;
     let pendingSeek = null, thumbnailWorking = false, thumbnailEpoch = 0, scrub = false, mouseScrub = false;
@@ -57,6 +68,8 @@
       const item = items.find(x => x.id === id);
       player.hidden = !item;
       if (item) {
+        // Keep controls stationary while a new source resets intrinsic dimensions.
+        player.style.aspectRatio = `${item.width} / ${item.height}`;
         player.src = api + '/joiner/clips/' + item.id + '/content'; player.load();
         $('joiner-now').textContent = 'Preview: ' + item.label;
       } else { player.removeAttribute('src'); player.load(); $('joiner-now').textContent = 'Add clips to preview them.'; }
@@ -128,13 +141,32 @@
       if (busy || !selected) return;
       const id = selected, index = items.findIndex(x => x.id === id);
       return perform(async () => {
+        stop();
         await request('/joiner/clips/' + id + '/remove', {});
-        stop(); items = items.filter(x => x.id !== id); thumbnails.delete(id); retained = Math.max(0, retained - 1); invalidateExport();
+        items = items.filter(x => x.id !== id); thumbnails.delete(id); retained = Math.max(0, retained - 1); invalidateExport();
         select(items[Math.min(index, items.length-1)]?.id || null);
         tell('Removed the temporary copy only. Your original file and History job are unchanged.');
       });
     }
+    function updateTimelineScroll() {
+      const state = scrollMetrics(scroller.scrollWidth, scroller.clientWidth, scroller.scrollLeft);
+      if (!state.visible && document.activeElement === scrollbar) focusTimeline();
+      scrollbar.hidden = !state.visible;
+      scrollbar.max = String(state.maximum); scrollbar.value = String(state.position);
+      scrollbar.setAttribute('aria-valuetext', `${state.maximum ? Math.round(state.position / state.maximum * 100) : 0}% scrolled`);
+      if (state.visible) scrollbar.style.setProperty('--scroll-thumb', `${Math.max(24, scrollbar.clientWidth * scroller.clientWidth / scroller.scrollWidth)}px`);
+    }
+    async function toggleTimelinePlayback() {
+      if (busy || !items.length) return;
+      if (!player.paused) { stop(); return; }
+      if (!selected) select(items[0].id);
+      sequence = true;
+      try { await player.play(); }
+      catch { sequence = false; tell('Your browser could not play this clip. Export may still work without re-encoding.'); }
+    }
     function render() {
+      const focused = document.activeElement;
+      const hadTimelineFocus = editor.contains(focused);
       $('joiner-files').disabled = busy || !available;
       $('joiner-play').disabled = busy || !items.length;
       $('joiner-export').disabled = busy || !available || items.length < 2;
@@ -167,11 +199,13 @@
         const strip = el('div'); strip.className = 'joiner-filmstrip'; strip.dataset.clip = item.id;
         paintFilmstrip(strip, item);
         li.append(heading, strip);
-        li.addEventListener('click', e => { if (!busy && !dragging) select(item.id, Math.max(0,Math.min(item.duration,(e.clientX-li.getBoundingClientRect().left)/scale()))); });
+        li.addEventListener('click', e => {
+          if (busy || dragging) return;
+          select(item.id, Math.max(0,Math.min(item.duration,(e.clientX-li.getBoundingClientRect().left)/scale())));
+          focusTimeline();
+        });
         li.addEventListener('keydown', e => {
-          if (busy) return;
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(item.id); $('joiner-timeline').children[index]?.focus(); }
-          if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); selected = item.id; void removeSelected(); }
+          if (!busy && e.key === 'Enter') { e.preventDefault(); select(item.id); focusTimeline(); }
         });
         li.addEventListener('dragstart', e => { if (busy) { e.preventDefault(); return; } dragging = item.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('application/x-h3-joiner', item.id); });
         li.addEventListener('dragend', () => { dragging = null; for (const n of list.children) n.classList.remove('drop-before','drop-after'); });
@@ -182,14 +216,18 @@
           e.preventDefault(); e.stopPropagation();
           const b = li.getBoundingClientRect();
           move(e.dataTransfer.getData('application/x-h3-joiner') || dragging, e.clientX < b.left+b.width/2 ? item.id : items[index+1]?.id || null); dragging = null;
+          focusTimeline();
         });
         list.append(li);
       });
-      updatePlayhead(); onChange();
+      updatePlayhead(); updateTimelineScroll();
+      if (hadTimelineFocus && !focused.isConnected) focusTimeline();
+      onChange();
     }
     function move(from, before) {
-      if (busy) return;
-      stop(); items = reorder(items, from, before); invalidateExport(); render();
+      if (busy || !items.some(item => item.id === from)) return;
+      stop(); items = reorder(items, from, before); invalidateExport();
+      if (selected !== from) select(from); else render();
       tell('Timeline order updated. Originals are unchanged.');
     }
     async function request(path, body, binary = false) {
@@ -255,6 +293,20 @@
         } finally { clearTimeout(timer); }
       });
     }
+    editor.addEventListener('keydown', e => {
+      const action = timelineShortcut(e);
+      if (!action) return;
+      e.preventDefault(); e.stopPropagation();
+      if (busy || action === 'ignore') return;
+      if (action === 'play') { void toggleTimelinePlayback(); return; }
+      const focusedClip = e.target.closest('.joiner-clip');
+      if (focusedClip) selected = focusedClip.dataset.clip;
+      void removeSelected();
+    });
+    scroller.addEventListener('scroll', updateTimelineScroll, {passive:true});
+    scrollbar.addEventListener('input', () => { scroller.scrollLeft = Number(scrollbar.value); });
+    window.addEventListener('resize', updateTimelineScroll);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(updateTimelineScroll).observe(scroller);
     player.addEventListener('loadedmetadata', () => {
       if (pendingSeek !== null) { player.currentTime = Math.min(pendingSeek, Math.max(0, player.duration - .001)); pendingSeek = null; }
       updatePlayhead();
@@ -266,7 +318,11 @@
     $('joiner-later').addEventListener('click', () => { const i = items.findIndex(x => x.id === selected); if (i >= 0 && i < items.length-1) move(selected, items[i+2]?.id || null); });
     $('joiner-remove').addEventListener('click', removeSelected);
     const ruler = $('joiner-ruler');
-    const seekPointer = e => seek((e.clientX - ruler.getBoundingClientRect().left) / scale());
+    const seekPointer = e => {
+      if (busy) return;
+      seek((e.clientX - ruler.getBoundingClientRect().left) / scale());
+      ruler.focus({preventScroll:true});
+    };
     ruler.addEventListener('pointerdown', e => { if (busy || !items.length) return; e.preventDefault(); scrub = true; ruler.setPointerCapture(e.pointerId); seekPointer(e); });
     ruler.addEventListener('pointermove', e => { if (scrub) seekPointer(e); });
     // WebKit may omit pointerdown immediately after native clip dragging.
@@ -292,7 +348,7 @@
       area.addEventListener('drop', e => {
         e.preventDefault();
         if (e.dataTransfer.files.length) addFiles(Array.from(e.dataTransfer.files));
-        else if (id === 'joiner-timeline') move(e.dataTransfer.getData('application/x-h3-joiner') || dragging, null);
+        else if (id === 'joiner-timeline') { move(e.dataTransfer.getData('application/x-h3-joiner') || dragging, null); focusTimeline(); }
         dragging = null;
       });
     }
@@ -324,5 +380,5 @@
     return {init, addHistory, canAdd:() => available && !busy && retained < 32,
       blocker:() => busy ? messages.joiner_busy : retained >= 32 ? messages.joiner_clip_limit : !available ? 'Local FFmpeg is not ready. Open Video joiner for details.' : 'Copy the original video into the local joiner. The History job is unchanged.'};
   }
-  window.H3Joiner = {create, reorder, errorMessage, locateTime};
+  window.H3Joiner = {create, reorder, errorMessage, locateTime, timelineShortcut, scrollMetrics};
 })();
