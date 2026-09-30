@@ -48,6 +48,7 @@ CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_arti
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
               "/assets/joiner.js": ("joiner.js", "text/javascript"),
+              "/assets/job-selection.js": ("job-selection.js", "text/javascript"),
               "/assets/styles.css": ("styles.css", "text/css")}
 SECURITY_HEADERS = {
     "cache-control": "no-store",

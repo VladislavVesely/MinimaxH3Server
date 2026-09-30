@@ -1,5 +1,18 @@
 # Validation and acceptance status
 
+## Bulk job deletion
+
+41 focused Python deletion/security tests and seven JS checks passed, including
+selection scoping, stopped-only eligibility, confirmation dismissal, partial
+failure/retry and stopping on connection/session failures. Existing single-job
+cleanup, tab semantics, queue-click identity, video preview, last-frame and joiner
+checks remain passing. Packaged Chrome and WebKit acceptance checked Current and
+History batch deletion, individual checkboxes, Select all, polling persistence,
+confirmation dismissal, failed-item retry, tab resets and 375px layout. Every job
+mutation was intercepted against fixtures: no real job was deleted, cancelled or
+submitted. Existing guarded per-job APIs are reused; no daemon update was needed.
+Screenshots: `/tmp/h3-bulk-delete-chrome.png`, `/tmp/h3-bulk-delete-webkit.png`.
+
 ## Local video joiner
 
 47 focused Python tests passed across joiner, failure/cleanup, authenticated API

@@ -58,6 +58,19 @@
   const assetDraft = {reference_images:[], reference_videos:[], reference_audios:[], first_frame:[], last_frame:[]};
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
   const joiner = window.H3Joiner?.create({api:API, getCsrf:() => csrf, onChange:() => render()});
+  const jobSelection = window.H3JobSelection?.create({
+    run: action => perform('Deleting selected jobs and their files…', action),
+    remove: async id => {
+      const result = await request('/remote/jobs/' + id + '/delete', {});
+      const removed = new Set(result.removed_assets || []);
+      for (const key of Object.keys(assetDraft)) assetDraft[key] = assetDraft[key].filter(asset => !removed.has(asset.id));
+      showInputAssets();
+      currentPageJobs.delete(id); seenPageJobs.delete(id);
+      if (selectedJob === id) selectedJob = null;
+      estimateKey = null;
+    },
+    refresh: () => dashboard()
+  });
 
   function savedTargetMatches() {
     const saved = preferences.connection;
@@ -322,6 +335,7 @@
       for (const key of Object.keys(assetDraft)) assetDraft[key] = [];
       showInputAssets();
       resetDashboardPolling();
+      jobSelection?.clear();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
       releaseVideoPreviews($('jobs'));
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
@@ -474,6 +488,7 @@
       button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames')) || (button.dataset.joiner === 'true' && !joiner?.canAdd());
       if (button.dataset.joiner === 'true') button.title = joiner?.blocker() || 'Video joiner is unavailable.';
     }
+    if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
 
@@ -1074,6 +1089,7 @@
     $('jobs').setAttribute('aria-labelledby', 'jobs-tab-' + jobsTab);
     for (const [id, card] of jobCards) card.item.hidden = !jobMatchesTab({job_id: id, status: card.item.dataset.status}, jobsTab);
     const visible = currentJobs.filter(job => jobMatchesTab(job, jobsTab));
+    if (typeof jobSelection !== 'undefined') jobSelection?.update(visible, ready && !busy && connection.state === 'authenticated');
     $('jobs-empty').hidden = visible.length > 0;
     $('jobs-empty').textContent = jobsTab === 'current' ? 'No jobs in this page view. Queue a generation to get started.' : 'No earlier finished jobs.';
     if (!visible.some(job => job.job_id === selectedJob)) {
@@ -1162,6 +1178,7 @@
     for (const [id, card] of jobCards) {
       if (!present.has(id)) {
         releaseVideoPreviews(card.output);
+        jobSelection?.forget(id);
         card.item.remove(); jobCards.delete(id); jobLogs.delete(id); jobPhases.delete(id);
       }
     }
@@ -1176,6 +1193,10 @@
         const title = node('h4', `Job ${job.job_id.slice(0, 8)}`); title.title = job.job_id;
         const logs = node('button', 'View terminal', 'text-button'); logs.type = 'button';
         logs.addEventListener('click', () => { selectedJob = job.job_id; showJobTerminal(); });
+        const selectionLabel = node('label', undefined, 'job-selection-label');
+        const select = node('input'); select.type = 'checkbox'; select.setAttribute('aria-label', `Select job ${job.job_id.slice(0, 8)}`);
+        selectionLabel.append(select, node('span', 'Select'));
+        jobSelection?.register(job.job_id, select);
         const remove = node('button', 'Delete job', 'secondary'); remove.type = 'button';
         remove.addEventListener('click', () => {
           if (busy || remove.disabled || !confirm('Permanently delete this job, its result video, logs, timing records and references? References used by other saved jobs will be kept. This cannot be undone.')) return;
@@ -1190,7 +1211,7 @@
             await dashboard();
           });
         });
-        heading.append(title, logs, remove);
+        heading.append(selectionLabel, title, logs, remove);
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
@@ -1552,12 +1573,12 @@
   for (const id of ['width', 'height']) $(id).addEventListener('input', syncResolutionPresets);
   for (const tab of ['current', 'history']) {
     const button = $('jobs-tab-' + tab);
-    button.addEventListener('click', () => { jobsTab = tab; renderJobTabs(); });
+    button.addEventListener('click', () => { jobSelection?.reset(); jobsTab = tab; renderJobTabs(); });
     button.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       jobsTab = event.key === 'Home' ? 'current' : event.key === 'End' ? 'history' : tab === 'current' ? 'history' : 'current';
-      renderJobTabs(); $('jobs-tab-' + jobsTab).focus();
+      jobSelection?.reset(); renderJobTabs(); $('jobs-tab-' + jobsTab).focus();
     });
   }
   $('unload-models').addEventListener('click', () => perform('Releasing retained models…', async () => {

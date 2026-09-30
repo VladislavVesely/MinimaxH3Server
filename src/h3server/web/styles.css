@@ -170,6 +170,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflo
 #job-events { margin: 0; padding: 16px; min-height: 180px; max-height: 420px; overflow: auto; background: #131722; color: #cbd5e7; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .job-card { overflow-wrap: anywhere; }
 .job-card video { display: block; width: 100%; height: auto; max-height: 28rem; margin: .75rem 0; }
+.job-selection-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.job-selection-label { display:flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; }
+.job-selection-label input { width:auto; margin:0; }
+#jobs-selection-status { overflow-wrap:anywhere; }
 .job-output-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:.5rem; }
 #readiness, #setup-status, #selected-profile, #plan-selection, #download-selection, #license-disclosures, #unavailable-variants { overflow-wrap: anywhere; }
 #selected-profile ul, #download-selection ul { padding-left: 1.25rem; }

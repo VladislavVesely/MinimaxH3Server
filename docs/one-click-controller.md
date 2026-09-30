@@ -45,6 +45,21 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Delete several jobs
+
+In **Current** or **History**, check the jobs you want to remove, or use
+**Select all in this tab**, then **Delete selected**. One confirmation covers the
+selected jobs and their videos/logs/timing records/unshared references. Shared
+references remain protected by the existing deletion checks. Independent local
+video-joiner copies are unaffected.
+
+Only stopped jobs can be selected. Cancel queued/running jobs explicitly and wait
+for them to stop first. Selections survive dashboard polling, but changing tabs
+or connections clears them. Tabs are locked while the batch runs. Deletions run
+sequentially; failures are reported and eligible failed items remain selected.
+Connection/session failures stop the remaining attempts. Retry explicitly after
+resolving the problem; completed deletions are not rolled back.
+
 ## Video joiner
 
 Open **Video joiner** in the sidebar. Choose/drop local MP4 files, or use
