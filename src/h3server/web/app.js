@@ -10,7 +10,10 @@
   let ready = false;
   let busy = false;
   let submittingGeneration = false;
-  let jobsTab = 'active';
+  let jobsTab = 'current';
+  const currentPageJobs = new Set();
+  const seenPageJobs = new Set();
+  let pageJobsInitialized = false;
   let connection = { state: 'disconnected' };
   let capabilities = {};
   let lastTarget = null;
@@ -1002,29 +1005,40 @@
     }
   }
   const timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
+  function observePageJobs(jobs) {
+    for (const job of jobs) {
+      if (['queued', 'running'].includes(job.status) || (pageJobsInitialized && !seenPageJobs.has(job.job_id))) {
+        currentPageJobs.add(job.job_id);
+      }
+      seenPageJobs.add(job.job_id);
+    }
+    pageJobsInitialized = true;
+  }
   function jobMatchesTab(job, tab) {
-    return ['queued', 'running'].includes(job.status) === (tab === 'active');
+    const current = ['queued', 'running'].includes(job.status) || currentPageJobs.has(job.job_id);
+    return current === (tab === 'current');
   }
   function renderJobTabs() {
-    for (const tab of ['active', 'history']) {
+    for (const tab of ['current', 'history']) {
       const button = $('jobs-tab-' + tab);
       const count = currentJobs.filter(job => jobMatchesTab(job, tab)).length;
-      button.textContent = `${tab === 'active' ? 'Active' : 'History'} (${count})`;
+      button.textContent = `${tab === 'current' ? 'Current' : 'History'} (${count})`;
       button.setAttribute('aria-selected', String(tab === jobsTab));
       button.tabIndex = tab === jobsTab ? 0 : -1;
     }
     $('jobs').setAttribute('aria-labelledby', 'jobs-tab-' + jobsTab);
-    for (const card of jobCards.values()) card.item.hidden = !jobMatchesTab(card.item.dataset, jobsTab);
+    for (const [id, card] of jobCards) card.item.hidden = !jobMatchesTab({job_id: id, status: card.item.dataset.status}, jobsTab);
     const visible = currentJobs.filter(job => jobMatchesTab(job, jobsTab));
     $('jobs-empty').hidden = visible.length > 0;
-    $('jobs-empty').textContent = jobsTab === 'active' ? 'No active jobs. Queue a generation to get started.' : 'No finished jobs yet.';
+    $('jobs-empty').textContent = jobsTab === 'current' ? 'No jobs in this page view. Queue a generation to get started.' : 'No earlier finished jobs.';
     if (!visible.some(job => job.job_id === selectedJob)) {
       selectedJob = visible.find(job => job.status === 'running')?.job_id
-        || (jobsTab === 'active' ? visible.at(-1)?.job_id : visible[0]?.job_id) || null;
+        || (jobsTab === 'current' ? visible.find(job => job.status === 'queued')?.job_id : null) || visible[0]?.job_id || null;
     }
     showJobTerminal();
   }
   function reconcileJobs(jobs) {
+    observePageJobs(jobs);
     currentJobs = jobs;
     const queued = jobs.filter(job => job.status === 'queued').slice().reverse();
     const running = jobs.filter(job => job.status === 'running');
@@ -1263,13 +1277,13 @@
   });
   $('resolution-preset').addEventListener('change', () => applyResolutionPreset($('aspect-ratio').value, $('resolution-preset').value));
   for (const id of ['width', 'height']) $(id).addEventListener('input', syncResolutionPresets);
-  for (const tab of ['active', 'history']) {
+  for (const tab of ['current', 'history']) {
     const button = $('jobs-tab-' + tab);
     button.addEventListener('click', () => { jobsTab = tab; renderJobTabs(); });
     button.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
-      jobsTab = event.key === 'Home' ? 'active' : event.key === 'End' ? 'history' : tab === 'active' ? 'history' : 'active';
+      jobsTab = event.key === 'Home' ? 'current' : event.key === 'End' ? 'history' : tab === 'current' ? 'history' : 'current';
       renderJobTabs(); $('jobs-tab-' + jobsTab).focus();
     });
   }
@@ -1289,7 +1303,8 @@
     perform('Submitting local generation job…', async () => {
       const accepted = await request('/remote/jobs', generationBody());
       selectedJob = accepted.job_id || accepted.job?.job_id || null;
-      jobsTab = 'active';
+      if (selectedJob) currentPageJobs.add(selectedJob);
+      jobsTab = 'current';
       await dashboard();
     }, { generationSubmission: true });
   });

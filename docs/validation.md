@@ -1,5 +1,19 @@
 # Validation and acceptance status
 
+## Current tab: page-view lifetime
+
+Current now retains queued/running jobs and jobs observed/submitted during this
+page view, including completed/failed/cancelled results. Membership lives only in
+JavaScript memory: normal polling, dashboard refresh and reconnect do not archive
+it; reloading the document places already-finished jobs in History. Unfinished
+jobs remain Current after reload. Fast jobs first seen completed after the initial
+snapshot are included. Server job records and outputs are not modified.
+
+`tests/job-tabs.cjs` covers page lifetime, fast completion, reconnection and fresh
+page state. Rebuilt-native validation with browser-only GET-job fixtures confirmed
+completion stays Current, reload archives finished jobs, queued jobs remain after
+reload, and cards retain identity. No server jobs were created or changed.
+
 ## Resolution presets and Active/History tabs
 
 All 15 aspect/size combinations satisfy the existing generation limits. Manual
