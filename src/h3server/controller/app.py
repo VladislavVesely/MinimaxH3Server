@@ -658,6 +658,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         # Remote GenerationInput is authoritative; never forward auth/origin headers.
         return proxy.request('POST', '/api/v1/jobs', body=body)
 
+    @app.post(API + '/remote/jobs/{job_id}/delete')
+    @observed
+    def remote_delete(job_id: str, body: EmptyRequest):
+        return proxy.request('POST', f'/api/v1/jobs/{job_id}/delete', body={})
+
     @app.post(API + '/remote/jobs/{job_id}/cancel')
     @observed
     def remote_cancel(job_id: str, body: EmptyRequest):

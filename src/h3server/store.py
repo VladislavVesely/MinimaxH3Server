@@ -404,6 +404,39 @@ class Store:
         with self._transaction() as db:
             return tuple(_stored(_decode_job, row)[0] for row in db.execute("SELECT * FROM jobs ORDER BY rowid DESC LIMIT ? OFFSET ?", (limit, offset)))
 
+    def delete_job(self, job_id, cleanup):
+        """Keep the row until cleanup succeeds, so interrupted deletion is retryable.
+
+        The write transaction also serializes the shared-reference snapshot with
+        acceptance. Callers must serialize worker execution/asset validation.
+        """
+        _identifier(job_id)
+        from h3server.assets import FIELDS
+        def assets(job):
+            settings=job.request.settings
+            if settings is None:return set()
+            result=set()
+            for name in FIELDS:
+                value=getattr(settings,name)
+                result.update((value,) if isinstance(value,str) else value or ())
+            return result
+        with self._transaction(write=True) as db:
+            try:job=self._job(db,job_id)[0]
+            except KeyError:return []
+            if job.status in (JobStatus.QUEUED,JobStatus.RUNNING):
+                raise ValueError('Please cancel the job before deleting it')
+            shared=set()
+            for row in db.execute('SELECT * FROM jobs WHERE job_id != ?',(job_id,)):
+                shared.update(assets(_stored(_decode_job,row)[0]))
+            removable=sorted(assets(job)-shared)
+            cleanup(removable)
+            # Preserve the global contiguous replay sequence without retaining
+            # the job ID or any of its log contents.
+            db.execute('UPDATE events SET subject_type=?,subject_id=?,payload=? WHERE subject_type=? AND subject_id=?',
+                       ('deleted','deleted',encode_event(Event('deleted',StageStatus.COMPLETED)),'job',job_id))
+            db.execute('DELETE FROM jobs WHERE job_id=?',(job_id,))
+            return removable
+
     def _transition_job(self, db, job_id, target, output):
         job, existing_output = self._job(db, job_id)
         if output is not None and target is not JobStatus.COMPLETED:

@@ -229,6 +229,7 @@
     operation_failed: 'Operation failed. Check target permissions, exact approvals and the saved checkpoint; no completion is assumed.',
     backend_not_ready: 'The local runtime or verified model is not ready. Review diagnostics before submitting.',
     insufficient_storage: 'Insufficient server disk space. Free space or adjust retention before retrying.',
+    required_generation_file_missing: 'An input or required runtime file is missing. Re-upload any deleted references in this draft, or refresh model readiness.',
     queue_full: 'The server job queue is full. Wait for existing jobs or cancel one explicitly.',
     output_unavailable_or_expired: 'This output expired or is unavailable. It cannot be previewed or downloaded.',
     unsupported_request: 'The requested settings or managed LoRA are unsupported by this runtime.',
@@ -1074,7 +1075,10 @@
     const ordered = [...running, ...queued, ...history];
     const present = new Set(jobs.map(job => job.job_id));
     for (const [id, card] of jobCards) {
-      if (!present.has(id)) { card.item.remove(); jobCards.delete(id); jobLogs.delete(id); jobPhases.delete(id); }
+      if (!present.has(id)) {
+        for (const video of card.output.querySelectorAll('video')) { video.pause(); video.removeAttribute('src'); video.load(); }
+        card.item.remove(); jobCards.delete(id); jobLogs.delete(id); jobPhases.delete(id);
+      }
     }
     let nextItem = $('jobs').firstElementChild;
     for (const job of ordered) {
@@ -1087,7 +1091,21 @@
         const title = node('h4', `Job ${job.job_id.slice(0, 8)}`); title.title = job.job_id;
         const logs = node('button', 'View terminal', 'text-button'); logs.type = 'button';
         logs.addEventListener('click', () => { selectedJob = job.job_id; showJobTerminal(); });
-        heading.append(title, logs);
+        const remove = node('button', 'Delete job', 'secondary'); remove.type = 'button';
+        remove.addEventListener('click', () => {
+          if (busy || remove.disabled || !confirm('Permanently delete this job, its result video, logs, timing records and references? References used by other saved jobs will be kept. This cannot be undone.')) return;
+          perform('Deleting selected job and its files…', async () => {
+            const result = await request('/remote/jobs/' + job.job_id + '/delete', {});
+            const removed = new Set(result.removed_assets || []);
+            for (const key of Object.keys(assetDraft)) assetDraft[key] = assetDraft[key].filter(asset => !removed.has(asset.id));
+            showInputAssets();
+            currentPageJobs.delete(job.job_id); seenPageJobs.delete(job.job_id);
+            if (selectedJob === job.job_id) selectedJob = null;
+            estimateKey = null;
+            await dashboard();
+          });
+        });
+        heading.append(title, logs, remove);
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
@@ -1095,13 +1113,15 @@
         const timing = node('p', undefined, 'job-timing');
         timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
         item.append(heading, caption, jobInputs(job.request), status, timing, meter, detail, output);
-        card = { item, status, timing, meter, detail, output, cancel: null, outputIdentity: null };
+        card = { item, status, timing, meter, detail, output, remove, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
         $('jobs').insertBefore(item, nextItem);
       }
       if (card.item !== nextItem) $('jobs').insertBefore(card.item, nextItem);
       nextItem = card.item.nextElementSibling;
       card.item.dataset.status = job.status;
+      card.remove.disabled = busy || ['queued', 'running'].includes(job.status);
+      card.remove.title = ['queued', 'running'].includes(job.status) ? 'Cancel this job first, then wait for it to stop before deleting.' : 'Permanently delete this job and its unshared files';
       const phase = jobPhases.get(job.job_id);
       const label = (phase?.stage || 'preparing').replaceAll('_', ' ');
       card.status.textContent = job.status === 'queued' ? `Waiting · queue position ${queued.indexOf(job) + 1}`

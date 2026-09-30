@@ -45,6 +45,20 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Delete jobs and their files
+
+Every card in **Current** and **History** has a confirmed **Delete job** action.
+Cancel queued/running jobs first and wait until they have fully stopped; Delete
+never cancels implicitly. It removes the job record, output/temporary directory,
+log contents, timing sample and references not used by another saved job. Averages
+are recomputed without that sample. Shared references remain until their last job
+is deleted. Models, preferences and unrelated jobs are not removed.
+
+This cannot be undone. Downloads/backups outside the daemon are not erased, and
+an already-open download can finish. Draft-only references in another browser are
+not durable shared-job references and may need re-uploading. Failed cleanup keeps
+the job listed for retry; repeating a successful deletion is safe.
+
 ## Saved generation inputs
 
 Queue/history cards show the seed directly alongside geometry and steps. Expand

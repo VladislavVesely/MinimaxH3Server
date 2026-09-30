@@ -392,6 +392,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             raise HTTPException(503, "backend_not_ready") from None
         except QueueFull:
             raise HTTPException(429, "queue_full", headers={"Retry-After": "5"}) from None
+        except FileNotFoundError:
+            raise HTTPException(422, 'required_generation_file_missing') from None
         except OSError:
             raise HTTPException(507, "insufficient_storage") from None
         return _job_data(store, job, worker)
@@ -410,6 +412,12 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             return _job_data(store, store.get_job(job_id), worker)
         except KeyError:
             raise HTTPException(404, "job_not_found") from None
+
+    @app.post('/api/v1/jobs/{job_id}/delete')
+    def delete_job(job_id: JobID):
+        try:return worker.delete(job_id)
+        except ValueError as exc:raise HTTPException(409,str(exc)) from None
+        except OSError:raise HTTPException(409,'Cleanup could not finish safely. The job remains listed; resolve the storage problem and retry deletion.') from None
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
     def cancel(job_id: JobID):

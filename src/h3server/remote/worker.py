@@ -294,10 +294,10 @@ class Worker:
 
     def submit(self, request: JobRequest):
         request.validate_capabilities(self.backend.capabilities)
-        self.backend.validate_request(request)
         if request.settings is None:
             raise ValueError("normalized generation settings are required")
         with self._lock:
+            self.backend.validate_request(request)
             if self.maintenance_status()['active'] or self._stopping.is_set() or self.readiness():
                 raise BackendUnavailable("backend is not ready")
             self.cleanup_outputs()
@@ -386,6 +386,35 @@ class Worker:
                         pass
             process.wait()
             self._terminated_process = process
+
+    def delete(self, job_id: str):
+        import fcntl
+        import shutil
+        from h3server.backends.base import directory, regular_file
+        job_id=_job_id(job_id)
+        with self._lock:
+            if self._active==job_id:
+                raise ValueError('Wait until this job has fully stopped before deleting it')
+            if self.maintenance_status()['active']:
+                raise ValueError('Wait for maintenance to finish before deleting jobs')
+            with regular_file(self.paths,'state/assets.lock',flags=os.O_CREAT|os.O_RDWR,mode='r+b',create_parents=True) as guard:
+                fcntl.flock(guard,fcntl.LOCK_EX)
+                def cleanup(assets):
+                    # dir_fd rmtree never follows nested symlinks. Refuse unsafe
+                    # platforms rather than fall back to path-based recursion.
+                    if not shutil.rmtree.avoids_symlink_attacks:
+                        raise ValueError('Safe directory deletion is unavailable on this platform')
+                    with directory(self.paths,'tmp/jobs',create=True) as parent:
+                        try:shutil.rmtree(job_id,dir_fd=parent)
+                        except FileNotFoundError:pass
+                    with directory(self.paths,'assets',create=True) as parent:
+                        for asset in assets:
+                            for suffix in ('.bin','.json'):
+                                try:os.unlink(asset+suffix,dir_fd=parent)
+                                except FileNotFoundError:pass
+                    self.performance.delete_job(job_id)
+                removed=self.store.delete_job(job_id,cleanup)
+                return {'deleted':job_id,'removed_assets':removed}
 
     def cancel(self, job_id: str):
         _job_id(job_id)

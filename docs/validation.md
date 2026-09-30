@@ -1,5 +1,28 @@
 # Validation and acceptance status
 
+## Explicit job deletion
+
+185 focused Python tests passed across deletion, worker, API, store/replay,
+performance, controller security and assets. Eight deletion tests cover cancel-first
+and active-process barriers, shared references, symlink safety, retry/idempotence,
+reopened replay integrity, timing-average recomputation, CSRF/authentication,
+submission/deletion serialization and actionable missing-file errors. Five JS
+scripts passed, including confirmation, failed-delete preservation and draft cleanup.
+
+Rebuilt-native controlled fixtures verified Delete in Current and History,
+disabled queued deletion, explicit cancellation before deletion, confirmation
+accept/dismiss, card/count refresh and 375px layout. Screenshot:
+`/tmp/h3-delete-history.png`. Browser job reads/mutations were intercepted, not user
+history. Live authenticated daemon acceptance separately created two isolated
+cancelled fixtures, deleted their directories, retained the shared reference until
+the last deletion, checked job/asset 404 responses and repeat-delete success, and
+reopened the event store. All pre-existing job IDs survived; no inference was run.
+
+Deployment used idle maintenance and prior-source hash guards. Event payloads and
+job IDs are replaced with anonymous tombstones, preserving contiguous global SSE
+cursors. Cleanup is retryable rather than falsely atomic across filesystem and
+SQLite: a partial failure retains the job row. This is not forensic secure erasure.
+
 ## Optional references and Sage/Turbo correction
 
 The previous validator incorrectly treated Turbo as unsupported for all conditioned

@@ -176,6 +176,26 @@ class PerformanceStore:
                 _update(avg['sampling_steps'][i],value)
             db.execute('INSERT OR REPLACE INTO averages VALUES(?,?)',(group,encoded(avg)))
 
+    def delete_job(self,job_id):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT group_key FROM samples WHERE job_id=?',(job_id,)).fetchone()
+            if row is None:return
+            group=row[0]
+            db.execute('DELETE FROM samples WHERE job_id=?',(job_id,))
+            db.execute('DELETE FROM averages WHERE group_key=?',(group,))
+            avg={'total':{},'stages':{},'sampling_steps':[]}
+            remaining=db.execute('SELECT payload FROM samples WHERE group_key=? ORDER BY rowid',(group,))
+            count=0
+            for (payload,) in remaining:
+                count+=1;metrics=json.loads(payload)['measurements']
+                _update(avg['total'],metrics['total_seconds'])
+                for name,value in metrics['stages'].items():_update(avg['stages'].setdefault(name,{}),value)
+                for i,value in enumerate(metrics['sampling_steps']):
+                    if i==len(avg['sampling_steps']):avg['sampling_steps'].append({})
+                    _update(avg['sampling_steps'][i],value)
+            if count:db.execute('INSERT INTO averages VALUES(?,?)',(group,encoded(avg)))
+
     def estimate(self,config,hardware,cache):
         with self.connect() as db:
             row=db.execute('SELECT payload FROM averages WHERE group_key=?',(key_for(config,hardware,cache,expected_attention(config)),)).fetchone()
