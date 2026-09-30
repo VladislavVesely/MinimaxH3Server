@@ -31,6 +31,28 @@ def test_only_finite_complete_measurements_and_no_private_hardware(tmp_path):
     with pytest.raises(ValueError):store.record('a'*32,config,{}, {'total_seconds':float('nan'),'stages':{},'sampling_steps':[]},'cold',{})
 
 
+def test_prompt_only_change_reuses_nearest_measured_length_without_mixing_cache_or_settings(tmp_path):
+    store = PerformanceStore(tmp_path / 'performance.sqlite')
+    config = configuration(JobRequest('short prompt', settings=GenerationSettings()))
+    metrics = {'total_seconds': 90, 'stages': {'denoising': 80}, 'sampling_steps': [4]}
+    store.record('a'*32, config, {}, metrics, 'warm', {'sage':False,'sparse':'off'})
+    changed = {**config, 'prompt_length_bucket': 1024, 'seed': 123}
+    estimate = store.estimate(changed, {}, 'warm')
+    assert estimate['samples'] == 1
+    assert estimate['mean_seconds'] == 90
+    assert estimate['match'] == 'nearby_prompt_length'
+    assert estimate['reference_prompt_length_bucket'] == 256
+    assert store.estimate(changed, {}, 'cold')['samples'] == 0
+    assert store.estimate({**changed, 'steps':20}, {}, 'warm')['samples'] == 0
+    assert store.estimate(changed, {'cpu_model':'different'}, 'warm')['samples'] == 0
+    store.record('b'*32, changed, {}, {**metrics,'total_seconds':100}, 'warm', {'sage':False,'sparse':'off'})
+    assert store.estimate(changed, {}, 'warm')['mean_seconds'] == 100
+    store.delete_job('b'*32)
+    assert store.estimate(changed, {}, 'warm')['mean_seconds'] == 90
+    store.delete_job('a'*32)
+    assert store.estimate(changed, {}, 'warm')['samples'] == 0
+
+
 def test_measurements_count_actual_steps_without_log_reset():
     from h3server.domain import Event,StageStatus,Progress
     clock=iter([0,1,2,4,5,6,7])

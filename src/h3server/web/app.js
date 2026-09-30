@@ -30,6 +30,8 @@
   let estimateTimer = null;
   let estimateEpoch = 0;
   let estimateKey = null;
+  let estimateContext = '';
+  let estimateAbort = null;
   let backendCapabilities = {};
   let profileCatalog = [];
   let activeProfileKey = null;
@@ -284,11 +286,11 @@
     log(message);
   }
 
-  async function request(path, body) {
+  async function request(path, body, {signal} = {}) {
     let response;
     try {
       response = await fetch(API + path, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: body === undefined ? 'GET' : 'POST', signal,
         credentials: 'same-origin', cache: 'no-store', redirect: 'error',
         headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -1130,7 +1132,7 @@
       }
     }
   }
-  const timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
+  let timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000);
   function observePageJobs(jobs) {
     for (const job of jobs) {
       if (['queued', 'running'].includes(job.status) || (pageJobsInitialized && !seenPageJobs.has(job.job_id))) {
@@ -1398,6 +1400,9 @@
     const generated = data.jobs.some(job => profiles.includes(job.request?.settings?.profile) && job.status === 'completed' && job.output && !job.output.expired);
     $('readiness').textContent = `Daemon connected. Active backend: ${capability.backend}; profiles: ${profiles.join(', ')}. Environment ready: ${diagnostic.environment_ready === true}. Model files ready: ${diagnostic.model_ready === true}. Runtime ready: ${runtimeReady}. Generation tested: ${generated ? 'completed job available (see output)' : 'not proven'}. ${(capability.not_ready_reasons || []).join(' ')}`;
     reconcileJobs(data.jobs);
+    // New/deleted measurements and residency changes invalidate an otherwise
+    // unchanged lookup; ordinary polling must not flash or repeat it.
+    estimateContext = JSON.stringify([data.jobs.filter(job => job.status === 'completed').map(job => job.job_id).sort(), modelState.loaded, modelState.profile, modelState.components]);
     scheduleEstimate();
     await jobEvents(current);
     if (!current()) return;
@@ -1587,16 +1592,18 @@
   function estimateText(value) {
     if (!value || !(value.samples > 0) || !Number.isFinite(value.mean_seconds)) return 'No estimate yet. ' + (value?.reason || 'No matching measured runs.');
     const spread = value.samples > 1 ? `; observed ${timeLabel(value.minimum_seconds)}–${timeLabel(value.maximum_seconds)}` : '; provisional';
-    return `Estimate ~${timeLabel(value.mean_seconds)} (${value.cache === 'warm_partial' ? 'reused base/encoder, decoder reload' : value.cache === 'encoder_reuse' ? 'encoder retained, other weights reloaded' : value.cache}; ${value.samples} matching ${value.samples === 1 ? 'run' : 'runs'}${spread}). Queue delay excluded.`;
+    return `Estimate ~${timeLabel(value.mean_seconds)} (${value.cache === 'warm_partial' ? 'reused base/encoder, decoder reload' : value.cache === 'encoder_reuse' ? 'encoder retained, other weights reloaded' : value.cache}; ${value.samples} matching ${value.samples === 1 ? 'run' : 'runs'}${spread}).${value.match === 'nearby_prompt_length' ? ' Approximate: matching settings, different prompt length.' : ''} Queue delay excluded.`;
   }
   function scheduleEstimate() {
     const body = generationBody();
-    const key = JSON.stringify([connection.state, performanceAvailable, body]);
+    const promptLength = Math.max(1, Math.min(16000, Array.from(body.prompt).length));
+    const key = JSON.stringify([connection.state, performanceAvailable, estimateContext, {...body, prompt:Math.ceil(promptLength / 256)}]);
     // Dashboard polling observes jobs; it must not restart an unchanged lookup
     // or replace the displayed estimate with a periodic loading message.
     if (key === estimateKey) return;
     estimateKey = key;
     clearTimeout(estimateTimer);
+    estimateAbort?.abort();
     const epoch = ++estimateEpoch;
     $('estimate-details').hidden = true;
     if (!performanceAvailable || connection.state !== 'authenticated') {
@@ -1605,17 +1612,22 @@
     }
     $('generation-estimate').textContent = 'Checking measurements for these settings…';
     estimateTimer = setTimeout(async () => {
+      const controller = new AbortController(); estimateAbort = controller;
+      const deadline = setTimeout(() => controller.abort(), 30000);
       try {
         // Only length affects timing lookup; do not send an unsubmitted prompt.
-        body.prompt = 'x'.repeat(Math.max(1, Math.min(16000, Array.from(body.prompt).length)));
-        const estimate = await request('/remote/performance/estimate', body);
+        body.prompt = 'x'.repeat(promptLength);
+        const estimate = await request('/remote/performance/estimate', body, {signal:controller.signal});
         if (!pageActive || epoch !== estimateEpoch) return;
         $('generation-estimate').textContent = estimateText(estimate);
         $('estimate-details').hidden = !(estimate.samples > 0);
         $('estimate-phases').textContent = Object.entries(estimate.stages || {}).map(([name, value]) => `${name.replaceAll('_', ' ')}: ~${timeLabel(value.mean_seconds)} (${value.samples} samples)`).join(' · ');
         $('estimate-steps').textContent = (estimate.sampling_steps || []).map((value, i) => `Step ${i + 1}: ${value.mean_seconds.toFixed(2)}s (${value.samples} samples)`).join('\n');
       } catch {
-        if (epoch === estimateEpoch) $('generation-estimate').textContent = 'Estimate unavailable. Check the selected settings and connection; no generation was submitted.';
+        if (pageActive && epoch === estimateEpoch) $('generation-estimate').textContent = 'Estimate unavailable or lookup timed out. Click Refresh dashboard to retry; no generation was submitted.';
+      } finally {
+        clearTimeout(deadline);
+        if (estimateAbort === controller) estimateAbort = null;
       }
     }, 450);
   }
@@ -1676,7 +1688,8 @@
       await dashboard();
     }, { generationSubmission: true });
   });
-  window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pagehide', () => { clearInterval(timingTimer); clearTimeout(estimateTimer); estimateAbort?.abort(); estimateEpoch++; pageActive = false; $('password').value = ''; resetSetupPolling(); resetDashboardPolling(); });
+  window.addEventListener('pageshow', event => { if (!event.persisted || pageActive) return; pageActive = true; estimateKey = null; timingTimer = setInterval(() => { if (pageActive) updateJobTimes(); }, 1000); scheduleEstimate(); void refresh().then(() => { if (connection.state === 'authenticated' && setup.installation_ready && !setup.busy) return dashboard(); }).catch(error => showError(error, false)); });
 
   async function start() {
     busy = true;

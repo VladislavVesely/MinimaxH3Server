@@ -292,7 +292,15 @@ CPU/RAM, OS, driver/CUDA/Torch/Triton/Sage and runtime-source/environment identi
 Exports omit job IDs, prompts, credentials, hostnames, device serials/UUIDs and
 filesystem paths. They are self-reported measurements, not trusted community
 attestations. Seeds are recorded but do not split average groups; irrelevant
-inactive Turbo settings are ignored when matching.
+inactive Turbo settings are ignored when matching. Exact prompt-length buckets
+are preferred; if none exists, the nearest measured prompt-length bucket with
+otherwise matching settings, hardware, cache and actual attention can be used.
+The UI explicitly labels that estimate approximate/different prompt length.
+Prompt wording alone does not restart the lookup within the same length bucket.
+New completed/deleted jobs and residency changes refresh the lookup automatically.
+Returning from the browser's page cache resumes observations; a 30-second lookup
+deadline replaces indefinite checking with an explicit retry message. Deleting a
+job deletes its timing sample too—missing/deleted measurements are not fabricated.
 
 Cold, warm, `warm_partial` (base/encoder retained) and `encoder_reuse` (encoder
 retained, other weights reloaded) samples remain separate. Estimates require the same

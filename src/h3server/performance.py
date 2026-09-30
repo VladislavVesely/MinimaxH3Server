@@ -197,11 +197,28 @@ class PerformanceStore:
             if count:db.execute('INSERT INTO averages VALUES(?,?)',(group,encoded(avg)))
 
     def estimate(self,config,hardware,cache):
+        target=key_for(config,hardware,cache,expected_attention(config))
+        match={}
         with self.connect() as db:
-            row=db.execute('SELECT payload FROM averages WHERE group_key=?',(key_for(config,hardware,cache,expected_attention(config)),)).fetchone()
+            row=db.execute('SELECT payload FROM averages WHERE group_key=?',(target,)).fetchone()
+            if row is None and type(config.get('prompt_length_bucket')) is int:
+                # Reuse a real measurement across prompt lengths, never across
+                # hardware, cache classes, conditioning geometry or model options.
+                nearest=None
+                for group,payload in db.execute('SELECT group_key,payload FROM samples GROUP BY group_key'):
+                    sample=json.loads(payload); candidate=dict(sample['configuration'])
+                    bucket=candidate.get('prompt_length_bucket')
+                    if type(bucket) is not int:continue
+                    candidate['prompt_length_bucket']=config['prompt_length_bucket']
+                    if key_for(candidate,sample['hardware'],sample['cache'],sample['actual_attention'])!=target:continue
+                    distance=abs(bucket-config['prompt_length_bucket'])
+                    if nearest is None or (distance,group)<(nearest[0],nearest[1]):nearest=(distance,group,bucket)
+                if nearest is not None:
+                    row=db.execute('SELECT payload FROM averages WHERE group_key=?',(nearest[1],)).fetchone()
+                    match={'match':'nearby_prompt_length','reference_prompt_length_bucket':nearest[2]}
         if row is None:return {'samples':0,'cache':cache,'reason':'No matching measured hardware/configuration/cache samples yet.'}
         avg=json.loads(row[0])
-        return {**_public(avg['total']),'cache':cache,'stages':{k:_public(v) for k,v in avg['stages'].items()},'sampling_steps':[_public(v) for v in avg['sampling_steps']],
+        return {**_public(avg['total']),**match,'cache':cache,'stages':{k:_public(v) for k,v in avg['stages'].items()},'sampling_steps':[_public(v) for v in avg['sampling_steps']],
                 'basis':'Measured generation time; queue delay excluded. Observed spread is not a guaranteed bound.'}
 
     def export(self,offset=0,limit=50):

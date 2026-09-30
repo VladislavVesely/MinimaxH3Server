@@ -1,5 +1,25 @@
 # Validation and acceptance status
 
+## Measurement lookup recovery
+
+Reproduced a successful estimate HTTP response being discarded after replaying
+persisted pagehide/pageshow: pageActive stayed false and Checking measurements
+never resolved. Also added regressions for completed-job invalidation, prompt-only
+matching, request deadlines and preservation of hardware/configuration/cache
+boundaries. Six focused JS and 59 Python checks passed. Chrome/WebKit fixture
+acceptance verified an untouched form acquiring a newly completed measurement,
+wording changes retaining it, different-length approximations being disclosed,
+and restored lifecycle requests resolving. Zero generation POSTs were attempted.
+
+The live server reported zero retained jobs and timing samples during inspection;
+no deleted or unrecorded durations were reconstructed. The one-file performance
+change was deployed with exact prior hash and idle maintenance guards. Its deployed
+SHA-256 was verified and cross-length matching exercised in a disposable separate
+statistics store without touching production measurements. The idle service restart
+released resident memory, not model files; maintenance was confirmed released.
+Helpers: `/tmp/h3-estimate-browser.cjs`, `/tmp/h3-estimate-fixed-native.cjs`,
+`/tmp/h3-estimate-deployed-check.py`.
+
 ## Reuse generation inputs
 
 Eight focused JavaScript checks and 62 reference/controller-security Python tests
