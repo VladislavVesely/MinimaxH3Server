@@ -617,6 +617,7 @@
     $('unavailable-variants').replaceChildren();
     list($('unavailable-variants'), data.unavailable.map(p => p.reason));
     showSelection();
+    showModelLibrary(modelLibrary);
   }
   function showSelection() {
     const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
@@ -819,6 +820,7 @@
       $('setup-progress').max = downloadProgress.total;
       $('setup-progress').value = downloadProgress.completed;
     } else $('setup-progress').removeAttribute('value');
+    $('setup-events-model').textContent = setup.profile ? `Setup history for ${profileLabel(setup.profile)} — these events do not describe another selected model.` : 'Saved setup history';
     $('setup-events').replaceChildren();
     for (const record of setup.snapshot?.events || []) $('setup-events').append(node('li', eventLine(record)));
     const checkpoint = setup.snapshot?.setups?.find(item => item.plan_digest === setup.plan_digest);
@@ -935,15 +937,29 @@
     }
   }
   $('generation-profile').addEventListener('change', render);
+  function modelInstallSummary(value) {
+    if (!value?.supported) return '';
+    const installed = value.profiles.filter(p => p.installed).map(p => profileLabel(p.profile)).join(', ') || 'none';
+    const available = `Available models: ${installed}. `;
+    if (value.busy) return available + `${profileLabel(value.profile)} — ${value.state === 'verifying' ? 'verifying runtime / existing files' : 'downloading / verifying model files'}: ${bytes(value.completed || 0)} / ${bytes(value.total || 0)}. Existing models are preserved.`;
+    if (value.error) return available + `Last ${profileLabel(value.profile)} installation ${value.state === 'cancelled' ? 'cancelled' : 'failed'}: ${value.error}. Click Install to retry; installed models remain available.`;
+    if (value.state === 'installed') return available + `${profileLabel(value.profile)} is installed and available in Generation profile. Existing verified files are reused, not downloaded again.`;
+    return available + 'Installed models are available in Generation profile. Select a model marked Not installed and click Install to add it; shared files are verified and reused.';
+  }
   function showModelLibrary(value) {
     modelLibrary = value;
     $('model-library-progress').hidden = !value?.busy;
     $('cancel-model-download').hidden = !value?.busy;
     $('model-library-progress').max = value?.total || 1;
     $('model-library-progress').value = value?.completed || 0;
-    $('model-library-status').textContent = !value?.supported ? '' : value.busy
-      ? `${value.state === 'verifying' ? 'Verifying shared runtime' : 'Downloading / verifying model files'}: ${profileLabel(value.profile)} · ${bytes(value.completed || 0)} / ${bytes(value.total || 0)}. Existing models are preserved.`
-      : value.error || 'Available models: ' + value.profiles.filter(p => p.installed).map(p => profileLabel(p.profile)).join(', ') + '. Select a compatible model above and click Install to add its weights; shared files are verified and reused.';
+    $('model-library-status').textContent = modelInstallSummary(value);
+    for (const option of $('install-profile').options) {
+      option.dataset.baseLabel ||= option.textContent;
+      const profile = value?.profiles?.find(p => p.profile === option.value);
+      const state = value?.busy && value.profile === option.value ? 'Installing…' : profile?.installed ? 'Installed' : profile?.compatible ? 'Not installed' : '';
+      const label = option.dataset.baseLabel + (state ? ` — ${state}` : '');
+      if (option.textContent !== label) option.textContent = label;
+    }
   }
   async function installAdditionalModel(selected) {
     if (!(runtimeReady && modelLibrary.profiles.some(p => p.profile === selected.profile_name && p.installed))) {

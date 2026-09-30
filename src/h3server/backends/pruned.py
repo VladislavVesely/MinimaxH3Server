@@ -51,6 +51,20 @@ def parse_request(value):
     return request
 
 
+def runtime_model_files(snapshot, selected, folder_paths, *, prepare_weights):
+    files = [snapshot / artifact.local_relative_path for artifact in selected.artifacts]
+    # Environment diagnostics run BEFORE downloading. Only generation needs
+    # the resolved originals/normalized runtime copies for cache identity.
+    if prepare_weights:
+        for artifact in selected.artifacts:
+            path = Path(artifact.local_relative_path)
+            resolved = folder_paths.get_full_path(path.parent.as_posix(), path.name)
+            if resolved is None:
+                raise ValueError('Selected model weight is unavailable: ' + path.name)
+            files.append(Path(resolved))
+    return files
+
+
 def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, prepare_weights=False, sage_attention=False, resident=False):
     """Explicit imports from verified pinned sources; no plugin discovery/main.py.
 
@@ -124,8 +138,7 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     rt.paths = paths
     rt.reference_condition = MiniMaxH3ReferenceToVideo
     rt.environment_digest = Path(environment).name
-    rt.model_files = [snapshot / a.local_relative_path for a in selected.artifacts]
-    rt.model_files += [Path(folder_paths.get_full_path(Path(a.local_relative_path).parent.as_posix(), Path(a.local_relative_path).name)) for a in selected.artifacts]
+    rt.model_files = runtime_model_files(snapshot, selected, folder_paths, prepare_weights=prepare_weights)
     from comfy.ldm.modules import attention
     rt.dense_attention = attention.optimized_attention
     set_attention(rt, paths, sage_attention)

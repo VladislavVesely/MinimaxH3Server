@@ -110,7 +110,10 @@ class ModelLibrary:
                 # Fixed diagnostic only: no package installation or model loading.
                 result=subprocess.run([sys.executable,'-m','h3server.backends.pruned','--profile',profile,'--root',str(self.paths.root),'--diagnose','--environment-only'],
                     env=self.worker._environment(),cwd=self.paths.root,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=180)
-                if result.returncode or not json.loads(result.stdout).get('environment_ready'):raise ValueError('Selected model runtime/GPU verification failed; no weights downloaded')
+                report=json.loads(result.stdout)
+                if result.returncode or not report.get('environment_ready'):
+                    issues='; '.join(str(issue) for issue in report.get('issues',[]))
+                    raise ValueError('Selected model runtime/GPU verification failed; no weights downloaded. '+safe_log(issues)[:1500])
                 if self.stop.is_set():raise ValueError('Model installation cancelled')
                 try:verify_snapshot(self.paths,profile_name=profile,cancelled=self.stop.is_set)
                 except (FileNotFoundError,ValueError):

@@ -40,7 +40,8 @@ def test_completed_setup_is_new_profile_install_not_failed_stage_retry():
         assert calls==[]
 
 
-def test_add_model_registers_and_routes_both_models_without_replacing_base(tmp_path,monkeypatch):
+@pytest.mark.parametrize('diagnostic_issue',[None,'fixture runtime issue'])
+def test_add_model_registers_and_routes_both_models_without_replacing_base(tmp_path,monkeypatch,diagnostic_issue):
     import json
     from types import SimpleNamespace
     from test_remote_api import service,HEADERS
@@ -52,7 +53,7 @@ def test_add_model_registers_and_routes_both_models_without_replacing_base(tmp_p
     base=Backend(profiles=('h3-convrot-int8',),resident=True,readiness=lambda:(),command=('base-python','base-worker'))
     store,worker,app=service(tmp_path,backend=base)
     library=app.state.model_library;downloads=[]
-    monkeypatch.setattr(module.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=0,stdout=b'{"environment_ready":true}'))
+    monkeypatch.setattr(module.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=bool(diagnostic_issue),stdout=json.dumps({'environment_ready':not diagnostic_issue,'issues':[diagnostic_issue] if diagnostic_issue else []}).encode()))
     monkeypatch.setattr(module,'verify_snapshot',lambda *a,**kw:(_ for _ in ()).throw(FileNotFoundError()))
     monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=10**13))
     monkeypatch.setattr(module,'download_model',lambda paths,**kw:downloads.append(kw['profile_name']))
@@ -63,6 +64,12 @@ def test_add_model_registers_and_routes_both_models_without_replacing_base(tmp_p
         assert client.post('/api/v1/models/install',headers=HEADERS,json={**body,'artifact_set_digest':'0'*64}).status_code==409
         assert client.post('/api/v1/models/install',headers=HEADERS,json=body).status_code==202
         library.thread.join(timeout=5);assert not library.thread.is_alive()
+        if diagnostic_issue:
+            assert library.status()['state']=='failed'
+            assert diagnostic_issue in library.status()['error']
+            assert worker.backend.profiles==base.profiles and downloads==[]
+            assert not worker.maintenance_status()['active']
+            return
         assert library.status()['state']=='installed',library.status()
         assert worker.backend.profiles==('h3-convrot-int8','h3-convrot-mixed')
         assert worker.backend.command_for_profile('h3-convrot-int8')==base.command
