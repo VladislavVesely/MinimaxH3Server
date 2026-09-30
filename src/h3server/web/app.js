@@ -946,6 +946,13 @@
     if (value.state === 'installed') return available + `${profileLabel(value.profile)} is installed and available in Generation profile. Existing verified files are reused, not downloaded again.`;
     return available + 'Installed models are available in Generation profile. Select a model marked Not installed and click Install to add it; shared files are verified and reused.';
   }
+  function modelOptionStatus(value, name) {
+    if (value?.busy && value.profile === name) return 'Installing…';
+    const profile = value?.profiles?.find(p => p.profile === name);
+    if (!profile) return 'Installation status unknown';
+    const status = profile.installed ? 'Installed' : 'Not installed';
+    return status + (profile.compatible === false ? ' · Requires different runtime' : '');
+  }
   function showModelLibrary(value) {
     modelLibrary = value;
     $('model-library-progress').hidden = !value?.busy;
@@ -955,9 +962,7 @@
     $('model-library-status').textContent = modelInstallSummary(value);
     for (const option of $('install-profile').options) {
       option.dataset.baseLabel ||= option.textContent;
-      const profile = value?.profiles?.find(p => p.profile === option.value);
-      const state = value?.busy && value.profile === option.value ? 'Installing…' : profile?.installed ? 'Installed' : profile?.compatible ? 'Not installed' : '';
-      const label = option.dataset.baseLabel + (state ? ` — ${state}` : '');
+      const label = `${option.dataset.baseLabel} — ${modelOptionStatus(value, option.value)}`;
       if (option.textContent !== label) option.textContent = label;
     }
   }
