@@ -6,14 +6,16 @@ const start = source.indexOf('  function generationBlockReasons()');
 assert.ok(start >= 0, 'Queue blocking reasons must have a shared implementation');
 const section = source.slice(start, source.indexOf('  function render()', start));
 function reasons(overrides = {}, selections = {}) {
-  const fields = {width:{value:'1344'},height:{value:'768'},'sparse-preset': {value: 'off'}, 'use-turbo': {checked: false}, 'use-sage': {checked: false}, ...selections};
-  const state = {ready: true, busy: false, submittingGeneration: false, setup: {busy: false}, connection: {state: 'authenticated'}, runtimeReady: true,
+  const fields = {'generation-profile':{value:'h3-convrot-int8'},width:{value:'1344'},height:{value:'768'},'sparse-preset': {value: 'off'}, 'use-turbo': {checked: false}, 'use-sage': {checked: false}, ...selections};
+  const state = {modelLibrary:null,modelState:{},ready: true, busy: false, submittingGeneration: false, setup: {busy: false}, connection: {state: 'authenticated'}, runtimeReady: true,
     sparseState: {installed: true, supported: true}, turboState: {installed: true, supported: true}, sageState: {installed: true, supported: true}, ...overrides};
   const context = vm.createContext({canvasFits:()=>true, conditioningReasons:()=>[], ...state, $: id => fields[id]});
   vm.runInContext(section, context);
   return Array.from(context.generationBlockReasons());
 }
 assert.deepEqual(reasons(), []);
+assert.match(reasons({modelLibrary:{busy:true}}).join(' '),/model installation/);
+assert.match(reasons({}, {'generation-profile':{value:'h3-convrot-mixed'},'sparse-preset':{value:'quality'}}).join(' '),/requires the ConvRot INT8/);
 assert.match(reasons({canvasFits:()=>false}).join(' '), /Resolution exceeds/);
 assert.match(reasons({}, {'sparse-preset': {value: 'quality'}, 'use-turbo': {checked: true}}).join(' '), /Turbo.*sparse.*cannot be combined.*Turn off Turbo/);
 assert.match(reasons({connection: {state: 'disconnected'}}).join(' '), /Connect/);

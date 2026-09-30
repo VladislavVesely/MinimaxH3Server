@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const source=fs.readFileSync('src/h3server/web/app.js','utf8');
 const start=source.indexOf('  function conditioningBody()');assert.ok(start>0,'Conditioning input controls are required');
-const fields={'input-mode':{value:'text'},'use-turbo':{checked:false},'sparse-preset':{value:'off'}};
+const fields={'generation-profile':{value:'h3-convrot-int8'},'input-mode':{value:'text'},'use-turbo':{checked:false},'sparse-preset':{value:'off'}};
 const c=vm.createContext({$:id=>fields[id],inputModes:['text','frames','references'],referenceState:{installed:true},assetDraft:{reference_images:[],reference_videos:[],reference_audios:[],first_frame:[],last_frame:[]}});
 vm.runInContext(source.slice(start,source.indexOf('  function showInputAssets(',start)),c);
 assert.deepEqual(JSON.parse(JSON.stringify(c.conditioningBody())),{});
@@ -14,4 +14,5 @@ fields['use-turbo'].checked=true;assert.equal(c.conditioningReasons().length,0,'
 assert.equal(c.conditioningBody().input_mode,'references','Empty references must keep the explicitly chosen Ref2VA model');
 fields['sparse-preset'].value='quality';assert.match(c.conditioningReasons().join(' '),/Sparse/);
 assert.doesNotMatch(c.conditioningReasons().join(' '),/Turbo/);
+fields['generation-profile'].value='h3-convrot-mixed';assert.match(c.conditioningReasons().join(' '),/Reference mode requires the ConvRot INT8/);
 console.log('Conditioning modes isolate assets, preserve text requests and expose real blockers');

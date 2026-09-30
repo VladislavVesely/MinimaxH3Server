@@ -656,6 +656,21 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def remote_asset_content(id: str, request: Request):
         return proxy.request('GET',f'/api/v1/assets/{id}/content',range_header=request.headers.get('range'))
 
+    @app.get(API + '/remote/models/library')
+    @observed
+    def remote_model_library():
+        return proxy.request('GET', '/api/v1/models/library')
+
+    @app.post(API + '/remote/models/install')
+    @observed
+    def remote_model_install(body: dict = Body()):
+        return proxy.request('POST', '/api/v1/models/install', body=body)
+
+    @app.post(API + '/remote/models/install/cancel')
+    @observed
+    def remote_model_install_cancel(body: dict = Body()):
+        return proxy.request('POST', '/api/v1/models/install/cancel', body=body)
+
     @app.get(API + '/remote/models')
     @observed
     def remote_models():

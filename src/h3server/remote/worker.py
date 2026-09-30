@@ -102,6 +102,7 @@ class Backend:
     runtime_id: str = 'diffusers-minimax-h3-t2va'
     profiles: tuple[str, ...] = H3_PROFILES
     resident: bool = False
+    command_for_profile: Callable[[str], tuple[str, ...]] | None = None
 
 
 def _job_id(value: str) -> str:
@@ -508,11 +509,12 @@ class Worker:
                 self.backend.validate_request(job.request)
                 self._disk_check()
                 request_path = self._prepare(job)
+                command = self.backend.command_for_profile(job.request.settings.profile) if self.backend.command_for_profile else self.backend.command
                 if self.backend.resident:
                     if not self._alive(self._resident_process) or self._resident_profile != job.request.settings.profile:
                         self._drop_resident()
                         self._resident_process = subprocess.Popen(
-                            [*self.backend.command, '--resident'], stdin=subprocess.PIPE,
+                            [*command, '--resident'], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=self._environment(),
                             cwd=self.paths.root, start_new_session=True,
                             pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())
@@ -522,7 +524,7 @@ class Worker:
                     process.stdin.flush()
                 else:
                     process = subprocess.Popen(
-                        [*self.backend.command, '--request', str(request_path)],
+                        [*command, '--request', str(request_path)],
                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         env=self._environment(), cwd=self.paths.root, start_new_session=True,
                         pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())

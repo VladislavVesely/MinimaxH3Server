@@ -556,3 +556,11 @@ explicit retry, reload/export, cancellation, unsafe receipt rejection and origin
 trusted predecessor recovery with a legacy log. They do not run pip, CUDA, codecs,
 model downloads or real server installation, and do not establish the original
 transient PyAV lookup cause.
+
+## Installing another model
+
+Select another profile and click **Install**. Compatible profiles (for example ConvRot INT8 and mixed INT4/INT8) reuse the verified runtime instead of entering failed-setup recovery. The progress bar counts downloaded, verified and reused bytes. Matching pinned encoder/VAE files are verified and privately reflinked or copied; originals are never hardlinked, removed or overwritten. Mixed currently shares about 20 GB of its roughly 35.9 GB snapshot with INT8.
+
+Installation requires an idle queue and explicit approval. **Cancel model download** retains resumable partials and existing models; a running bounded runtime diagnostic may finish before cancellation takes effect. Restarted interrupted downloads require another explicit Install. Once complete, both compatible models appear in **Generation profile**. Switching profiles never starts generation; resident processes recycle safely when a queued job actually needs another model. Ref2VA and sparse attention still require INT8.
+
+Different runtime families use the normal full setup after a completed-active-checkpoint ownership check. Existing weights and environments stay on disk. The generation selector lists models compatible with the active runtime, not every inactive environment. Failed or ambiguous setup checkpoints still require their original guarded recovery; they are not bypassed.

@@ -25,7 +25,7 @@ class ReferenceInstaller:
         with self.lock:
             installed=reference.installed(self.paths)
             return {**self._read(),'installed':installed,'busy':bool(self.thread and self.thread.is_alive()),
-                    'supported':bool(self.worker.backend.profiles) and all(p in reference.SUPPORTED_PROFILES for p in self.worker.backend.profiles),
+                    'supported':bool(self.worker.backend.profiles) and any(p in reference.SUPPORTED_PROFILES for p in self.worker.backend.profiles),
                     'artifact_digest':reference.DIGEST,'total':reference.TOTAL,'checkpoint':reference.WEIGHT,'license':reference.BINDING['license']}
 
     def recover(self):

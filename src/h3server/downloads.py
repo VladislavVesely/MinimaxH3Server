@@ -222,6 +222,42 @@ def _lock(paths):
         yield
 
 
+def _shared_candidates(profile_name, entry):
+    from h3server.backends.catalog import PRUNED_PROFILE_NAMES
+    if profile_name not in PRUNED_PROFILE_NAMES:return []
+    candidates=[]
+    for profile in PRUNED_PROFILE_NAMES:
+        if profile==profile_name:continue
+        manifest=_selected_manifest(profile)
+        for other in _inventory(manifest):
+            if other['size']==entry['size'] and other.get('lfs')==entry.get('lfs') and entry.get('lfs'):
+                candidates.append('models/h3-'+_snapshot_id(manifest)+'/'+other['rfilename'])
+    return candidates
+
+
+def _reuse_shared(paths,entry,candidates,target,cancelled):
+    """Verified private reflink/copy, never a hardlink or writable source alias."""
+    for source in candidates:
+        try:
+            with regular_file(paths,source) as stream:
+                try:_verify(stream,entry,cancelled)
+                except ValueError:continue
+                target.seek(0);target.truncate(0)
+                try:
+                    import fcntl
+                    fcntl.ioctl(target.fileno(),0x40049409,stream.fileno()) # Linux FICLONE
+                except OSError:
+                    stream.seek(0);target.seek(0);target.truncate(0)
+                    while chunk:=stream.read(CHUNK):
+                        if cancelled():raise DownloadCancelled('cancelled shared-file copy')
+                        target.write(chunk)
+                target.flush();os.fsync(target.fileno())
+                _verify(target,entry,cancelled)
+                return True
+        except FileNotFoundError:continue
+    return False
+
+
 def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, transport=None,
                    timeout=30, file_timeout=6 * 3600, profile_name=None):
     """Explicit injectable IO boundary; default uses bounded HTTPS, no auth tokens.
@@ -270,6 +306,9 @@ def download_model(paths, *, emit=lambda event: None, cancelled=lambda: False, t
                 with regular_file(paths, partial, flags=os.O_CREAT | os.O_RDWR,
                                   mode="r+b", create_parents=True) as stream:
                     offset = os.fstat(stream.fileno()).st_size
+                    if offset == 0:
+                        if _reuse_shared(paths,entry,_shared_candidates(profile_name,entry),stream,cancelled):
+                            offset=entry['size']
                     if offset > entry["size"]:
                         stream.truncate(0)
                         offset = 0

@@ -609,3 +609,11 @@ From the implementation worktree:
 This is the locally built macOS executable. It opens the local browser controller; launching it is not approval for privileged target changes or a model download. Build another native platform with `python scripts/build_controller.py` and verify with `python scripts/smoke_controller.py dist/h3-controller` (use the `.exe` output on Windows).
 
 All automated results above refer to the stated implementation revision. They are not a blanket end-to-end certification.
+
+## Additional models (2026-09-30)
+
+- Focused model-library, controller security, worker, setup/recovery/discovery, downloads, pruned runtime/UI and optional-feature tests: **379 passed, one skipped**. No full-suite run.
+- Eight focused JS checks passed. Chrome and WebKit native fixtures verified one pinned additional-model POST (no legacy setup request), visible byte progress, preserved step edits, and both selectable generation profiles. Model installation/generation requests were intercepted. WebKit reproduced `mousedown`/`mouseup` without `click` when Install text was replaced during blur; conditional label writes fixed first-click delivery.
+- Temporary native helper: `/tmp/h3-model-library-native.cjs`; progress captures `/tmp/h3-model-progress-{chrome,webkit}.png`. No older controllers or joiner workspaces were stopped.
+- Eight daemon files deployed with exact prior-source hashes, backups under `tmp/model-library-backup`, idle `policy: reject` maintenance and a guarded restart. Read-only acceptance: runtime ready, maintenance off, zero jobs, library idle with INT8 installed. Full existing INT8 snapshot hashes verified. Mixed has three matching shared files totaling **19,986,772,542 bytes** out of **35,889,785,333 bytes**.
+- No real mixed-model download or inference was started to test this change. Cross-family real provisioning, maximum-size cancellation and inference quality are not claimed. The rebuilt controller exposes the explicit Install action for the owner.

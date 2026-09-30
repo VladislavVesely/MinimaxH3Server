@@ -32,7 +32,7 @@ class SparseInstaller:
         with self.lock:
             return {**self._read(), 'installed': sparse.installed(self.paths),
                     'busy': bool(self.thread and self.thread.is_alive()),
-                    'supported': bool(self.worker.backend.profiles) and all(p in sparse.PROFILES for p in self.worker.backend.profiles),
+                    'supported': bool(self.worker.backend.profiles) and any(p in sparse.PROFILES for p in self.worker.backend.profiles),
                     'supported_profiles': sparse.PROFILES, 'artifact_digest': sparse.DIGEST,
                     'total': sparse.TOTAL, 'additional_weights': False, 'turbo_compatible': False}
 

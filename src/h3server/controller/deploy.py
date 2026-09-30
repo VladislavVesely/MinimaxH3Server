@@ -316,6 +316,32 @@ class Deployment:
             return {'plan': plan, 'plan_digest': digest, 'selection': profile_document(plan['profile']),
                     'snapshot': observed}
 
+    def prepare_additional_setup(self, profile):
+        """A different runtime is a NEW approved install, not failed-stage retry.
+
+        Preserve all old environments/receipts. Recheck the completed active
+        checkpoint under staging/installer/deployment ownership before publishing
+        a new plan. The actual activation still rejects queued/running jobs.
+        """
+        try:observed=self.observe_saved()
+        except (ControllerError,OSError,ValueError,TypeError,KeyError):
+            # This optional NEW-install path grants nothing on unproven input.
+            # Preserve the established recovery/discovery path and its precise
+            # fail-closed diagnostics for missing, stale or malformed records.
+            return None
+        def completed(value):
+            snapshot=value['snapshot'];digest=value['plan_digest']
+            return (value['plan']['profile']!=profile
+                and (snapshot.get('active_release') or {}).get('environment')==digest
+                and any(s.get('plan_digest')==digest and s.get('state')=='ready' for s in snapshot.get('setups',[]))
+                and (snapshot.get('operation') or {}).get('state')=='completed')
+        if not completed(observed):return None
+        with self.connection.staging_transaction(self.root,discovery=True) as check:
+            current=self.observe_saved()
+            if current['plan_digest']!=observed['plan_digest'] or not completed(current):raise ControllerError('selection_changed')
+            check();self.compatible=False
+            return self.make_plan(profile,sudo_password_available=True)
+
     def restore_compatible_failure(self):
         """Explicit Install/retry discovery only; normal restore remains exact-release.
 

@@ -222,6 +222,9 @@ class SetupCoordinator:
             'plan_digest': document['plan_digest'], **values}), mutation=True)
 
     def _initial_plan(self):
+        if self._retry_digest is None:
+            additional = self._call(lambda: self.deployment.prepare_additional_setup(self._selection[0]), mutation=True)
+            if additional is not None:return additional
         compatible = self._call(self.deployment.restore_compatible_failure)
         if compatible is not None:
             return compatible

@@ -46,6 +46,21 @@ class TurboInstallInput(BaseModel):
     artifact_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
 
 
+class ModelInstallInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    profile: str
+    artifact_set_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    license_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    license_acknowledged: Literal[True]
+    eligibility_confirmed: Literal[True]
+    download_approved: Literal[True]
+
+
+class ModelCancelInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    operation: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
 class GenerationInput(BaseModel):
     """Canvas area<=1,032,192 is service policy, not an upstream hard maximum.
 
@@ -172,6 +187,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     if not 0 < heartbeat_seconds <= 60:
         raise ValueError("invalid heartbeat interval")
 
+    from h3server.remote.model_library import ModelLibrary
+    library = ModelLibrary(worker)
     from h3server.remote.features import SageInstaller
     features = SageInstaller(worker)
     from h3server.remote.turbo import TurboInstaller
@@ -184,6 +201,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     @asynccontextmanager
     async def lifespan(app):
         worker.start()
+        library.recover()
         features.recover()
         turbo.recover()
         reference.recover()
@@ -191,6 +209,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         try:
             yield
         finally:
+            await asyncio.to_thread(library.close)
             await asyncio.to_thread(features.close)
             await asyncio.to_thread(turbo.close)
             await asyncio.to_thread(reference.close)
@@ -200,6 +219,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     app = FastAPI(title="MiniMax H3 remote API", version="1.0.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None)
     app.state.request_model = GenerationInput
+    app.state.model_library = library
 
     @app.middleware("http")
     async def authenticate(request, call_next):
@@ -222,6 +242,19 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     @app.exception_handler(Exception)
     async def internal_error(request, error):
         return JSONResponse({"error": "internal_error"}, status_code=500)
+
+    @app.get('/api/v1/models/library')
+    def model_library():return library.status()
+
+    @app.post('/api/v1/models/install',status_code=202)
+    def install_model(body: ModelInstallInput):
+        try:return library.start(**body.model_dump())
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @app.post('/api/v1/models/install/cancel')
+    def cancel_model_install(body: ModelCancelInput):
+        try:return library.cancel(body.operation)
+        except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @app.get('/api/v1/features/sageattention')
     def sage_status():
@@ -373,7 +406,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                                    for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
-                "resident_models": worker.models_status(), "performance_schema": 1,
+                "resident_models": worker.models_status(), "model_library": library.status(), "performance_schema": 1,
                 "input_modes": ['text', 'frames', 'references'] if 'h3-convrot-int8' in worker.backend.profiles else ['text', 'frames'] if any(p in PRUNED_PROFILE_NAMES for p in worker.backend.profiles) else ['text'],
                 "optional_features": {"reference": reference.status(), "sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},

@@ -101,6 +101,11 @@ def dependencies_match(paths, resolved, current, *, allow_unverified_sage=False)
     return allow_unverified_sage or installed(paths)
 
 
+def compatible_runtime(base, target):
+    a,b=get_artifact_set(base),get_artifact_set(target)
+    return a.runtime_id==b.runtime_id and a.runtime_sources==b.runtime_sources and a.tokenizers==b.tokenizers
+
+
 def verify_provisioned(paths, profile, *, allow_unverified_sage=False):
     """Only the running application-owned environment, never a caller import path."""
     environment = Path(sys.prefix).absolute()
@@ -116,7 +121,13 @@ def verify_provisioned(paths, profile, *, allow_unverified_sage=False):
         resolved = raw.decode()
     record = read_json(paths, f'environments/{relative}/runtime.json')
     if record != runtime_record(profile, resolved):
-        raise ValueError('runtime selection or dependency record mismatch')
+        base=record.get('profile')
+        if record != runtime_record(base,resolved) or not compatible_runtime(base,profile):
+            raise ValueError('runtime selection or dependency record mismatch')
+        # Additional weights require their own exact license/artifact approval;
+        # the base runtime receipt and frozen dependency contract stay immutable.
+        from h3server.downloads import require_consent
+        require_consent(paths,profile_name=profile)
     verify_sources(environment, profile)
     result = subprocess.run([sys.executable, '-m', 'pip', 'freeze', '--all'],
                             capture_output=True, timeout=60, check=True)

@@ -34,6 +34,8 @@
   let estimateAbort = null;
   let backendCapabilities = {};
   let profileCatalog = [];
+  let modelLibrary = null;
+  let modelLicenseDigest = null;
   let activeProfileKey = null;
   let setupTimer = null;
   let jobTimer = null;
@@ -194,6 +196,7 @@
     saved_connection_missing: 'No saved connection is available. Enter the SSH details and authenticate once.',
     saved_connection_mismatch: 'Saved credentials belong to a different SSH target. Enter the password for this connection.',
     turbo_selection_changed: 'The controller and daemon Turbo pins differ. Update to matching versions; no download was started.',
+    model_install_failed: 'The additional model was not installed. See the download status; existing models are unchanged. Click Install to verify and resume.',
     sparse_install_failed: 'Sparse installation or GPU verification failed. See its output above; base models and SageAttention are unchanged. Retry Install to resume.',
     sparse_selection_changed: 'Sparse pins differ between controller and daemon. No installation was started.',
     turbo_install_failed: 'Optional Turbo download failed. Its status shows the reason; click Install to retry/resume without reinstalling the base model.',
@@ -354,10 +357,13 @@
     if (!ready) reasons.push('Open a valid local controller session.');
     if (connection.state !== 'authenticated') reasons.push('Connect and authenticate to the server.');
     if (setup.busy) reasons.push('Wait for setup to finish.');
+    if (modelLibrary?.busy || modelState.maintenance) reasons.push('Wait for model installation or maintenance to finish. Existing jobs are not cancelled.');
     if (busy && !submittingGeneration) reasons.push('Wait for the current operation to finish.');
     if (!runtimeReady) reasons.push('Generation readiness is not confirmed. Check the readiness status above or click Refresh dashboard.');
     if (!canvasFits(Number($('width').value), Number($('height').value))) reasons.push('Resolution exceeds this daemon’s canvas limits or is not aligned to 32 pixels. Choose an enabled preset or correct Width and Height.');
     const sparseOn = $('sparse-preset').value !== 'off';
+    if (sparseOn && $('generation-profile').value !== 'h3-convrot-int8') reasons.push('Sparse attention requires the ConvRot INT8 generation profile.');
+    if ($('use-turbo').checked && !['h3-convrot-int8','h3-convrot-mixed'].includes($('generation-profile').value)) reasons.push('Turbo requires ConvRot INT8 or mixed.');
     if (sparseOn && $('use-turbo').checked) reasons.push('Turbo and sparse attention cannot be combined. Turn off Turbo or select Sparse: Off.');
     for (const [name, state, selected, off] of [
       ['Sparse attention', sparseState, sparseOn, 'select Sparse: Off'],
@@ -411,7 +417,7 @@
     $('progress-note').hidden = !busy;
     $('connection').setAttribute('aria-busy', String(busy));
     const optionalOnlyFailure = setup.model_ready && ['sage_install_failed', 'turbo_install_failed', 'sparse_install_failed', 'optional_install_busy_or_unsupported'].includes(setup.error);
-    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || (setup.state === 'failed' && !optionalOnlyFailure);
+    $('install-profile').disabled = !available || !profileCatalog.length || !!pendingInstall || (setup.state === 'failed' && !optionalOnlyFailure && !modelLibrary?.supported);
     $('install-sage').disabled = !available || sageState.busy || !!pendingInstall || !!pendingRetry;
     $('install-turbo').disabled = !available || sageState.busy || turboState.busy || !!pendingInstall || !!pendingRetry;
     $('install-sparse').disabled = !available || sageState.busy || turboState.busy || sparseState.busy || !!pendingInstall || !!pendingRetry;
@@ -419,23 +425,27 @@
     const needsSage = $('install-sage').checked && !sageState.installed;
     const needsTurbo = $('install-turbo').checked && !turboState.installed;
     const selectedInstall = profileCatalog.find(p => p.profile_name === $('install-profile').value);
-    const alreadyInstalled = setup.installation_ready === true && setup.model_ready === true
-      && setup.profile === $('install-profile').value && !needsSage && !needsTurbo && !needsSparse;
+    const additionalModel = modelLibrary?.supported && modelLibrary.profiles.some(p => p.profile === selectedInstall?.profile_name && p.compatible);
+    const alreadyInstalled = (additionalModel
+      ? runtimeReady && modelLibrary.profiles.some(p => p.profile === selectedInstall.profile_name && p.installed)
+      : setup.installation_ready === true && setup.model_ready === true && setup.profile === $('install-profile').value)
+      && !needsSage && !needsTurbo && !needsSparse;
     const installReason = !ready ? 'Open a valid local controller session to enable Install.'
+      : modelLibrary?.busy ? 'A model download is running; see its progress below. Installed models are preserved.'
       : alreadyInstalled ? 'This environment and its model files are already installed and verified. No installation is needed.'
       : sparseState.busy ? 'Optional sparse setup is running; download and GPU-check status is shown below.'
       : $('install-sparse').checked && selectedInstall && selectedInstall.profile_name !== 'h3-convrot-int8' ? 'Sparse currently supports ConvRot INT8 only. Uncheck it for this profile.'
       : turboState.busy ? 'Optional Turbo download is running; actual bytes are shown below.'
       : $('install-turbo').checked && selectedInstall && !turboProfiles.includes(selectedInstall.profile_name) ? 'Turbo currently supports ConvRot INT8/mixed only. Uncheck it for this profile.'
       : sageState.busy ? 'Optional SageAttention installation is running; progress is shown below.'
-      : (needsSage || needsTurbo || needsSparse) && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing optional components. Running jobs will not be cancelled.'
+      : (additionalModel || needsSage || needsTurbo || needsSparse) && currentJobs.some(job => ['queued', 'running'].includes(job.status)) ? 'Wait for the generation queue to become idle before installing models or optional components. Running jobs will not be cancelled.'
       : $('install-sage').checked && selectedInstall && !selectedInstall.runtime_id.startsWith('comfyui-h3-') ? 'SageAttention is available for pruned profiles only. Uncheck it to install a legacy profile.'
       : setup.busy ? 'Setup is already running. Wait for it to finish or cancel further actions.'
       : busy ? 'An operation is in progress. Wait for it to finish.'
       : !authenticated ? 'Authenticate to automatically scan hardware and enable Install.'
-      : setup.state === 'failed' && !optionalOnlyFailure ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
-      : !connection.recovery?.setup_credential_retained ? 'Install needs memory-only setup authorization. Disconnect, reconnect and authenticate. Saved unprivileged retries do not need a sudo password.'
-      : !scanned && !pendingInstall ? 'Hardware has not been scanned. Click Scan hardware; if it failed, resolve the scan error first.'
+      : setup.state === 'failed' && !optionalOnlyFailure && !additionalModel ? 'A saved setup failed. Review its diagnostics and retry eligibility below; Install cannot resume a failed stage.'
+      : !additionalModel && !connection.recovery?.setup_credential_retained ? 'Install needs memory-only setup authorization. Disconnect, reconnect and authenticate. Saved unprivileged retries do not need a sudo password.'
+      : !additionalModel && !scanned && !pendingInstall ? 'Hardware has not been scanned. Click Scan hardware; if it failed, resolve the scan error first.'
       : !$('install-profile').value ? 'Wait for the model catalog, then choose a profile.'
       : $('install-profile').selectedOptions[0]?.disabled ? 'This profile is not eligible for the observed hardware. Choose an available profile.' : '';
     $('install').disabled = !!installReason;
@@ -445,11 +455,12 @@
     $('retry-setup').hidden = setup.retry?.eligible !== true;
     $('retry-setup').disabled = !available || !authenticated;
     $('retry-setup').textContent = pendingRetry ? 'Retry stage request' : 'Retry failed stage';
-    $('install').textContent = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request'
+    const installLabel = alreadyInstalled ? 'Installed' : pendingInstall ? 'Retry Install request'
       : setup.model_ready && needsSparse ? 'Install optional components'
       : setup.model_ready && needsSage && needsTurbo ? 'Install optional components'
       : setup.model_ready && needsTurbo ? 'Install Turbo LoRA'
       : setup.model_ready && needsSage ? 'Install SageAttention' : 'Install';
+    if ($('install').textContent !== installLabel) $('install').textContent = installLabel;
     $('cancel-setup').hidden = !setup.busy || setup.observing === true;
     $('cancel-setup').disabled = !usable || setup.state === 'cancelling';
     $('setup-refresh').disabled = !usable;
@@ -592,6 +603,7 @@
   function renderCatalog(data) {
     const previous = setup.profile || $('install-profile').value;
     profileCatalog = data.profiles;
+    modelLicenseDigest = data.license_sha256;
     $('install-profile').replaceChildren();
     for (const profile of profileCatalog) {
       const option = node('option', profile.label + (profile.required_gpu_family ? ' · Blackwell only' : ' · experimental'));
@@ -923,8 +935,47 @@
     }
   }
   $('generation-profile').addEventListener('change', render);
+  function showModelLibrary(value) {
+    modelLibrary = value;
+    $('model-library-progress').hidden = !value?.busy;
+    $('cancel-model-download').hidden = !value?.busy;
+    $('model-library-progress').max = value?.total || 1;
+    $('model-library-progress').value = value?.completed || 0;
+    $('model-library-status').textContent = !value?.supported ? '' : value.busy
+      ? `${value.state === 'verifying' ? 'Verifying shared runtime' : 'Downloading / verifying model files'}: ${profileLabel(value.profile)} · ${bytes(value.completed || 0)} / ${bytes(value.total || 0)}. Existing models are preserved.`
+      : value.error || 'Available models: ' + value.profiles.filter(p => p.installed).map(p => profileLabel(p.profile)).join(', ') + '. Select a compatible model above and click Install to add its weights; shared files are verified and reused.';
+  }
+  async function installAdditionalModel(selected) {
+    if (!(runtimeReady && modelLibrary.profiles.some(p => p.profile === selected.profile_name && p.installed))) {
+      let state = await request('/remote/models/install', {profile:selected.profile_name,artifact_set_digest:selected.artifact_set_digest,
+        license_sha256:modelLicenseDigest,license_acknowledged:true,eligibility_confirmed:true,download_approved:true});
+      showModelLibrary(state);
+      while (pageActive && state.busy) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        state = await request('/remote/models/library'); showModelLibrary(state);
+      }
+      if (!pageActive) return;
+      if (state.state !== 'installed') throw {code:'model_install_failed'};
+    }
+    await dashboard();
+    $('generation-profile').value = selected.profile_name;
+    render(); scheduleEstimate();
+    if ($('install-sage').checked && !sageState.installed) await installOptional('sageattention', showSage);
+    if (selected.profile_name === 'h3-convrot-int8' && $('install-sparse').checked && !sparseState.installed) await installOptional('sparse', showSparse);
+    if ($('install-turbo').checked && !turboState.installed) await installOptional('turbo', showTurbo);
+  }
+  $('cancel-model-download').addEventListener('click', async () => {
+    if (!modelLibrary?.operation || !confirm('Cancel this model download? Partial files can be resumed; installed models stay unchanged.')) return;
+    try { showModelLibrary(await request('/remote/models/install/cancel', {operation:modelLibrary.operation})); }
+    catch (error) { showError(error); }
+  });
   $('install').addEventListener('click', () => perform('Starting selected automatic setup…', async () => {
     const selected = profileCatalog.find(p => p.profile_name === $('install-profile').value);
+    if (modelLibrary?.supported && modelLibrary.profiles.some(p => p.profile === selected.profile_name && p.compatible)) {
+      await savePreferences();
+      await installAdditionalModel(selected);
+      return;
+    }
     // Reattach before entering install/recovery. A completed or running saved
     // download is not a failed environment and must never be reinstalled.
     try {
@@ -1374,6 +1425,7 @@
     if (!current()) return;
     backendCapabilities = capability.adapter_capabilities;
     modelState = capability.resident_models || {};
+    showModelLibrary(capability.model_library || null);
     performanceAvailable = capability.performance_schema === 1;
     setResolutionLimits(capability.service_limits || {});
     showSage(capability.optional_features?.sage_attention);
@@ -1386,11 +1438,13 @@
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
       activeProfileKey = profileKey;
+      const previousProfile = $('generation-profile').value;
       $('generation-profile').replaceChildren();
       for (const name of profiles) {
         const option = node('option', profileLabel(name)); option.value = name; $('generation-profile').append(option);
       }
-      $('steps').value = $('use-turbo').checked ? 6 : capability.service_limits.steps_default;
+      if (profiles.includes(previousProfile)) $('generation-profile').value = previousProfile;
+      if (!previousProfile) $('steps').value = $('use-turbo').checked ? 6 : capability.service_limits.steps_default;
     }
     const diagnostic = capability.diagnostic || {};
     const backgroundCheck = diagnostic.environment_ready === true && diagnostic.model_ready === true
@@ -1413,7 +1467,7 @@
       dashboard().catch(error => {
         if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
       });
-    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy ? 2000 : 5000);
+    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy || modelLibrary?.busy ? 2000 : 5000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', async () => {
     estimateKey = null;
@@ -1508,6 +1562,7 @@
     if ($('sparse-preset').value !== 'off') reasons.push('Sparse attention is not verified with reference or frame inputs. Select Sparse: Off.');
     if (mode === 'frames' && !assetDraft.first_frame.length && !assetDraft.last_frame.length) reasons.push('Upload a first or last frame image (or both).');
     if (mode === 'references') {
+      if ($('generation-profile').value !== 'h3-convrot-int8') reasons.push('Reference mode requires the ConvRot INT8 generation profile. Select INT8 or switch to Text / First-last frames.');
       if (!referenceState.installed) reasons.push('Install the separate Ref2VA checkpoint using the button below.');
       if (assetDraft.reference_videos.reduce((s,a)=>s+(a.duration||0),0)>15.1) reasons.push('Reference videos must total at most 15 seconds. Remove a clip.');
     }

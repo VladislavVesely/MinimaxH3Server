@@ -31,7 +31,7 @@ class TurboInstaller:
         with self.lock:
             return {**self._read(), 'installed': turbo.installed(self.paths),
                     'busy': bool(self.thread and self.thread.is_alive()),
-                    'supported': all(p in turbo.TURBO_PROFILES for p in self.worker.backend.profiles),
+                    'supported': any(p in turbo.TURBO_PROFILES for p in self.worker.backend.profiles),
                     'supported_profiles': turbo.TURBO_PROFILES, 'checkpoint': turbo.WEIGHT,
                     'artifact_digest': turbo.DIGEST, 'license': 'Apache-2.0', 'total': turbo.TOTAL}
 
