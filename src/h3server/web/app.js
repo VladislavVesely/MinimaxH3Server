@@ -531,7 +531,7 @@
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
-    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup});
+    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady});
   }
 
   async function refresh() {

@@ -64,11 +64,12 @@
   const cards=make('div','model-cards');library.append(cards);$('install-profile').previousElementSibling.before(library);
   $('install-profile').previousElementSibling.textContent='Variant to review and install now';
   const reviewNote=make('p','review-note');$('install').before(reviewNote);
-  const planned=new Set(),cardNodes=new Map();let currentPage=null;
+  const planned=new Set(),cardNodes=new Map();let currentPage=null,initialViewResolved=false;
 
   function revealAncestors(el){ for(let p=el?.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true; }
-  function show(key,{tab=true,focus=false}={}) {
+  function show(key,{tab=true,focus=false,initial=false}={}) {
     if(!views[key])return;
+    if(!initial)initialViewResolved=true;
     const active=document.activeElement;
     const changed=currentPage!==key;currentPage=key;
     for(const [name,view] of Object.entries(views))view.hidden=name!==key;
@@ -106,8 +107,9 @@
   // Native form validation must never leave a required invalid control in a closed disclosure.
   document.addEventListener('invalid',e=>{revealAncestors(e.target);if(e.target.closest('#generation'))show('generate');},true);
   document.querySelector('.brand').addEventListener('click',e=>{e.preventDefault();show('install',{focus:true});});
+  $('installation').addEventListener('click',e=>{if(e.isTrusted)initialViewResolved=true;},true);
 
-  function update({profiles=[],library:state,connection={},setup={}}={}) {
+  function update({profiles=[],library:state,connection={},setup={},runtimeReady=false}={}) {
     const select=$('install-profile');const found=new Set();
     for(const profile of profiles){
       const id=profile.profile_name;found.add(id);
@@ -149,6 +151,7 @@
     const options=[];if($('use-sage').checked)options.push('Sage on');if($('use-turbo').checked)options.push('Turbo on');if($('sparse-preset').value!=='off')options.push('Sparse '+$('sparse-preset').value);
     text(advanced.querySelector('summary'),'Acceleration & advanced'+(options.length?' · '+options.join(' · '):' settings'));
     text(optional.querySelector('summary'),'Optional accelerators'+(['install-sage','install-turbo','install-sparse'].some(id=>$(id).checked)?' · selected':' · SageAttention, Turbo & sparse'));
+    if(!initialViewResolved && connected && runtimeReady === true && !setup.busy)show('generate');
   }
-  window.H3Studio={show,update};show('install',{tab:false});
+  window.H3Studio={show,update};show('install',{tab:false,initial:true});
 })();

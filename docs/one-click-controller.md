@@ -559,7 +559,7 @@ transient PyAV lookup cause.
 
 ## Studio workspaces
 
-The sidebar separates **Install**, **Generate**, **History**, and **Video joiner**. Generate keeps the existing **Current** queue beside the form on wide screens (below it on mobile); History uses the same existing historical-job filter. Switching views does not submit work, reset your draft or clear the joiner. Existing Current/History selection-clearing and page-local membership rules are unchanged.
+The sidebar separates **Install**, **Generate**, **History**, and **Video joiner**. On a fresh page, confirmed authenticated runtime/model readiness opens Generate automatically. Unknown/not-ready targets stay on Install. Explicit navigation or interaction with installation controls prevents a later automatic switch. Generate keeps the existing **Current** queue beside the form on wide screens (below it on mobile); History uses the same existing historical-job filter. Switching views does not submit work, reset your draft or clear the joiner. Existing Current/History selection-clearing and page-local membership rules are unchanged.
 
 Install displays a checkbox library: known installed variants are checked/read-only, and you can check multiple additional variants to plan your library. These planning choices are page-local, not an install queue. **Review** selects one variant in the existing review selector. **Install** still applies only to that displayed variant and its explicitly selected optional components. Review/install the next variant separately. Unchecking a planned variant never uninstalls a model; there is no automatic batch installer or new compatibility override.
 

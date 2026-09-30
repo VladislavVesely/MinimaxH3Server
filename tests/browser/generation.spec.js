@@ -45,7 +45,8 @@ async function login(page, controller) {
   await page.getByRole('button', { name: 'Trust this fingerprint' }).click();
   await page.getByLabel('SSH password', { exact: true }).fill('TEST-ONLY-secret');
   await page.getByRole('button', { name: 'Authenticate', exact: true }).click();
-  await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
+  // A ready target now opens Generate after authentication; connection state remains in Install.
+  await expect(page.locator('#ssh-state')).toHaveText('SSH authenticated');
 }
 
 async function generationView(page) {
@@ -161,6 +162,7 @@ test.describe('pruned dashboard isolation', () => {
 
 async function install(page, controller, profile = 'h3-bf16-cpu-offload-experimental') {
   await login(page, controller);
+  await page.locator('[data-workspace="install"]').click();
   await page.locator('#scan').click();
   await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
   await page.locator('#install-profile').selectOption(profile);
