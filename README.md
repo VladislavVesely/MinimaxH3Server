@@ -163,10 +163,12 @@ Selected-weight partials are renamed per file, not duplicated into a second cach
 other snapshots, stale partials, runtime/upgrade environments and outputs add disk
 use. No whole repository or original 134 GiB snapshot is downloaded by these choices.
 
-The managed headless ComfyUI/GGUF backend supports fixed local base text-to-video
-with audio, 24 fps, 20 default steps, seed and multiples-of-32 canvas. No ComfyUI
-server, hosted API, arbitrary workflow, LoRA, negative-prompt/CFG controls or
-image/reference inputs are exposed. Generation options come from the **active
+The managed headless ComfyUI/GGUF backend supports local text-to-video and
+first/last-frame images with audio, 24 fps, 20 default steps, seed and
+multiples-of-32 canvas. ConvRot INT8 additionally supports reference images,
+videos and audio using a separately consented ~21 GB Ref2VA checkpoint. Uploaded
+assets are retained privately with job inputs. No ComfyUI server, hosted API,
+arbitrary workflow/LoRA or negative-prompt/CFG controls are exposed. Generation options come from the **active
 daemon**, not the installation dropdown; switching requires approved installation
 and activation. No automatic fallback. See [source evidence and exact artifacts](docs/research/h3-pruned-runtime.md),
 [runtime operations](docs/research/h3-pruned-operation.md) and

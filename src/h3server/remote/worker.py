@@ -159,6 +159,7 @@ class Worker:
         self._resident_components = []
         self._resident_profile = None
         self._reuse_mode = 'warm'
+        self._resident_input_mode = None
         from h3server.performance import PerformanceStore
         self.performance = PerformanceStore(paths.state / 'performance.sqlite', root=paths.root)
         self._hardware = None
@@ -170,10 +171,12 @@ class Worker:
             if request.settings is None:
                 return {'samples': 0, 'reason': 'No normalized settings recorded.'}
             mode = self._reuse_mode if self.models_status()['loaded'] and self._resident_profile == request.settings.profile else 'cold'
+            if mode != 'cold' and (request.settings.input_mode != 'text' or self._resident_input_mode == 'references'):
+                mode = 'encoder_reuse'
             if self._hardware is None:
                 return {'samples': 0, 'cache': mode, 'reason': 'No hardware-verified sample in this server session yet.'}
             try:
-                return self.performance.estimate(configuration(request), self._hardware, mode)
+                return self.performance.estimate(configuration(request, self.paths), self._hardware, mode)
             except Exception:
                 return {'samples': 0, 'cache': mode, 'reason': 'Timing statistics are unavailable; generation can still proceed.'}
 
@@ -199,6 +202,7 @@ class Worker:
         self._resident_components = []
         self._resident_profile = None
         self._reuse_mode = 'warm'
+        self._resident_input_mode = None
 
     def models_status(self):
         with self._lock:
@@ -540,9 +544,10 @@ class Worker:
                             from h3server.performance import configuration
                             self._hardware = measurement['hardware']
                             self._reuse_mode = measurement['cache'] if measurement['cache'] != 'cold' else 'warm'
+                            self._resident_input_mode = job.request.settings.input_mode
                             measurement['metrics']['total_seconds'] = round(time.monotonic() - run_started, 6)
                             try:
-                                self.performance.record(job.job_id, configuration(job.request), self._hardware,
+                                self.performance.record(job.job_id, configuration(job.request, self.paths), self._hardware,
                                     measurement['metrics'], measurement['cache'], measurement['actual_attention'])
                             except Exception:
                                 self.store.append_event('job', job.job_id, Event('performance', StageStatus.FAILED,

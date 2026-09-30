@@ -1,4 +1,4 @@
-"""Checksum-pinned derived copies of three upstream safetensors packing defects.
+"""Checksum-pinned derived copies of known upstream safetensors packing defects.
 
 Original approved downloads remain untouched. Only known unreferenced trailers
 are removed; both the full source and normalized tensor file have exact hashes.
@@ -12,6 +12,8 @@ import uuid
 from h3server.backends.base import directory, regular_file
 
 REPAIRS = {
+    'ed7e9aa541b945f44298650f0dc2e2e867bfd3b67cd07bcc90f6081c168f0d3d':
+        (73, '9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779'),
     'f07a54277ca85b59e5243a924fb5c54d79768f820fc4155c1b614b6f613e9dbf':
         (72, 'e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a'),
     '88539d729fd7e9f9de765498428cd8e9152b8420317ec0e7542a362fffb7e0e1':

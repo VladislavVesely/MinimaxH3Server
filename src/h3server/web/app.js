@@ -49,6 +49,10 @@
   let sageState = { installed: false, busy: false, supported: false };
   let turboState = { installed: false, busy: false, supported: false };
   let sparseState = { installed: false, busy: false, supported: false };
+  let inputModes = ['text'];
+  let referenceState = {};
+  let assetEpoch = 0;
+  const assetDraft = {reference_images:[], reference_videos:[], reference_audios:[], first_frame:[], last_frame:[]};
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
 
   function savedTargetMatches() {
@@ -160,6 +164,11 @@
   }
 
   const messages = {
+    asset_count_limit: 'Too many attachments. Use at most 9 reference images, 3 videos, 3 audio files, or one image per first/last-frame slot. Remove an attachment first.',
+    asset_size_limit: 'Each attachment must contain 1 byte–64 MiB. Reduce the file size and try again.',
+    asset_invalid_or_limits_exceeded: 'The server rejected this attachment. Check its type and integrity: PNG/JPEG/static WebP, MP4/WebM, or WAV/FLAC/MP3. Clips must be 0.2–15 seconds; video at most 1920×1088 area and 60 fps, images at most 16 megapixels. The server asset budget is 8 GiB.',
+    asset_target_changed: 'The connection changed during upload. Select the file again for the current server.',
+    asset_upload_timeout: 'Upload or media validation timed out. Try a smaller file and check the connection.',
     models_busy_wait_for_queue_and_maintenance: 'Models cannot be unloaded while jobs are running or queued, or during maintenance. Wait for these operations to finish.',
     invalid_checkpoint: 'The saved setup record is incomplete or inconsistent. Keep the checkpoint files and inspect the original plan and deployment record; nothing was started or retried.',
     setup_not_found: 'No saved setup was found on this authenticated target. Scan hardware and use Install to begin.',
@@ -299,6 +308,9 @@
       turboState = { installed: false, busy: false, supported: false };
       sparseState = { installed: false, busy: false, supported: false };
       showSage(); showTurbo(); showSparse();
+      referenceState = {}; inputModes = ['text']; assetEpoch++;
+      for (const key of Object.keys(assetDraft)) assetDraft[key] = [];
+      showInputAssets();
       resetDashboardPolling();
       jobCards.clear(); jobLogs.clear(); jobPhases.clear(); selectedJob = null; currentJobs = [];
       $('jobs').replaceChildren(); $('job-events').textContent = 'Waiting for a job.'; jobCursor = 0;
@@ -311,7 +323,7 @@
   }
 
   function generationBlockReasons() {
-    const reasons = [];
+    const reasons = conditioningReasons();
     if (!ready) reasons.push('Open a valid local controller session.');
     if (connection.state !== 'authenticated') reasons.push('Connect and authenticate to the server.');
     if (setup.busy) reasons.push('Wait for setup to finish.');
@@ -416,6 +428,8 @@
     $('setup-refresh').disabled = !usable;
     $('dashboard-refresh').disabled = !available || !authenticated;
     $('generation-fields').disabled = !available || !authenticated || !runtimeReady;
+    for (const field of Object.keys(assetDraft)) $('upload-' + field).disabled = busy || referenceState.busy;
+    $('install-reference').disabled = !available || !authenticated || busy || setup.busy || referenceState.busy || referenceState.installed || !referenceState.supported;
     const sparseOn = $('sparse-preset').value !== 'off';
     $('sparse-generation-state').textContent = $('use-turbo').checked ? 'Turbo selected: keep sparse Off, or turn Turbo off to use sparse (20 steps).'
       : !sparseState.installed ? 'To use sparse, select its installation option above and click Install.'
@@ -970,6 +984,17 @@
       steps: 'Sampling steps', turbo_lora: 'Turbo LoRA v4-600 EMA', turbo_strength: 'Turbo strength', turbo_low_vram: 'Turbo low VRAM', turbo_artifact_digest: 'Turbo pinned artifact set', sage_attention: 'SageAttention', sparse_attention: 'Sparse attention', sparse_preset: 'Sparse attention preset', sparse_artifact_digest: 'Sparse pinned component', loras: 'LoRAs' };
     const add = (key, value) => fields.append(node('dt', labels[key] || key.replaceAll('_', ' ')), node('dd', inputValue(value)));
     for (const [key, value] of Object.entries(request.settings || {})) {
+      if (['reference_images','reference_videos','reference_audios','first_frame','last_frame'].includes(key)) {
+        const ids = Array.isArray(value) ? value : value ? [value] : [];
+        if (ids.length) {
+          fields.append(node('dt', key.replaceAll('_', ' ')));
+          const links = node('dd');
+          ids.forEach((id, i) => { if (!/^[a-f0-9]{64}$/.test(id)) return; const a = node('a', `Asset ${i + 1} · ${id.slice(0, 12)}`); a.href = API + '/remote/assets/' + id + '/content'; a.target = '_blank'; a.rel = 'noopener'; links.append(a, node('br')); });
+          fields.append(links);
+        }
+        continue;
+      }
+      if (key === 'reference_artifact_digest' && request.settings.input_mode !== 'references') continue;
       if (key === 'sparse_artifact_digest' && request.settings.sparse_preset === 'off') continue;
       if (key.startsWith('turbo_') && key !== 'turbo_lora' && !request.settings.turbo_lora) continue;
       const presetNames = {off: 'Off — original full attention', quality: 'Quality-first — 50%', balanced: 'Balanced — 30%', draft: 'Fast draft — 15%'};
@@ -1143,6 +1168,9 @@
     showSage(capability.optional_features?.sage_attention);
     showTurbo(capability.optional_features?.turbo_lora);
     showSparse(capability.optional_features?.sparse_attention);
+    inputModes = capability.input_modes || ['text'];
+    referenceState = capability.optional_features?.reference || {};
+    showInputAssets(false);
     const profiles = capability.profiles || [];
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
@@ -1233,8 +1261,71 @@
     $('width').value = size[0]; $('height').value = size[1];
     syncResolutionPresets();
   }
+  function conditioningBody() {
+    const mode = $('input-mode').value;
+    if (mode === 'text') return {};
+    if (mode === 'frames') return {input_mode:mode, first_frame:assetDraft.first_frame[0]?.id || null, last_frame:assetDraft.last_frame[0]?.id || null};
+    return {input_mode:mode, reference_artifact_digest:referenceState.artifact_digest, reference_images:assetDraft.reference_images.map(a=>a.id), reference_videos:assetDraft.reference_videos.map(a=>a.id), reference_audios:assetDraft.reference_audios.map(a=>a.id)};
+  }
+  function conditioningReasons() {
+    const mode = $('input-mode').value, reasons = [];
+    if (referenceState.busy) reasons.push('Ref2VA download is running. Wait for its integrity checks to finish.');
+    if (mode === 'text') return reasons;
+    if (!inputModes.includes(mode)) reasons.push('This daemon/profile does not support the selected input mode. Use a supported pruned profile or Text mode.');
+    if ($('use-turbo').checked || $('sparse-preset').value !== 'off') reasons.push('Turn off Turbo and sparse attention: these combinations are not verified with reference or frame inputs.');
+    if (mode === 'frames' && !assetDraft.first_frame.length && !assetDraft.last_frame.length) reasons.push('Upload a first or last frame image (or both).');
+    if (mode === 'references') {
+      if (!referenceState.installed) reasons.push('Install the separate Ref2VA checkpoint using the button below.');
+      if (!assetDraft.reference_images.length && !assetDraft.reference_videos.length && !assetDraft.reference_audios.length) reasons.push('Upload at least one reference image, video or audio file.');
+      if (assetDraft.reference_videos.reduce((s,a)=>s+(a.duration||0),0)>15.1) reasons.push('Reference videos must total at most 15 seconds. Remove a clip.');
+    }
+    return reasons;
+  }
+  function showInputAssets(rebuild = true) {
+    const mode = $('input-mode').value;
+    $('reference-assets').hidden = mode !== 'references'; $('frame-assets').hidden = mode !== 'frames';
+    $('asset-rules').hidden = mode === 'text';
+    $('input-mode-status').hidden = inputModes.includes(mode);
+    $('input-mode-status').textContent = inputModes.includes(mode) ? '' : 'This daemon/profile does not support this input mode. First/last frames require a pruned profile; references currently require ConvRot INT8.';
+    $('reference-model-status').textContent = referenceState.installed ? 'Ref2VA INT8 checkpoint verified and available.' : referenceState.busy ? `Downloading Ref2VA: ${Math.round((referenceState.completed || 0)/1048576)} / ${Math.round((referenceState.total || 0)/1048576)} MiB` : referenceState.error || 'References require a separate ~21 GB INT8 checkpoint (~42 GB disk with its verified runtime copy). Your FL2VA model is preserved.';
+    if (!rebuild) return;
+    for (const [field, assets] of Object.entries(assetDraft)) {
+      const root = $('assets-' + field); root.replaceChildren();
+      assets.forEach((asset,index) => {
+        const card = node('div', undefined, 'asset-preview');
+        const label = field === 'first_frame' ? 'First frame' : field === 'last_frame' ? 'Last frame' : `<${{image:'Picture',video:'Video',audio:'Audio'}[asset.kind]} ${index + 1}>`;
+        card.append(node('strong', label), node('span', asset.name || asset.id.slice(0,12)));
+        const preview = node(asset.kind === 'image' ? 'img' : asset.kind);
+        preview.src = API + '/remote/assets/' + asset.id + '/content';
+        if (asset.kind === 'image') { preview.alt = label; preview.loading = 'lazy'; }
+        else { preview.controls = true; preview.preload = 'metadata'; }
+        card.append(preview);
+        const remove = node('button', 'Remove', 'secondary'); remove.type = 'button';
+        remove.addEventListener('click', () => { assetDraft[field].splice(index,1); showInputAssets(); render(); scheduleEstimate(); });
+        card.append(remove); root.append(card);
+      });
+    }
+  }
+  async function uploadInputAssets(field, files) {
+    const maximum = field === 'reference_images' ? 9 : field.startsWith('reference_') ? 3 : 1;
+    const kind = field === 'reference_videos' ? 'video' : field === 'reference_audios' ? 'audio' : 'image';
+    if (files.length + (maximum === 1 ? 0 : assetDraft[field].length) > maximum) throw {code:'asset_count_limit'};
+    const epoch = assetEpoch;
+    for (const file of files) {
+      if (!file.size || file.size > 64*1024*1024) throw {code:'asset_size_limit'};
+      let response, value;
+      try { response = await fetch(API + '/remote/assets/' + kind, {method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error', headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf}, body:file}); }
+      catch { throw {code:'network_unavailable'}; }
+      try { value = await response.json(); } catch { throw {code:'invalid_response'}; }
+      if (!response.ok) throw {code:value.detail || value.error?.code || value.error};
+      if (epoch !== assetEpoch) throw {code:'asset_target_changed'};
+      if (maximum === 1) assetDraft[field] = [];
+      assetDraft[field].push({...value, name:file.name}); showInputAssets();
+    }
+    render(); scheduleEstimate();
+  }
   function generationBody() {
-      const body = { prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
+      const body = { ...conditioningBody(), prompt: $('prompt').value, profile: $('generation-profile').value, num_frames: Number($('frames').value),
         width: Number($('width').value), height: Number($('height').value), steps: Number($('steps').value), seed: Number($('seed').value),
         ...(sparseState.artifact_digest === capabilities.sparse_artifact_digest ? {
           sparse_preset: $('sparse-preset').value, sparse_artifact_digest: $('sparse-preset').value !== 'off' ? capabilities.sparse_artifact_digest : null
@@ -1285,6 +1376,18 @@
       }
     }, 450);
   }
+  $('input-mode').addEventListener('change', () => { showInputAssets(); render(); scheduleEstimate(); });
+  for (const field of Object.keys(assetDraft)) $('upload-' + field).addEventListener('change', event => {
+    const files = Array.from(event.target.files); event.target.value = '';
+    if (files.length) perform('Uploading and validating reference assets…', () => uploadInputAssets(field, files));
+  });
+  $('install-reference').addEventListener('click', () => {
+    if (!confirm('Download the additional ~21 GB pinned Ref2VA INT8 checkpoint under the MiniMax H3 Community License? Allow ~42 GB disk for the original and verified runtime copy. Existing models are kept. The queue must be idle.')) return;
+    perform('Starting Ref2VA installation…', async () => {
+      await request('/remote/features/reference', {artifact_digest:referenceState.artifact_digest}); await dashboard();
+    });
+  });
+  showInputAssets();
   $('generation-form').addEventListener('input', () => { render(); scheduleEstimate(); });
   $('generation-form').addEventListener('change', () => { render(); scheduleEstimate(); });
   for (const preset of resolutionPresets()) {

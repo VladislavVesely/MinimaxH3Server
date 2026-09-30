@@ -160,7 +160,7 @@ def _request_data(request: JobRequest) -> dict:
     if not isinstance(request, JobRequest):
         raise ValueError("expected JobRequest")
     return {"prompt": request.prompt, "loras": list(request.loras), "sparse_attention": request.sparse_attention,
-            "settings": asdict(request.settings) if request.settings is not None else None}
+            "settings": {k: list(v) if isinstance(v, tuple) else v for k,v in asdict(request.settings).items()} if request.settings is not None else None}
 
 
 def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
@@ -177,7 +177,9 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
         values = request['settings']
         if type(values) is dict:
             values = {'sage_attention': False, 'turbo_lora': False, 'turbo_strength': 1.0, 'turbo_low_vram': False, 'turbo_artifact_digest': None, 'sparse_preset': 'off', 'sparse_artifact_digest': None, **values}
-        settings = _keys(values, {"num_frames", "width", "height", "steps", "seed", "profile", "sage_attention", 'turbo_lora', 'turbo_strength', 'turbo_low_vram', 'turbo_artifact_digest', 'sparse_preset', 'sparse_artifact_digest'})
+        if type(values) is dict:
+            values = {'input_mode':'text', 'reference_images':[], 'reference_videos':[], 'reference_audios':[], 'first_frame':None, 'last_frame':None, 'reference_artifact_digest':None, **values}
+        settings = _keys(values, set(asdict(GenerationSettings())))
         request["settings"] = GenerationSettings(**settings)
     _text(request["prompt"])
     if type(request["loras"]) is not list:

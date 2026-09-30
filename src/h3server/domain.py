@@ -171,8 +171,49 @@ class GenerationSettings:
     turbo_artifact_digest: str | None = None
     sparse_preset: str = 'off'
     sparse_artifact_digest: str | None = None
+    input_mode: str = 'text'
+    reference_images: tuple[str, ...] = ()
+    reference_videos: tuple[str, ...] = ()
+    reference_audios: tuple[str, ...] = ()
+    first_frame: str | None = None
+    last_frame: str | None = None
+    reference_artifact_digest: str | None = None
 
     def __post_init__(self):
+        import re
+        from h3server.backends.catalog import PRUNED_PROFILE_NAMES
+        if self.input_mode not in ('text', 'frames', 'references'):
+            raise ValueError('Unknown input mode')
+        for name, maximum in (('reference_images',9),('reference_videos',3),('reference_audios',3)):
+            values = getattr(self, name)
+            if type(values) not in (tuple, list) or len(values) > maximum:
+                raise ValueError('Invalid reference count')
+            object.__setattr__(self, name, tuple(values))
+        ids = (*self.reference_images, *self.reference_videos, *self.reference_audios)
+        for value in (*ids, self.first_frame, self.last_frame):
+            if value is not None and (type(value) is not str or not re.fullmatch(r'[a-f0-9]{64}', value)):
+                raise ValueError('Asset IDs must be SHA256 identifiers, not paths or URLs')
+        if any(value is None for value in ids):
+            raise ValueError('Reference IDs cannot be null')
+        frames = bool(self.first_frame or self.last_frame)
+        if ((self.input_mode == 'text' and (ids or frames)) or
+            (self.input_mode == 'frames' and (not frames or ids)) or
+            (self.input_mode == 'references' and (not ids or frames))):
+            raise ValueError('Assets do not match input mode')
+        if self.input_mode != 'text':
+            if self.profile not in PRUNED_PROFILE_NAMES:
+                raise ValueError('Conditioned inputs require a pruned runtime profile')
+            if self.turbo_lora or self.sparse_preset != 'off':
+                raise ValueError('Turbo and sparse are not verified with conditioned inputs; disable them')
+        if self.input_mode == 'references' and self.reference_artifact_digest is None:
+            from h3server.backends.reference import DIGEST
+            object.__setattr__(self, 'reference_artifact_digest', DIGEST)
+        if self.reference_artifact_digest is not None and (type(self.reference_artifact_digest) is not str or not re.fullmatch(r'[a-f0-9]{64}', self.reference_artifact_digest)):
+            raise ValueError('Invalid Ref2VA artifact digest')
+        if self.input_mode != 'references' and self.reference_artifact_digest is not None:
+            raise ValueError('Ref2VA digest requires reference input mode')
+        if self.input_mode == 'references' and self.profile != 'h3-convrot-int8':
+            raise ValueError('Ref2VA currently requires ConvRot INT8 and the optional reference checkpoint')
         if self.sparse_preset not in ('off', 'quality', 'balanced', 'draft'):
             raise ValueError('Unknown sparse attention preset')
         if self.sparse_preset != 'off':

@@ -81,10 +81,14 @@ class RemoteProxy:
             raise ControllerError('optional_install_busy_or_unsupported')
         return json.loads(data)
 
-    def request(self, method, path, *, body=None, range_header=None):
-        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:health|capabilities|models|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
-                or method == 'POST' and re.fullmatch(r'/api/v1/(?:models/unload|performance/estimate|features/(?:sageattention|turbo|sparse)|jobs(?:/[a-f0-9]{32}/cancel)?)', path)):
+    def request(self, method, path, *, body=None, range_header=None, binary=None):
+        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:assets/[a-f0-9]{64}(?:/content)?|health|capabilities|models|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/video(?:\?download=true)?)?)', path)
+                or method == 'POST' and re.fullmatch(r'/api/v1/(?:assets/(?:image|video|audio)|models/unload|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/cancel)?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
+        if binary is not None:
+            from h3server.assets import MAX_BYTES
+            if method != 'POST' or not re.fullmatch(r'/api/v1/assets/(?:image|video|audio)',path) or body is not None or not isinstance(binary,bytes) or not 0<len(binary)<=MAX_BYTES:
+                raise ControllerError('invalid_asset_upload',422)
         if range_header is not None and not re.fullmatch(r'bytes=(?:[0-9]{1,20}-[0-9]{0,20}|-[0-9]{1,20})', range_header):
             raise ControllerError('invalid_range', 416)
         channel = None
@@ -108,6 +112,8 @@ class RemoteProxy:
             data = None if body is None else json.dumps(body).encode()
             if data is not None:
                 headers['Content-Type'] = 'application/json'
+            if binary is not None:
+                data=binary;headers['Content-Type']='application/octet-stream'
             http.request(method, path, body=data, headers=headers)
             response = http.getresponse()
             # No Location, Set-Cookie, auth challenge or arbitrary remote headers.

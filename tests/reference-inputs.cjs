@@ -1,0 +1,13 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const source=fs.readFileSync('src/h3server/web/app.js','utf8');
+const start=source.indexOf('  function conditioningBody()');assert.ok(start>0,'Conditioning input controls are required');
+const fields={'input-mode':{value:'text'},'use-turbo':{checked:false},'sparse-preset':{value:'off'}};
+const c=vm.createContext({$:id=>fields[id],inputModes:['text','frames','references'],referenceState:{installed:true},assetDraft:{reference_images:[],reference_videos:[],reference_audios:[],first_frame:[],last_frame:[]}});
+vm.runInContext(source.slice(start,source.indexOf('  function showInputAssets(',start)),c);
+assert.deepEqual(JSON.parse(JSON.stringify(c.conditioningBody())),{});
+fields['input-mode'].value='frames';assert.match(c.conditioningReasons().join(' '),/first or last/);
+c.assetDraft.first_frame=[{id:'a'.repeat(64)}];assert.equal(c.conditioningBody().first_frame,'a'.repeat(64));assert.equal(c.conditioningReasons().length,0);
+fields['input-mode'].value='references';c.assetDraft.reference_audios=[{id:'b'.repeat(64)}];assert.equal(c.conditioningBody().reference_audios.length,1);assert.equal(c.conditioningBody().first_frame,undefined);
+c.referenceState.installed=false;assert.match(c.conditioningReasons().join(' '),/Ref2VA/);
+fields['use-turbo'].checked=true;assert.match(c.conditioningReasons().join(' '),/Turbo/);
+console.log('Conditioning modes isolate assets, preserve text requests and expose real blockers');

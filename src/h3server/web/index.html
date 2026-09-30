@@ -112,7 +112,23 @@
           <p class="eyebrow">MINIMAX H3 · LOCAL GENERATION</p><h2 id="generation-heading">Generate video and audio</h2>
           <button id="dashboard-refresh" class="secondary" type="button" disabled>Refresh dashboard</button><p id="readiness" role="status">Daemon disconnected. No readiness assumed.</p>
           <p id="models-status" role="status">Resident model status unavailable.</p><button id="unload-models" class="secondary" type="button" disabled>Unload models</button><p id="unload-models-reason" class="field-hint">Connect to check retained models. Unloading never deletes model files.</p>
-          <form id="generation-form"><fieldset id="generation-fields" disabled><legend>Text-to-video settings</legend>
+          <form id="generation-form"><fieldset id="generation-fields" disabled><legend>Generation settings</legend>
+            <div class="field"><label for="input-mode">Input mode</label><select id="input-mode"><option value="text">Text to video</option><option value="references">Reference images, video and audio</option><option value="frames">First / last frame images</option></select></div>
+            <p id="input-mode-status" class="field-hint" role="status" hidden></p>
+            <section id="reference-assets" hidden>
+              <p id="reference-model-status" role="status"></p><button id="install-reference" type="button" class="secondary">Download Ref2VA checkpoint (~21 GB)</button>
+              <p class="field-hint">Use &lt;Picture 1&gt;, &lt;Video 1&gt; and &lt;Audio 1&gt; in your prompt. References guide identity, motion, style or voice—not guaranteed exact copies. Removing an attachment renumbers its type; update prompt tags accordingly.</p>
+              <label for="upload-reference_images">Reference images (up to 9)</label><input id="upload-reference_images" type="file" accept="image/png,image/jpeg,image/webp" multiple><div id="assets-reference_images" class="asset-grid"></div>
+              <label for="upload-reference_videos">Reference videos (up to 3; 15 seconds combined)</label><input id="upload-reference_videos" type="file" accept="video/mp4,video/webm" multiple><div id="assets-reference_videos" class="asset-grid"></div>
+              <label for="upload-reference_audios">Reference audio (up to 3)</label><input id="upload-reference_audios" type="file" accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg" multiple><div id="assets-reference_audios" class="asset-grid"></div>
+              <p class="field-hint">Video references use visuals only; upload audio separately to reference sound. Clips are resampled to 24 fps and shortened to the output length and H3’s 17n+5 frame grid.</p>
+            </section>
+            <section id="frame-assets" hidden>
+              <p class="field-hint">Choose either frame or both. Uses your existing FL2VA checkpoint. H3 resizes the first image to the canvas and center-crops the last; matching the output aspect ratio avoids distortion.</p>
+              <label for="upload-first_frame">First frame image</label><input id="upload-first_frame" type="file" accept="image/png,image/jpeg,image/webp"><div id="assets-first_frame" class="asset-grid"></div>
+              <label for="upload-last_frame">Last frame image</label><input id="upload-last_frame" type="file" accept="image/png,image/jpeg,image/webp"><div id="assets-last_frame" class="asset-grid"></div>
+            </section>
+            <p id="asset-rules" class="field-hint" hidden>Uploads remain on your server for job history; removing them here only changes the draft. Maximum 64 MiB per file; PNG/JPEG/static WebP up to 16 megapixels and 8192 pixels per axis; MP4/WebM up to 1920×1088 area and 60 fps; WAV/FLAC/MP3 mono/stereo. Video/audio duration 0.2–15 seconds. Reference storage budget 8 GiB. Conditioned generation uses more memory; Turbo and sparse must be Off.</p>
             <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" required maxlength="15000" rows="3"></textarea></div>
             <label for="generation-profile">Generation profile</label><select id="generation-profile"></select>
             <div class="form-row resolution-presets"><div class="field"><label for="aspect-ratio">Aspect ratio</label><select id="aspect-ratio"><option value="custom">Custom</option></select></div><div class="field"><label for="resolution-preset">Resolution preset</label><select id="resolution-preset"><option value="custom">Custom</option></select></div></div>

@@ -53,7 +53,7 @@ SECURITY_HEADERS = {
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
-    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 }
 
 
@@ -131,18 +131,21 @@ class LocalSecurity:
                 or (lengths and "transfer-encoding" in headers)):
             await reject("invalid_body", 400)
             return
-        if lengths and int(lengths[0]) > BODY_LIMIT:
+        asset_upload = scope['method']=='POST' and re.fullmatch(re.escape(API)+r'/remote/assets/(?:image|video|audio)',scope['path'])
+        generation = scope['method']=='POST' and scope['path'] in (API+'/remote/jobs', API+'/remote/performance/estimate')
+        limit = 64*1024*1024 if asset_upload else 96*1024 if generation else BODY_LIMIT
+        if lengths and int(lengths[0]) > limit:
             await reject("body_too_large", 413)
             return
         body = bytearray()
         try:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(90 if asset_upload else 5):
                 while True:
                     message = await receive()
                     if message["type"] == "http.disconnect":
                         return
                     chunk = message.get("body", b"")
-                    if len(body) + len(chunk) > BODY_LIMIT:
+                    if len(body) + len(chunk) > limit:
                         await reject("body_too_large", 413)
                         return
                     body.extend(chunk)
@@ -583,6 +586,31 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @observed
     def install_sage(body: EmptyRequest):
         return proxy.request('POST', '/api/v1/features/sageattention', body={})
+
+    @app.get(API + '/remote/features/reference')
+    @observed
+    def remote_reference_status():
+        return proxy.request('GET','/api/v1/features/reference')
+
+    @app.post(API + '/remote/features/reference')
+    @observed
+    def remote_reference_install(body: dict = Body()):
+        return proxy.request('POST','/api/v1/features/reference',body=body)
+
+    @app.post(API + '/remote/assets/{kind}')
+    @observed
+    def remote_asset_upload(kind: str, body: bytes = Body(media_type='application/octet-stream')):
+        return proxy.request('POST', f'/api/v1/assets/{kind}', binary=body)
+
+    @app.get(API + '/remote/assets/{id}')
+    @observed
+    def remote_asset_metadata(id: str):
+        return proxy.request('GET',f'/api/v1/assets/{id}')
+
+    @app.get(API + '/remote/assets/{id}/content')
+    @observed
+    def remote_asset_content(id: str, request: Request):
+        return proxy.request('GET',f'/api/v1/assets/{id}/content',range_header=request.headers.get('range'))
 
     @app.get(API + '/remote/models')
     @observed

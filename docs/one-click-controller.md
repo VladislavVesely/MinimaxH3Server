@@ -53,8 +53,57 @@ steps, seed, SageAttention, LoRAs and sparse-attention selection. These come fro
 that job's persisted request, not the current form; existing history works too.
 Expansion and video elements survive dashboard polling. Prompt text is rendered
 as text, never HTML. Missing legacy settings are explicitly marked unavailable.
-Images are not yet a supported input; their durable references must join the job
-request when image support is implemented.
+Conditioned jobs also retain their mode and immutable asset IDs. The Inputs
+section links to each original upload through authenticated SSH proxy routes.
+Removing a draft attachment does not delete anything referenced by history.
+
+## Reference assets and first/last frames
+
+The input-mode selector offers **Text**, **References**, and **First / last
+frames**. First/last-frame mode accepts either image or both and uses the existing
+FL2VA weights on pruned profiles. The first image stretches to the selected canvas;
+the last image is center-cropped. Matching aspect ratios avoids distortion.
+
+Reference mode currently requires **ConvRot INT8** and a separate, explicitly
+approved Ref2VA checkpoint from the pinned Abiray revision. It is approximately
+21 GB to download and 42 GB on disk including its verified compatibility copy;
+existing FL2VA, encoder and VAE files are preserved. The download button requires
+an idle queue and confirms the MiniMax H3 Community License. Restore/connect never
+starts a download. Runtime caching switches diffusion weights and retains the
+encoder where safe rather than keeping two large diffusion models resident.
+
+Upload up to 9 images, 3 videos and 3 audio files. Use `<Picture 1>`, `<Video 1>`
+and `<Audio 1>` tags in prompts; numbering follows the order within each type.
+Removing an attachment renumbers its type, so adjust prompt tags. Video references
+use visuals only; upload audio separately for sound references. Videos resample
+to 24fps, are limited to the output length and shorten to H3's 17n+5 frame grid.
+Audio-only references are supported by this local runtime. References guide the
+model; they do not promise exact copies or identity fidelity.
+
+Uploads are capped at 64 MiB each and 8 GiB total retained originals. Supported:
+PNG/JPEG/static WebP (up to 16 megapixels, 8192 pixels per axis), MP4/WebM (up to
+1920×1088 pixel area and 60fps), WAV/FLAC/MP3 mono/stereo. Video/audio must be
+0.2–15 seconds; reference videos total at most 15 seconds. Clips are independently
+decoded in a bounded subprocess before acceptance. Caller URLs and filesystem
+paths are never accepted. Source bytes and metadata live under owner-only
+`~/MinimaxH3Server/assets/`, addressed by content hash and protected against
+symlink substitution and changed content. Browser uploads retain CSRF/origin and
+SSH host-key protections; authenticated previews support byte ranges.
+
+Turbo and sparse combinations remain explicitly blocked for conditioned inputs.
+SageAttention follows the existing compatible-kernel fallback policy. Larger
+assets increase memory pressure; target acceptance used small fixtures, not the
+maximum counts/resolution/duration. Timing exports separate input modes and
+conditioning geometry, omitting source hashes, filenames and media contents.
+
+Daemon endpoints: `POST /api/v1/assets/{image|video|audio}` (raw media),
+`GET /api/v1/assets/{sha256}`, `GET /api/v1/assets/{sha256}/content`, and
+`GET/POST /api/v1/features/reference` (digest-bound explicit installation).
+Generation adds `input_mode`, `reference_images`, `reference_videos`,
+`reference_audios`, `first_frame`, and `last_frame`; all references are managed
+SHA256 IDs. Reference requests also persist `reference_artifact_digest`; a queued
+job cannot silently run against a different checkpoint after a software update. The controller exposes these through its authenticated `/remote/`
+proxy. Legacy jobs default to Text without rewriting historical records.
 
 ## Resolution presets
 

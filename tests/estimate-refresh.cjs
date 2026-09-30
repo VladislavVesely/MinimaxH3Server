@@ -1,6 +1,6 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync(require.resolve('../src/h3server/web/app.js'),'utf8');
-const start=source.indexOf('  function scheduleEstimate()'),end=source.indexOf("  $('generation-form').addEventListener('input'",start);
+const start=source.indexOf('  function scheduleEstimate()'),end=source.indexOf("  $('input-mode').addEventListener",start);
 const elements=new Map(),timers=new Map(),requests=[];let next=0;
 const c=vm.createContext({
   estimateTimer:null,estimateEpoch:0,estimateKey:null,performanceAvailable:true,connection:{state:'authenticated'},pageActive:true,

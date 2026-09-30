@@ -1,5 +1,70 @@
 # Validation and acceptance status
 
+## Native reference assets and first/last-frame inputs
+
+Implemented separate Text / References / First+last modes. Immutable uploads are
+bounded, content-addressed, owner-only and decoded before acceptance; browser
+requests retain origin/session/CSRF validation and the fixed authenticated SSH
+proxy. No caller paths/URLs or hosted inference. History retains original asset
+links. Frame conditioning uses FL2VA; ConvRot INT8 references use a separately
+approved Ref2VA checkpoint. Turbo/sparse combinations are blocked explicitly.
+
+Pinned Ref2VA original: 20,970,379,689 bytes, SHA256
+`ed7e9aa541b945f44298650f0dc2e2e867bfd3b67cd07bcc90f6081c168f0d3d`.
+Its 73-byte unreferenced trailer is removed only in a separate checksum-verified
+runtime copy (`9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779`).
+The original remains intact. No dependency, encoder, VAE or existing model upgrades.
+
+### Real RTX 4090 acceptance
+
+Ten owned-fixture jobs completed and were independently decoded: each contained
+124 video frames at 24fps and 165,888 decoded stereo audio samples at 32kHz.
+These are narrow integration tests, not general quality or memory guarantees.
+
+| Mode | Job | Settings | Observed wall time |
+|---|---|---|---|
+| First + last | `ea8c5da8a70e41fbb1f35c4ccfef5972` | 512×288, 4 steps | 137.452s |
+| Image + video + audio refs | `a7e6e8dcac374849bb5aa530212429c8` | 512×288, 4 steps | 167.227s |
+| Audio-only refs | `5ce857f4eaa84a309e7a998f53f67af5` | 256×160, 2 steps | 48.275s |
+| First only | `130c78816c2c462a9fdbe6af3bfd6867` | 256×160, 2 steps | 41.350s |
+| Last only | `ee899e7f37224b85878668b0a8d154e1` | 256×160, 2 steps | 30.373s |
+| Return to Text | `7db9a4e6160c470aacfd8796274a57a4` | 256×160, 2 steps | 32.008s |
+| Final image + video + audio refs | `741c5d4ad47e4de3966507c32d7dd1e8` | 512×288, 20 steps | 160.328s |
+| Final first only | `20e60ad6de044a4e9717eef5d58c9914` | 512×288, 20 steps | 61.090s |
+| Final last only | `1a85fe0321e84efda796b37fcf36c307` | 512×288, 20 steps | 54.120s |
+| Persisted checkpoint binding, all reference types | `d13488a7ef4c4d1db13939a154461898` | 512×288, 20 steps | 157.217s |
+
+Native logs show the correct FL2VA/Ref2VA weight path and conditioning counts;
+mode switches did not reuse the wrong diffusion weights. For the synthetic red
+ball, supplied first/last centers were x=110/400. The both-frame test decoded
+x=110.38/400.01; final single-frame tests decoded x=110.21 at the start and
+x=399.93 at the end. Reference inputs guide rather than anchor the scene, so no
+exact identity/motion/audio fidelity claim is made. Two-step smoke outputs are
+not evidence of production image quality. Maximum asset counts, long/high-res
+clips and other hardware/profiles remain unbenchmarked.
+
+### Focused verification
+
+281 selected Python tests passed: conditioning/asset contracts, profile and
+resolution bounds, controller security, runtime IO, residency, worker, timing,
+Turbo and sparse regressions. Ten JS scripts passed. A stale controller-security
+expectation was updated to include its pre-existing Turbo/sparse digest fields.
+No full-suite run, subagents or branch/worktree changes.
+
+Rebuilt-native browser checks covered actual image/video/audio uploads,
+authenticated previews, immutable deduplication, numbered tags, mode isolation,
+draft removal without deletion, readable rejection of invalid media, and 375px
+layout. Generation/estimate JSON has a scoped 96 KiB budget for full Unicode
+prompts plus IDs; other JSON routes retain their 16 KiB limit. Reference requests
+persist the pinned checkpoint digest and reject stale selections before execution. Image previews required adding only `img-src 'self'` to the existing CSP.
+Screenshot: `/tmp/h3-reference-ui.png`. The browser did not submit inference or
+installation; GPU acceptance was explicitly queued through the owned API.
+
+Thirteen deployed source hashes matched local files. Ref2VA is installed;
+nine conditioned timing records omit asset IDs, filenames and media contents.
+Mode/geometry/software/cache classes remain separate. Models were left loaded;
+existing preferences, weights and history were preserved.
+
 ## Extended resolution presets
 
 Added aligned 480p/720p/1080p-size landscape and portrait options. Pruned request,

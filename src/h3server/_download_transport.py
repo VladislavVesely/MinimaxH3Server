@@ -31,11 +31,11 @@ class DownloadTransport:
     """Private response-compatible context; command is a Python test injection seam."""
     def __init__(self, paths, name, offset, *, timeout, deadline, cancelled, command=None, profile_name=None, component=None):
         from h3server.downloads import _selected_manifest
-        if component not in (None, 'turbo', 'sparse') or (component and profile_name is not None):
+        if component not in (None, 'turbo', 'sparse', 'reference') or (component and profile_name is not None):
             raise ValueError('unknown pinned component')
         if component:
-            from h3server.backends import turbo, sparse
-            manifest = {'model': {'revision': (turbo if component == 'turbo' else sparse).REVISION}}
+            from h3server.backends import turbo, sparse, reference
+            manifest = {'model': {'revision': {'turbo':turbo, 'sparse':sparse, 'reference':reference}[component].REVISION}}
         else:
             manifest = _selected_manifest(profile_name)
         self.paths, self.deadline, self.cancelled = paths, deadline, cancelled
@@ -174,11 +174,11 @@ def _fetch(document, *, opener=None):
     if "profile_name" in document and type(profile_name) is not str:
         raise ValueError("invalid pinned transport profile")
     component = document.get('component')
-    if 'component' in document and (component not in ('turbo', 'sparse') or 'profile_name' in document):
+    if 'component' in document and (component not in ('turbo', 'sparse', 'reference') or 'profile_name' in document):
         raise ValueError('unknown pinned component')
     if component:
-        from h3server.backends import turbo, sparse
-        addon = turbo if component == 'turbo' else sparse
+        from h3server.backends import turbo, sparse, reference
+        addon = {'turbo':turbo, 'sparse':sparse, 'reference':reference}[component]
         manifest = {'model': {'revision': addon.REVISION}}
         entries = {e['name']: e for e in addon.FILES}
     else:

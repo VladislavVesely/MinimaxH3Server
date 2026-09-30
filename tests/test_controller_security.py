@@ -126,7 +126,10 @@ def test_full_readonly_workflow_and_experimental_recommendations(controller):
     assert data["recommendations"]
     assert all(item["status"] != "verified" for item in data["recommendations"])
     assert "unverified" in data["compatibility"].lower()
-    assert data["capabilities"] == {"scan": True, "installer": True, "generation": True}
+    from h3server.backends.turbo import DIGEST as TURBO_DIGEST
+    from h3server.backends.sparse import DIGEST as SPARSE_DIGEST
+    assert data["capabilities"] == {"scan": True, "installer": True, "generation": True,
+                                    "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
     assert "commands" not in data["probe"]  # no raw remote stderr/output leaked
     assert client.post(API + "/disconnect", headers=headers).json()["state"] == "disconnected"
     assert network.sockets[-1].closed

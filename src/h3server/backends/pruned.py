@@ -39,6 +39,9 @@ def parse_request(value):
         raise ValueError('unknown or missing settings')
     settings = GenerationSettings(**value['settings'])
     get_artifact_set(settings.profile)
+    if settings.input_mode == 'references':
+        from h3server.backends.reference import DIGEST
+        if settings.reference_artifact_digest != DIGEST:raise ValueError('Ref2VA selection changed; submit against the active pinned checkpoint')
     if not isinstance(value['loras'], (tuple, list)):
         raise ValueError('invalid LoRA input')
     request = JobRequest(value['prompt'], tuple(value['loras']), value['sparse_attention'], settings)
@@ -103,7 +106,7 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     import nodes
     import comfy.utils
     import comfy.model_management
-    from comfy_extras.nodes_minimax_h3 import MiniMaxH3ImageToVideo, MiniMaxH3SigmaShift
+    from comfy_extras.nodes_minimax_h3 import MiniMaxH3ImageToVideo, MiniMaxH3ReferenceToVideo, MiniMaxH3SigmaShift
     from comfy_extras.nodes_lt import LTXVSeparateAVLatent
     from comfy_extras.nodes_audio import VAEDecodeAudio
     from comfy_extras.nodes_video import CreateVideo
@@ -118,6 +121,8 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     rt = SimpleNamespace(torch=torch, nodes=nodes, gguf=gguf, utils=comfy.utils,
         mm=comfy.model_management, condition=MiniMaxH3ImageToVideo, shift=MiniMaxH3SigmaShift,
         separate=LTXVSeparateAVLatent, decode_audio=VAEDecodeAudio, create_video=CreateVideo)
+    rt.paths = paths
+    rt.reference_condition = MiniMaxH3ReferenceToVideo
     rt.environment_digest = Path(environment).name
     rt.model_files = [snapshot / a.local_relative_path for a in selected.artifacts]
     rt.model_files += [Path(folder_paths.get_full_path(Path(a.local_relative_path).parent.as_posix(), Path(a.local_relative_path).name)) for a in selected.artifacts]
@@ -215,13 +220,17 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False, cache=N
     settings = request.settings
     selected = get_artifact_set(settings.profile)
     files = {a.role: Path(a.local_relative_path).name for a in selected.artifacts}
-    variant = (settings.turbo_lora, settings.turbo_strength if settings.turbo_lora else None,
+    if settings.input_mode == 'references':
+        files['diffusion_model'] = rt.reference_filename
+    variant = (settings.input_mode, settings.turbo_lora, settings.turbo_strength if settings.turbo_lora else None,
                settings.turbo_low_vram if settings.turbo_lora else None, settings.turbo_artifact_digest,
                settings.sparse_preset, settings.sparse_artifact_digest, settings.sage_attention)
     with execution_hooks(rt, emit, cancelled) as run_stage, rt.torch.inference_mode():
         with run_stage('loading'):
             components = cache.components if cache is not None else {}
-            if 'diffusion_model' not in components:
+            if cache is not None and settings.input_mode != 'text':
+                cache.release_diffusion(rt)
+            if 'diffusion_model' not in components and settings.input_mode == 'text':
                 if selected.runtime_id == 'comfyui-h3-gguf':
                     components['diffusion_model'] = rt.gguf.UnetLoaderGGUF().load_unet(files['diffusion_model'])[0]
                 else:
@@ -233,12 +242,24 @@ def generate(request, output_path, rt, *, emit, cancelled=lambda: False, cache=N
             else:
                 for role in ('video_vae', 'audio_vae'):
                     if role not in components: components[role] = rt.nodes.VAELoader().load_vae(files[role])[0]
+            if settings.input_mode != 'text':
+                for role in ('video_vae', 'audio_vae'):
+                    if role not in components: components[role] = rt.nodes.VAELoader().load_vae(files[role])[0]
             clip = components['text_encoder']
             video_vae, audio_vae = (components.get(k) for k in ('video_vae','audio_vae'))
         with run_stage('text_encoding'):
-            positive, latent = rt.condition.execute(clip=clip, vae=video_vae, prompt=request.prompt,
-                width=settings.width, height=settings.height, length=settings.num_frames,
-                first_frame=None, last_frame=None).result
+            inputs = {'first_frame':None, 'last_frame':None}
+            if settings.input_mode != 'text':
+                from h3server.backends.conditioning import load
+                inputs = load(rt, settings)
+                emit(Event('text_encoding', StageStatus.RUNNING, f'Conditioning mode: {settings.input_mode}; images={len(settings.reference_images)}, videos={len(settings.reference_videos)}, audio={len(settings.reference_audios)}, first={bool(settings.first_frame)}, last={bool(settings.last_frame)}.'))
+            common = dict(clip=clip, vae=video_vae, prompt=request.prompt,
+                          width=settings.width, height=settings.height, length=settings.num_frames)
+            if settings.input_mode == 'references':
+                positive, latent = rt.reference_condition.execute(**common, audio_vae=audio_vae, ref_image_size='match', **inputs).result
+            else:
+                positive, latent = rt.condition.execute(**common, **inputs).result
+            del inputs
         with run_stage('denoising'):
             if 'diffusion_model' not in components:
                 if selected.runtime_id == 'comfyui-h3-gguf':
@@ -373,6 +394,20 @@ def execute_document(request_path, *, emit, profile=None, cache=None):
         if cache is not None:
             cache.runtime = rt
             cache.capture(paths, rt.model_files)
+    if request.settings.input_mode == 'references' and not hasattr(rt, 'reference_filename'):
+        from h3server.backends import reference
+        import folder_paths
+        emit(Event('loading', StageStatus.RUNNING, 'Verifying Ref2VA and preparing its checksum-pinned runtime copy; original model files are preserved.'))
+        location = reference.runtime_directory(paths)
+        folder_paths.folder_names_and_paths['diffusion_models'][0].insert(0, str(location))
+        folder_paths.filename_list_cache.clear()
+        rt.reference_filename = reference.WEIGHT
+        rt.model_files += [paths.root/reference.DIRECTORY/reference.WEIGHT, location/reference.WEIGHT]
+        if cache is not None: cache.capture(paths, rt.model_files)
+    model_kind = 'reference' if request.settings.input_mode == 'references' else 'fl2va'
+    if cache is not None and getattr(rt, 'model_kind', model_kind) != model_kind:
+        cache.release_diffusion(rt)
+    rt.model_kind = model_kind
     if request.settings.sage_attention:
         emit(Event('loading', StageStatus.RUNNING, 'SageAttention 1.0.6 enabled for supported attention; masked/full-precision layers retain PyTorch attention.'))
     if request.settings.turbo_lora:
@@ -415,6 +450,12 @@ def backend(paths, profile):
     def validate(request):
         if parse_request(asdict(request)).settings.profile != profile:
             raise ValueError('request differs from active profile')
+        if request.settings.input_mode != 'text':
+            from h3server.assets import AssetStore
+            AssetStore(paths).conditioning(request.settings)
+        if request.settings.input_mode == 'references':
+            from h3server.backends import reference
+            if not reference.installed(paths):raise ValueError('Install the pinned Ref2VA checkpoint first')
         if request.settings.sage_attention:
             from h3server.backends.sage_attention import require
             require(paths)

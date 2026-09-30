@@ -73,6 +73,14 @@ class GenerationInput(BaseModel):
     sparse_preset: Literal['off', 'quality', 'balanced', 'draft'] = 'off'
     sparse_artifact_digest: Annotated[StrictStr, Field(pattern=r'^[a-f0-9]{64}$')] | None = None
 
+    input_mode: Literal['text', 'frames', 'references'] = 'text'
+    reference_images: Annotated[list[StrictStr], Field(max_length=9)] = Field(default_factory=list)
+    reference_videos: Annotated[list[StrictStr], Field(max_length=3)] = Field(default_factory=list)
+    reference_audios: Annotated[list[StrictStr], Field(max_length=3)] = Field(default_factory=list)
+    reference_artifact_digest: Annotated[StrictStr, Field(pattern=r'^[a-f0-9]{64}$')] | None = None
+    first_frame: StrictStr | None = None
+    last_frame: StrictStr | None = None
+
     @model_validator(mode="after")
     def normalized(self):
         if "num_frames" in self.model_fields_set and "duration" in self.model_fields_set:
@@ -94,7 +102,8 @@ class GenerationInput(BaseModel):
         steps = (6 if self.turbo_lora else 20) if self.profile in PRUNED_PROFILE_NAMES and 'steps' not in self.model_fields_set else self.steps
         settings = GenerationSettings(aligned, self.width, self.height, steps, self.seed, self.profile, self.sage_attention,
                                       self.turbo_lora, self.turbo_strength, self.turbo_low_vram, self.turbo_artifact_digest,
-                                      self.sparse_preset, self.sparse_artifact_digest)
+                                      self.sparse_preset, self.sparse_artifact_digest,
+                                      self.input_mode, tuple(self.reference_images), tuple(self.reference_videos), tuple(self.reference_audios), self.first_frame, self.last_frame, self.reference_artifact_digest)
         return JobRequest(self.prompt, tuple(self.loras), self.sparse_attention, settings)
 
 
@@ -167,6 +176,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     features = SageInstaller(worker)
     from h3server.remote.turbo import TurboInstaller
     turbo = TurboInstaller(worker)
+    from h3server.remote.reference import ReferenceInstaller
+    reference = ReferenceInstaller(worker)
     from h3server.remote.sparse import SparseInstaller
     sparse = SparseInstaller(worker)
 
@@ -175,12 +186,14 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         worker.start()
         features.recover()
         turbo.recover()
+        reference.recover()
         sparse.recover()
         try:
             yield
         finally:
             await asyncio.to_thread(features.close)
             await asyncio.to_thread(turbo.close)
+            await asyncio.to_thread(reference.close)
             await asyncio.to_thread(sparse.close)
             await asyncio.to_thread(worker.stop)
 
@@ -235,6 +248,16 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         except ValueError:
             raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
 
+    @app.get('/api/v1/features/reference')
+    def reference_status():return reference.status()
+
+    @app.post('/api/v1/features/reference',status_code=202)
+    def install_reference(body: TurboInstallInput):
+        from h3server.backends.reference import DIGEST
+        if body.artifact_digest!=DIGEST:raise HTTPException(409,'reference_selection_changed')
+        try:return reference.start(body.artifact_digest)
+        except ValueError:raise HTTPException(409,'optional_install_busy_or_unsupported') from None
+
     @app.get('/api/v1/features/sparse')
     def sparse_status():
         return sparse.status()
@@ -248,6 +271,53 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             return sparse.start(body.artifact_digest)
         except ValueError:
             raise HTTPException(409, 'optional_install_busy_or_unsupported') from None
+
+    from h3server.assets import AssetStore, MAX_BYTES
+    assets = AssetStore(worker.paths)
+    asset_upload_lock = asyncio.Lock()
+
+    @app.post('/api/v1/assets/{kind}', status_code=201)
+    async def upload_asset(kind: Literal['image', 'video', 'audio'], request: Request):
+        if worker.maintenance_status().get('active'):raise HTTPException(409, 'maintenance_active')
+        data=bytearray()
+        try:
+            async with asset_upload_lock, asyncio.timeout(90):
+                async for chunk in request.stream():
+                    if len(data)+len(chunk)>MAX_BYTES:raise HTTPException(413,'asset_size_limit_64_mib')
+                    data.extend(chunk)
+                return await asyncio.to_thread(assets.put, data, kind)
+        except TimeoutError:raise HTTPException(408,'asset_upload_timeout') from None
+        except (ValueError,OSError):raise HTTPException(422,'asset_invalid_or_limits_exceeded') from None
+
+    AssetID = Annotated[str, APIPath(pattern=r'^[a-f0-9]{64}$')]
+
+    @app.get('/api/v1/assets/{id}')
+    def asset_metadata(id: AssetID):
+        try:return assets.metadata(id)
+        except (OSError,ValueError):raise HTTPException(404,'asset_missing_or_changed') from None
+
+    @app.get('/api/v1/assets/{id}/content')
+    def asset_content(id: AssetID, range_header: Annotated[str | None, Header(alias='Range')] = None):
+        try:
+            info=assets.metadata(id)
+            with assets.open(id) as original:fd=os.dup(original.fileno())
+        except (OSError,ValueError):raise HTTPException(404,'asset_missing_or_changed') from None
+        size=os.fstat(fd).st_size
+        try:start,end,code=_range(range_header,size)
+        except ValueError:
+            os.close(fd);raise HTTPException(416,'invalid_range',headers={'Content-Range':f'bytes */{size}'}) from None
+        stream=os.fdopen(fd,'rb');stream.seek(start)
+        def chunks():
+            remaining=end-start+1
+            try:
+                while remaining:
+                    chunk=stream.read(min(65536,remaining))
+                    if not chunk:return
+                    remaining-=len(chunk);yield chunk
+            finally:stream.close()
+        headers={'Content-Length':str(end-start+1),'Accept-Ranges':'bytes','Content-Disposition':'inline; filename="reference-asset"'}
+        if code==206:headers['Content-Range']=f'bytes {start}-{end}/{size}'
+        return StreamingResponse(chunks(),status_code=code,media_type=info['mime'],headers=headers,background=BackgroundTask(stream.close))
 
     @app.get('/api/v1/models')
     def models_status():
@@ -304,7 +374,8 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
                 "resident_models": worker.models_status(), "performance_schema": 1,
-                "optional_features": {"sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
+                "input_modes": ['text', 'frames', 'references'] if 'h3-convrot-int8' in worker.backend.profiles else ['text', 'frames'] if any(p in PRUNED_PROFILE_NAMES for p in worker.backend.profiles) else ['text'],
+                "optional_features": {"reference": reference.status(), "sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": canvas_limits(worker.backend.profiles[0])[0], "spatial_multiple": 32,
                                    "canvas_pixels": canvas_limits(worker.backend.profiles[0])[1], "steps_min": 2, "steps_max": 1000,

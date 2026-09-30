@@ -21,8 +21,16 @@ def encoded(value):
     return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
 
 
-def configuration(request):
+def configuration(request, paths=None):
+    from h3server.assets import FIELDS, AssetStore
     result=asdict(request.settings)
+    for key in FIELDS:result.pop(key,None)
+    if result['input_mode']!='references':result.pop('reference_artifact_digest',None)
+    if result['input_mode']=='text':result.pop('input_mode')
+    else:
+        if paths is None:raise ValueError('Conditioned measurements require resolved asset geometry')
+        result['conditioning_shapes']={key:[[v['width'],v['height'],v['frames'],round(v['duration'],3)] for v in values]
+                                       for key,values in AssetStore(paths).conditioning(request.settings).items()}
     result['loras']=list(request.loras)
     result['prompt_length_bucket']=((len(request.prompt)+255)//256)*256
     from h3server.backends.catalog import get_artifact_set, PRUNED_PROFILE_NAMES
@@ -142,8 +150,17 @@ class PerformanceStore:
         if not re.fullmatch('[0-9a-f]{32}',job_id) or cache not in {'cold','warm','warm_partial','encoder_reuse'}:raise ValueError('invalid performance identity')
         from dataclasses import fields
         from h3server.domain import GenerationSettings
-        allowed={f.name for f in fields(GenerationSettings)}|{'loras','prompt_length_bucket','model_artifact_digest'}
+        from h3server.assets import FIELDS
+        allowed=({f.name for f in fields(GenerationSettings)}-set(FIELDS))|{'loras','prompt_length_bucket','model_artifact_digest','conditioning_shapes','reference_artifact_digest'}
         if type(config) is not dict or set(config)-allowed:raise ValueError('unknown/private configuration fields')
+        shapes=config.get('conditioning_shapes',{})
+        if type(shapes) is not dict or set(shapes)-set(FIELDS):raise ValueError('unknown conditioning geometry')
+        for values in shapes.values():
+            if type(values) is not list or len(values)>9:raise ValueError('invalid conditioning geometry')
+            for shape in values:
+                if type(shape) is not list or len(shape)!=4 or any(type(v) not in (int,float) or not math.isfinite(v) or not 0<=v<=16_777_216 for v in shape):
+                    raise ValueError('conditioning geometry must contain bounded numeric values only')
+        if config.get('input_mode','text') not in ('text','frames','references'):raise ValueError('invalid input mode')
         validate_measurement(metrics,hardware,actual)
         group=key_for(config,hardware,cache,actual)
         data={'schema_version':SCHEMA,'configuration':config,'hardware':hardware,'cache':cache,'actual_attention':actual,'measurements':metrics,'recorded_at':time.time()}
