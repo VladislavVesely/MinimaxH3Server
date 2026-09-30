@@ -32,7 +32,7 @@ class ModelLibrary:
     def _registered(self,compatible_only=True):
         try:data=read_json(self.paths,self.registry)
         except FileNotFoundError:return {}
-        if data.get('schema')!=1 or not isinstance(data.get('profiles'),dict):raise ValueError('invalid model library binding')
+        if data.get('schema') not in (1,2) or not isinstance(data.get('profiles'),dict):raise ValueError('invalid model library binding')
         for name,digest in data['profiles'].items():
             if digest!=get_artifact_set(name).digest:raise ValueError('model library selection changed')
             require_consent(self.paths,profile_name=name)
@@ -40,16 +40,20 @@ class ModelLibrary:
 
     def _refresh_backend(self):
         from h3server.backends.pruned import backend
-        profiles=tuple(dict.fromkeys([self.profile,*self._registered()]))
-        children={name:(self.base if name==self.profile else backend(self.paths,name)) for name in profiles}
+        try:managed=read_json(self.paths,self.registry).get('schema')==2
+        except FileNotFoundError:managed=False
+        profiles=tuple(self._registered()) if managed else tuple(dict.fromkeys([self.profile,*self._registered()]))
+        children={name:(self.base if name==self.profile and not managed else backend(self.paths,name)) for name in profiles}
+        primary=children.get(self.profile,next(iter(children.values()),self.base))
         def selected(name):
             if name not in children:raise ValueError('model is not installed in this runtime')
             return children[name]
         def validate(request):selected(request.settings.profile).validate_request(request)
         # Each resident child remains bound to one profile. The scheduler already
         # recycles it on profile changes; no weights are silently mixed.
-        self.worker.backend=replace(self.base,profiles=profiles,validate_request=validate,
-            capabilities=children.get('h3-convrot-int8',self.base).capabilities,
+        self.worker.backend=replace(primary,profiles=profiles,validate_request=validate,
+            readiness=primary.readiness if profiles else lambda:('No model weights are installed; select a model in Install.',),
+            capabilities=children.get('h3-convrot-int8',primary).capabilities,
             command_for_profile=lambda name:selected(name).command)
 
     def _read(self):
@@ -102,7 +106,7 @@ class ModelLibrary:
         if event.progress and (now-self.last_progress>=.5 or event.progress.completed==event.progress.total):
             self._publish(completed=event.progress.completed,total=event.progress.total);self.last_progress=now
 
-    def _run(self,profile,operation):
+    def _run(self,profile,operation,*,release=True):
         import fcntl
         try:
             with regular_file(self.paths,LOCK,flags=os.O_CREAT|os.O_RDWR,mode='r+b',create_parents=True) as guard:
@@ -123,12 +127,15 @@ class ModelLibrary:
                 if self.stop.is_set():raise ValueError('Model installation cancelled')
                 with self.worker._lock:
                     registered=self._registered(compatible_only=False);registered[profile]=get_artifact_set(profile).digest
-                    atomic_json(self.paths,self.registry,{'schema':1,'profiles':registered})
+                    try:schema=read_json(self.paths,self.registry).get('schema',1)
+                    except FileNotFoundError:schema=1
+                    atomic_json(self.paths,self.registry,{'schema':schema,'profiles':registered})
                     self._refresh_backend()
                 self._publish(state='installed',completed=get_artifact_set(profile).weight_bytes,error=None)
         except Exception as error:
             self._publish(state='cancelled' if self.stop.is_set() else 'failed',error=safe_log(f'{type(error).__name__}: {error}')[:2000])
-        finally:self.worker.end_maintenance(operation)
+        finally:
+            if release:self.worker.end_maintenance(operation)
 
     def cancel(self,operation):
         with self.lock:

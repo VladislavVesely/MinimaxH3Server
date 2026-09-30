@@ -56,6 +56,17 @@ class ModelInstallInput(BaseModel):
     download_approved: Literal[True]
 
 
+class ComponentSyncInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['synchronize']
+    desired: list[Annotated[str, Field(min_length=1,max_length=64)]] = Field(max_length=16)
+    inventory_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    license_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    license_acknowledged: Literal[True]
+    eligibility_confirmed: Literal[True]
+    download_approved: Literal[True]
+
+
 class ModelCancelInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     operation: str = Field(pattern=r'^[a-f0-9]{32}$')
@@ -197,10 +208,16 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     reference = ReferenceInstaller(worker)
     from h3server.remote.sparse import SparseInstaller
     sparse = SparseInstaller(worker)
+    from h3server.remote.components import Components
+    components = Components(worker,library,{'sageattention':features,'turbo':turbo,'sparse':sparse,'reference':reference})
+
+    def library_document():
+        return {**library.status(),'components':components.inventory(),'synchronization':components.status()}
 
     @asynccontextmanager
     async def lifespan(app):
         worker.start()
+        components.recover()
         library.recover()
         features.recover()
         turbo.recover()
@@ -209,6 +226,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         try:
             yield
         finally:
+            await asyncio.to_thread(components.close)
             await asyncio.to_thread(library.close)
             await asyncio.to_thread(features.close)
             await asyncio.to_thread(turbo.close)
@@ -220,6 +238,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                   docs_url=None, redoc_url=None)
     app.state.request_model = GenerationInput
     app.state.model_library = library
+    app.state.components = components
 
     @app.middleware("http")
     async def authenticate(request, call_next):
@@ -244,16 +263,20 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         return JSONResponse({"error": "internal_error"}, status_code=500)
 
     @app.get('/api/v1/models/library')
-    def model_library():return library.status()
+    def model_library():return library_document()
 
     @app.post('/api/v1/models/install',status_code=202)
-    def install_model(body: ModelInstallInput):
-        try:return library.start(**body.model_dump())
+    def install_model(body: ModelInstallInput | ComponentSyncInput):
+        try:
+            if isinstance(body,ComponentSyncInput):return components.start(**body.model_dump(exclude={'action'}))
+            return library.start(**body.model_dump())
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @app.post('/api/v1/models/install/cancel')
     def cancel_model_install(body: ModelCancelInput):
-        try:return library.cancel(body.operation)
+        try:
+            if components._read().get('operation')==body.operation:return components.cancel(body.operation)
+            return library.cancel(body.operation)
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @app.get('/api/v1/features/sageattention')
@@ -406,7 +429,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                                    for name in ('lora', 'sparse_attention')},
                 "adapter_capabilities": asdict(worker.backend.capabilities),
                 "diagnostic": worker.backend.diagnostics(),
-                "resident_models": worker.models_status(), "model_library": library.status(), "performance_schema": 1,
+                "resident_models": worker.models_status(), "model_library": library_document(), "performance_schema": 1,
                 "input_modes": ['text', 'frames', 'references'] if 'h3-convrot-int8' in worker.backend.profiles else ['text', 'frames'] if any(p in PRUNED_PROFILE_NAMES for p in worker.backend.profiles) else ['text'],
                 "optional_features": {"reference": reference.status(), "sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},

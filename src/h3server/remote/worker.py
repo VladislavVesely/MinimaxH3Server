@@ -225,6 +225,8 @@ class Worker:
             return self.models_status()
 
     def readiness(self) -> tuple[str, ...]:
+        if self.maintenance_status()['active']:
+            return ('Installation maintenance is active',)
         if self._stopping.is_set() or (self._thread is not None and not self._thread.is_alive()):
             return ("Worker scheduler is not available",)
         try:

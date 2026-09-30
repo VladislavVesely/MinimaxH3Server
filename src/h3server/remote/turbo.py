@@ -74,7 +74,7 @@ class TurboInstaller:
             self._publish(completed=completed, total=total)
             self.last_progress = now
 
-    def _run(self, operation):
+    def _run(self, operation, *, release=True, maintenance_fd=None):
         import fcntl
         try:
             with regular_file(self.paths, LOCK, flags=os.O_CREAT | os.O_RDWR, mode='r+b', create_parents=True) as guard:
@@ -83,7 +83,8 @@ class TurboInstaller:
                 self._publish(state='installed', completed=turbo.TOTAL, error=None)
         except Exception as error:
             self._publish(state='failed', error=safe_log(f'{type(error).__name__}: {error}')[:2000])
-        finally: self.worker.end_maintenance(operation)
+        finally:
+            if release:self.worker.end_maintenance(operation)
 
     def close(self):
         self.stop.set()

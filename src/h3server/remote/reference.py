@@ -60,7 +60,7 @@ class ReferenceInstaller:
         now=time.monotonic()
         if now-self.last_progress>=.5 or c==t:self._publish(completed=c,total=t);self.last_progress=now
 
-    def _run(self,operation):
+    def _run(self,operation,*,release=True,maintenance_fd=None):
         import fcntl
         try:
             with regular_file(self.paths,LOCK,flags=os.O_CREAT|os.O_RDWR,mode='r+b',create_parents=True) as guard:
@@ -68,7 +68,8 @@ class ReferenceInstaller:
                 reference.download(self.paths,progress=self.progress,cancelled=self.stop.is_set)
                 self._publish(state='installed',completed=reference.TOTAL,error=None)
         except Exception as e:self._publish(state='failed',error=safe_log(f'{type(e).__name__}: {e}')[:2000])
-        finally:self.worker.end_maintenance(operation)
+        finally:
+            if release:self.worker.end_maintenance(operation)
 
     def close(self):
         self.stop.set()

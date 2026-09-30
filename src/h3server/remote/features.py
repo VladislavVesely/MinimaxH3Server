@@ -32,7 +32,7 @@ class SageInstaller:
             state = self._read()
             verified = installed(self.paths)
             return {**state, 'installed': verified, 'version': VERSION,
-                    'supported': all(p in PRUNED_PROFILE_NAMES for p in self.worker.backend.profiles),
+                    'supported': bool(self.worker.backend.profiles) and all(p in PRUNED_PROFILE_NAMES for p in self.worker.backend.profiles),
                     'busy': self.thread is not None and self.thread.is_alive()}
 
     def _publish(self, **values):
@@ -78,7 +78,7 @@ class SageInstaller:
                 raise
             return self.status()
 
-    def _run(self, operation):
+    def _run(self, operation, *, release=True, maintenance_fd=None):
         import fcntl
         try:
             with regular_file(self.paths, 'state/sageattention.lock', flags=os.O_CREAT | os.O_RDWR,
@@ -101,7 +101,7 @@ class SageInstaller:
                 attempted = False
                 try:
                     io = ProcessIO(command_timeout=300)
-                    io.lock_fd = guard.fileno()
+                    io.lock_fd = maintenance_fd if maintenance_fd is not None else guard.fileno()
                     env = environment(self.paths)
                     self.write('Installing pinned optional SageAttention 1.0.6 (pure Triton); Torch dependencies will not be changed.\n')
                     attempted = True
@@ -127,7 +127,7 @@ class SageInstaller:
         except Exception as error:
             self._publish(state='failed', error=safe_log(f'{type(error).__name__}: {error}')[:4000])
         finally:
-            self.worker.end_maintenance(operation)
+            if release:self.worker.end_maintenance(operation)
 
     def write(self, text):
         with self.lock:

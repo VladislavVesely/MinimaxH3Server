@@ -531,7 +531,8 @@
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
-    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady});
+    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady, busy,
+      licenseReady:!!modelLicenseDigest, applyComponents, cancelComponents});
   }
 
   async function refresh() {
@@ -1015,6 +1016,20 @@
       const label = `${option.dataset.baseLabel} — ${modelOptionStatus(value, option.value)}`;
       if (option.textContent !== label) option.textContent = label;
     }
+  }
+  async function applyComponents(selection) {
+    return perform('Applying selected component changes…', async () => {
+      const result = await request('/remote/models/install', {action:'synchronize', ...selection,
+        license_sha256:modelLicenseDigest,license_acknowledged:true,eligibility_confirmed:true,download_approved:true});
+      globalThis.H3Studio?.syncAccepted(result.operation);
+      await dashboard();
+    });
+  }
+  async function cancelComponents(operation) {
+    return perform('Stopping further component changes…', async () => {
+      await request('/remote/models/install/cancel', {operation});
+      await dashboard();
+    });
   }
   async function installAdditionalModel(selected) {
     if (!(runtimeReady && modelLibrary.profiles.some(p => p.profile === selected.profile_name && p.installed))) {
@@ -1540,7 +1555,7 @@
       dashboard().catch(error => {
         if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
       });
-    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy || modelLibrary?.busy ? 2000 : 5000);
+    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy || modelLibrary?.busy || modelLibrary?.synchronization?.busy ? 2000 : 5000);
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', async () => {
     estimateKey = null;

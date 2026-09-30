@@ -165,8 +165,8 @@ async function install(page, controller, profile = 'h3-bf16-cpu-offload-experime
   await page.locator('[data-workspace="install"]').click();
   await page.locator('#scan').click();
   await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
-  await page.locator('#install-profile').selectOption(profile);
-  await page.getByRole('button', { name: 'Install', exact: true }).click();
+  await page.locator(`[data-component="${profile}"] input`).check();
+  await page.locator('#component-apply').click();
 }
 async function controllerStatus(page) {
   return page.evaluate(async () => (await fetch('/api/v1/controller/status')).json());
@@ -344,7 +344,7 @@ for (const profile of ['h3-gguf-q4-k-m','h3-convrot-mixed']) {
       await expect(page.locator('#install-profile')).toHaveValue('h3-gguf-q4-k-m');
       await expect(page.locator('#install-profile option[value="h3-nvfp4"]')).toBeDisabled();
       await expect(page.locator('#unavailable-variants')).toContainText('Pure INT4 diffusion is absent');
-      await page.locator('#install-profile').selectOption(profile);
+      await page.locator(`[data-component="${profile}"] input`).check();
       const total = profile.includes('gguf') ? '31,550,953,118' : '35,889,785,333';
       await expect(page.locator('#selected-profile')).toContainText(total+' bytes');
       await expect(page.locator('#selected-profile')).toContainText('Host RAM: unknown');
@@ -355,7 +355,7 @@ for (const profile of ['h3-gguf-q4-k-m','h3-convrot-mixed']) {
       const catalog = await page.evaluate(async () => (await (await fetch('/api/v1/controller/profiles')).json()));
       const selected = catalog.profiles.find(p=>p.profile_name===profile);
       const started = page.waitForRequest(r=>r.url().endsWith('/setup/start'));
-      await page.locator('#install').click();
+      await page.locator('#component-apply').click();
       expect((await started).postDataJSON()).toMatchObject({profile,artifact_set_digest:selected.artifact_set_digest});
       await completed(page);
       const status = (await controllerStatus(page)).setup;
@@ -448,9 +448,9 @@ for (const trusted of [false, true]) {
       expect(release.staged_history_count).toBe(2);
       await page.locator('#scan').click();
       await expect(page.getByRole('heading', { name: 'Hardware observations' })).toBeVisible();
-      await page.locator('#install-profile').selectOption('h3-convrot-int8');
+      await page.locator('[data-component="h3-convrot-int8"] input').check();
       expect((await controller.control({ action: 'calls' })).calls).toEqual([]);
-      await page.getByRole('button', { name: 'Install', exact: true }).click();
+      await page.locator('#component-apply').click();
       await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/v1/controller/setup/status')).json()).state), { timeout: 20000 }).toBe('completed');
       const calls = (await controller.control({ action: 'calls' })).calls;
       expect(calls.filter(action => action === 'prepare')).toHaveLength(1);
@@ -592,7 +592,8 @@ test.describe('inspect before Install', () => {
     await expect(page.locator('#setup-checkpoint')).toContainText(saved.plan_digest);
     await expect(page.locator('#install-profile')).toHaveValue('h3-convrot-int8');
     expect((await controller.control({action:'calls'})).calls).toEqual([]);
-    await page.locator('#install').click();
+    await page.locator('[data-component="h3-convrot-int8"] input').check();
+    await page.locator('#component-apply').click();
     await completed(page);
     const calls = (await controller.control({action:'calls'})).calls;
     expect(calls.filter(c => c === 'service-plan')).toHaveLength(1);

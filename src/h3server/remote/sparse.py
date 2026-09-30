@@ -81,7 +81,7 @@ class SparseInstaller:
 
     def flush(self): pass
 
-    def _run(self, operation):
+    def _run(self, operation, *, release=True, maintenance_fd=None):
         import fcntl
         from h3server.installer.steps import ProcessIO, environment
         try:
@@ -91,14 +91,15 @@ class SparseInstaller:
                 if self.stop.is_set(): raise InterruptedError('Sparse installation cancelled')
                 self.write('Files verified; checking native sparse kernels on this GPU. No dependencies are being changed.\n')
                 io = ProcessIO(command_timeout=180)
-                io.lock_fd = guard.fileno()
+                io.lock_fd = maintenance_fd if maintenance_fd is not None else guard.fileno()
                 io.run((sys.executable, '-c', 'import sys,runpy;sys.path.insert(0,sys.argv.pop(1));runpy.run_module("h3server.backends.sparse",run_name="__main__")',
                         str(Path(__file__).resolve().parents[2]), str(self.paths.root)), env=environment(self.paths), log=self)
                 if not sparse.installed(self.paths, verify=True): raise ValueError('Sparse GPU receipt verification failed')
                 self._publish(state='installed', completed=sparse.TOTAL, error=None)
         except Exception as error:
             self._publish(state='failed', error=safe_log(f'{type(error).__name__}: {error}')[:2000])
-        finally: self.worker.end_maintenance(operation)
+        finally:
+            if release:self.worker.end_maintenance(operation)
 
     def close(self):
         self.stop.set()

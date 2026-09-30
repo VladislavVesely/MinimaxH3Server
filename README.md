@@ -43,19 +43,19 @@ executable on PATH. To deploy a separately authenticated wheel:
    connection** removes it. Temporary setup/sudo credentials are still cleared from
    memory on completion, failure, disconnect or expiry; remembering is separate.
    No account SSH configuration or credential file is imported by the application.
-3. Select a model in **04 / Install & validate**. The old 03 comparison is removed.
-   Review selected bytes, GPU guidance, unknown host-memory fit, auxiliary files,
-   and collapsed pinned license/provenance details. Smaller pruned GGUF Q4_K_M is
-   the default experimental choice, not a verified RTX 4090 memory fit.
-4. Click **Install** once. Its inline scope covers required packages/drivers/user
-   services, possible reboot/reconnect, activation and the selected model download,
-   with license/eligibility terms. Exact digest approvals are enforced internally;
-   the UI has no separate install/reboot/activation/download approval wizard.
-   Existing busy jobs are rejected, never cancelled automatically.
-5. Watch actual phases/checkpoints and indeterminate progress. Reload restores
-   the running controller's progress without submitting another Install. Cancel
-   stops further automatic actions, not rollback: remote package/detached work
-   may continue, especially offline. Wait until setup stops before changing target.
+3. In **Install**, use the model/optional-component checkboxes. Installed items
+   start checked. Open each ⓘ dialog for size, compatibility and pinned license
+   details. There is no Review button or duplicate model selector.
+4. For an installed pruned runtime, check additions/uncheck removals and click
+   **Apply changes** once. Compatible additions run before managed removals;
+   history, outputs and shared dependencies are preserved. Cross-runtime batch
+   switching and hardware-ineligible choices are disabled with explanations.
+   Fresh setup uses **Set up selected components** for one base model and its
+   supported optional accelerators, including guarded provisioning/reboot if needed.
+5. Watch actual action/download progress. Reload observes the running operation
+   without starting another. Stop preserves completed changes, not rollback;
+   interrupted work needs explicit review and retry. Busy generation jobs are
+   rejected, never cancelled automatically. Exact consent/digests remain enforced.
    Sudo rejection shows a specific administrator/password-policy explanation.
    Use **Retry failed stage** for an eligible failed environment; do not reinstall
    a completed setup. Restarts attach to saved work, and remembered connections

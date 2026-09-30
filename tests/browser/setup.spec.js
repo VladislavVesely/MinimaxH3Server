@@ -94,8 +94,10 @@ test('trust before authentication, read-only scan, unknowns, safe text and expli
   await expect(page.locator('#hardware')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('#hardware img')).toHaveCount(0);
   await expect(page.locator('#review-panel')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Install', exact:true })).toBeEnabled();
-  await expect(page.locator('#installation')).toContainText('Selecting a model makes no changes');
+  await expect(page.locator('#component-apply')).toBeDisabled();
+  await page.locator('.component-card[data-model] input:enabled').first().check();
+  await expect(page.locator('#component-apply')).toBeEnabled();
+  await expect(page.locator('#installation')).toContainText('Checked = keep installed');
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
   expect(logs.join(' ')).not.toContain('browser-secret');
   await expect(page.locator('body')).not.toContainText('browser-secret');
@@ -181,7 +183,7 @@ test('reload preserves the real pending fingerprint challenge and requires fresh
   await expect(page.getByText('SSH authenticated', { exact: true })).toBeVisible();
 });
 
-test('selected details and one Install replace comparison and approval wizard', async ({ page, controller }) => {
+test('component checklist and information dialogs replace duplicate installation selection', async ({ page, controller }) => {
   await open(page, controller);
   await connect(page); await approve(page);
   await expect(page.locator('#password-note')).toContainText('plaintext in owner-only local controller settings');
@@ -192,11 +194,17 @@ test('selected details and one Install replace comparison and approval wizard', 
   await page.locator('#scan').click();
   await expect(page.locator('#hardware')).toContainText('Unknown');
   await expect(page.locator('#review-panel')).toHaveCount(0);
-  await expect(page.locator('.model-card input[type="checkbox"]')).toHaveCount(await page.locator('#install-profile option').count());
+  await expect(page.locator('.model-card input[type="checkbox"]')).toHaveCount(await page.locator('#install-profile option').count()+4);
   await expect(page.locator('#installation input[type="radio"]')).toHaveCount(0);
   await expect(page.locator('#sudo-password')).toHaveCount(0);
-  await expect(page.getByRole('button', {name:'Install', exact:true})).toBeEnabled();
-  await page.locator('#install-profile').selectOption('h3-gguf-q5-k-m');
+  await expect(page.locator('#install-profile')).toBeHidden();
+  await expect(page.getByRole('button', {name:'Review', exact:true})).toHaveCount(0);
+  await page.locator('[data-component="h3-gguf-q5-k-m"] input').check();
+  await expect(page.locator('#component-apply')).toBeEnabled();
+  await page.locator('[data-component="h3-gguf-q5-k-m"] .component-info').click();
+  await expect(page.locator('#component-info')).toBeVisible();
+  await expect(page.locator('#component-info')).toContainText('MiniMax');
+  await page.keyboard.press('Escape');
   await expect(page.locator('#selected-profile')).toContainText('Q5_K_M');
   await expect(page.locator('#selected-profile')).toContainText('Host RAM: unknown');
   await expect(page.locator('#install-scope')).toContainText('reboot');
