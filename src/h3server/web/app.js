@@ -57,6 +57,7 @@
   const assetDimensionUpdates = [];
   const assetDraft = {reference_images:[], reference_videos:[], reference_audios:[], first_frame:[], last_frame:[]};
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
+  const joiner = window.H3Joiner?.create({api:API, getCsrf:() => csrf, onChange:() => render()});
 
   function savedTargetMatches() {
     const saved = preferences.connection;
@@ -470,7 +471,8 @@
     $('turbo-strength').disabled = !$('use-turbo').checked;
     $('turbo-low-vram').disabled = !$('use-turbo').checked;
     for (const button of $('jobs').querySelectorAll('button')) {
-      button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames'));
+      button.disabled = !available || !authenticated || (button.dataset.requiresFrames === 'true' && !inputModes.includes('frames')) || (button.dataset.joiner === 'true' && !joiner?.canAdd());
+      if (button.dataset.joiner === 'true') button.title = joiner?.blocker() || 'Video joiner is unavailable.';
     }
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
   }
@@ -481,6 +483,7 @@
     csrf = data.csrf_token;
     capabilities = data.capabilities;
     ready = true;
+    void joiner?.init();
     $('session').textContent = 'Local session secured';
     setConnection(data);
     if (setup.busy) {
@@ -1249,6 +1252,9 @@
         prepareVideoPreview(video, url, error);
         const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
         const actions = node('div', undefined, 'job-output-actions');
+        const addToJoiner = node('button', 'Add to joiner'); addToJoiner.type = 'button'; addToJoiner.dataset.joiner = 'true';
+        addToJoiner.addEventListener('click', () => { void joiner?.addHistory(job); });
+        actions.append(addToJoiner);
         actions.append(link, lastFrameButton(job.job_id, false), lastFrameButton(job.job_id, true));
         card.output.append(video, actions,
           node('p', 'Last frame: uncompressed PNG, native resolution. No additional image loss; existing video compression cannot be undone.', 'field-hint'), error);

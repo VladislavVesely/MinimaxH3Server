@@ -45,6 +45,37 @@ bound to the authenticated target and browser session. Setup keeps no independen
 password copy between calls. Python strings cannot be reliably zeroized; clearing
 drops owned references and cancellation interrupts in-flight SSH IO where safe.
 
+## Video joiner
+
+Open **Video joiner** in the sidebar. Choose/drop local MP4 files, or use
+**Add to joiner** on a Current/History output. Drag clips into order (or use
+Earlier/Later), select a clip to preview, remove unwanted clips, and select
+**Export joined video**. The download starts when ready; the Download joined MP4
+link remains available until the timeline changes. Play sequence previews the
+original clips in order; playback can briefly pause between files.
+
+Joining happens locally with installed `ffmpeg` and `ffprobe`, without GPU work,
+remote installation or a daemon restart. Missing tools are explained and never
+installed automatically. Export copies encoded streams, not decoded/re-encoded
+frames: there is **no additional compression loss**. Source files and History jobs
+are unchanged. Only compatible MP4 H.264/H.265 with one video track and optional
+AAC audio are accepted. Stream layout, codec configuration, dimensions, rates,
+pixel/color/audio parameters and display metadata must match. Incompatible clips
+are refused rather than resized, transcoded or stripped of tracks. Output packet
+counts and decoder metadata are checked before offering the download.
+
+Limits: 2–32 timeline clips, 64 MiB per file, one hour total, 1 GiB temporary
+workspace including exports. The original encoded quality is retained, but MP4
+container timestamps/metadata may change and AAC encoder padding can affect audio
+seams. This is not a sample-exact audio editor; no trimming or transitions.
+
+Temporary copies are private and controller-session scoped. Removing a timeline
+item deletes only its temporary copy. **Clear workspace** removes all temporary
+clips/exports after confirmation; it never deletes original files or History jobs.
+Normal controller exit also cleans the workspace. Reloading loses timeline order;
+retained copies can be cleared from the new page. Download exports you want to
+keep. A forced process kill/crash may leave owner-only OS temporary files.
+
 ## Video previews
 
 Current and History load video previews near the visible viewport, rather than

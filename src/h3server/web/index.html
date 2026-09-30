@@ -6,6 +6,7 @@
   <title>Server setup · H3 Server</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/job-timing.js" defer></script>
+  <script src="/assets/joiner.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -13,7 +14,7 @@
   <aside class="sidebar" aria-label="Setup navigation">
     <a class="brand" href="#main" aria-label="H3 Server home"><span class="brand-mark">H3</span><span>H3 Server<small>SELF-HOSTED STUDIO</small></span></a>
     <p class="nav-label">WORKSPACE</p>
-    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">02</span></a></nav>
+    <nav aria-label="Workspace"><a class="nav-item selected" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Server setup <span class="nav-tag">01</span></a><a class="nav-item" href="#generation"><span aria-hidden="true">▷</span> Generation <span class="nav-tag">02</span></a><a class="nav-item" href="#joiner"><span aria-hidden="true">⇥</span> Video joiner <span class="nav-tag">03</span></a></nav>
     <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
       <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
       <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
@@ -144,6 +145,20 @@
           <button id="export-timings" class="secondary" type="button" disabled>Download timing data</button><p class="field-hint">Latest 50 successful measurements, including hardware/software and settings—not prompts, credentials or machine identifiers. Nothing uploads automatically.</p>
           <div class="queue-heading"><h3>Generation queue</h3><p id="queue-summary" role="status">No jobs loaded</p></div><div class="job-tabs" role="tablist" aria-label="Generation jobs"><button id="jobs-tab-current" type="button" role="tab" aria-controls="jobs" aria-selected="true">Current (0)</button><button id="jobs-tab-history" type="button" role="tab" aria-controls="jobs" aria-selected="false" tabindex="-1">History (0)</button></div><p class="field-hint">Current keeps unfinished jobs and jobs from this page view. Reload the page to move finished jobs to History.</p><p id="jobs-empty" class="field-hint" role="status">No jobs in this page view. Queue a generation to get started.</p><div id="jobs" role="tabpanel" aria-labelledby="jobs-tab-current" tabindex="0"></div><section class="job-terminal" aria-label="Generation terminal"><div class="terminal-heading"><h3>Terminal</h3><span id="terminal-job">Select a job to view its output</span></div><pre id="job-events" tabindex="0" aria-label="Selected job terminal output">Waiting for a job.</pre></section>
         </section>
+      <section id="joiner" class="panel joiner-panel" aria-labelledby="joiner-heading">
+        <p class="eyebrow">03 / LOSSLESS STREAM COPY</p><h2 id="joiner-heading">Video joiner</h2>
+        <p>Arrange whole clips, preview the sequence, then join their original video and audio streams without re-encoding.</p>
+        <div id="joiner-drop" class="joiner-drop"><label for="joiner-files">Drop MP4 files here or choose files</label><input id="joiner-files" type="file" accept="video/mp4,.mp4,.m4v" multiple disabled></div>
+        <p class="field-hint">Or use <strong>Add to joiner</strong> on a Current/History video. Export requires 2–32 clips, 64 MiB each and at most one hour total; 1 GiB temporary workspace including exports. Matching H.264/H.265 video and optional AAC audio only. Different resolutions, frame rates or codec settings are rejected—not silently converted.</p>
+        <p id="joiner-summary" class="field-hint">No clips added.</p>
+        <p id="joiner-empty" class="field-hint">Your timeline is empty. Drag clips to reorder; Earlier/Later buttons also work with keyboard or touch.</p>
+        <ol id="joiner-timeline" class="joiner-timeline" aria-label="Video joiner timeline"></ol>
+        <p id="joiner-now" class="field-hint">Add clips to preview them.</p>
+        <video id="joiner-player" controls playsinline preload="auto" aria-label="Joiner preview" hidden></video>
+        <div class="joiner-actions"><button id="joiner-play" type="button" disabled>Play sequence</button><button id="joiner-export" class="primary" type="button" disabled>Export joined video</button><a id="joiner-download" download="joined.mp4" hidden>Download joined MP4</a><button id="joiner-clear" type="button" disabled>Clear workspace</button></div>
+        <p id="joiner-status" role="status" aria-live="polite">Securing local session…</p>
+        <p class="field-hint">Preview switches between originals and may pause briefly at cuts. Export retains encoded quality, but MP4/AAC encoder padding can affect audio seams. No trimming, transitions, resizing or quality-reducing fallback. Temporary copies/exports last until Clear workspace or controller exit; download exports to keep them. Reloading loses timeline order. Original files and History jobs are never deleted here.</p>
+      </section>
       </div>
       <aside class="activity panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Session activity</h2><span class="tiny-dot" aria-hidden="true"></span></div><p class="field-hint">Local operation summaries, not a remote log stream. No credentials are recorded.</p><div class="operation-status"><p id="operation" role="status">Waiting for a local session.</p><progress id="progress" aria-label="Current operation; completion is not measurable" hidden></progress><p id="progress-note" class="field-hint" hidden>Working… duration and percentage are not reported by the controller.</p></div><ol id="activity-log" role="log" aria-label="Session activity log" aria-live="polite" aria-relevant="additions"></ol><div class="activity-footer">SAFE BY DESIGN<p>Scanning does not install packages, download models, or modify the server.</p></div></aside>
       </div>

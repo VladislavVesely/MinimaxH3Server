@@ -22,7 +22,7 @@ from typing import Literal
 
 from fastapi import Body, FastAPI, Request, Query
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import paramiko
 from starlette.concurrency import run_in_threadpool
@@ -47,6 +47,7 @@ CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_arti
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
+              "/assets/joiner.js": ("joiner.js", "text/javascript"),
               "/assets/styles.css": ("styles.css", "text/css")}
 SECURITY_HEADERS = {
     "cache-control": "no-store",
@@ -131,7 +132,7 @@ class LocalSecurity:
                 or (lengths and "transfer-encoding" in headers)):
             await reject("invalid_body", 400)
             return
-        asset_upload = scope['method']=='POST' and re.fullmatch(re.escape(API)+r'/remote/assets/(?:image|video|audio)',scope['path'])
+        asset_upload = scope['method']=='POST' and (re.fullmatch(re.escape(API)+r'/remote/assets/(?:image|video|audio)',scope['path']) or scope['path'] == API+'/joiner/clips')
         generation = scope['method']=='POST' and scope['path'] in (API+'/remote/jobs', API+'/remote/performance/estimate')
         limit = 64*1024*1024 if asset_upload else 96*1024 if generation else BODY_LIMIT
         if lengths and int(lengths[0]) > limit:
@@ -201,6 +202,10 @@ class PreferencesRequest(StrictRequest):
     use_turbo: bool | None = None
     install_sparse: bool | None = None
     sparse_preset: Literal['off', 'quality', 'balanced', 'draft'] | None = None
+
+
+class JoinerExportRequest(StrictRequest):
+    clips: list[str] = Field(min_length=2, max_length=32)
 
 
 class EmptyRequest(StrictRequest):
@@ -285,6 +290,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             await run_in_threadpool(setup.close)
             await run_in_threadpool(recovery.close)
             await run_in_threadpool(connection.close)
+            await run_in_threadpool(joiner.close)
 
     from h3server.controller.preferences import Preferences
     preferences = Preferences(state_dir)
@@ -292,6 +298,8 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     recovery = SetupRecovery(connection, deployment, lambda: session.active)
     setup = SetupCoordinator(deployment, recovery, lambda: session.active)
     proxy = RemoteProxy(connection)
+    from h3server.controller.joiner import Joiner, JoinerError
+    joiner = Joiner()
     setup.sage_request = lambda method: proxy.request_json(method, '/api/v1/features/sageattention')
     setup.turbo_request = lambda method: proxy.request_json(method, '/api/v1/features/turbo', body={'artifact_digest': TURBO_DIGEST})
     setup.sparse_request = lambda method: proxy.request_json(method, '/api/v1/features/sparse', body={'artifact_digest': SPARSE_DIGEST})
@@ -321,7 +329,42 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     app.state.deployment = deployment
     app.state.recovery = recovery
     app.state.setup = setup
+    app.state.joiner = joiner
     app.add_middleware(LocalSecurity, origin=origin, session=session)
+
+    @app.exception_handler(JoinerError)
+    async def joiner_error(request, exc):
+        return JSONResponse({'error': {'code': exc.code, 'fields': exc.fields}}, status_code=exc.status_code)
+
+    @app.get(API + '/joiner')
+    def joiner_status():
+        return joiner.status()
+
+    @app.post(API + '/joiner/clips', status_code=201)
+    def joiner_upload(body: bytes = Body(media_type='application/octet-stream')):
+        return joiner.add(body)
+
+    @app.get(API + '/joiner/clips/{id}/content')
+    def joiner_preview(id: str):
+        return FileResponse(joiner.path(id), media_type='video/mp4')
+
+    @app.post(API + '/joiner/clips/{id}/remove')
+    def joiner_remove(id: str, body: EmptyRequest):
+        joiner.remove(id)
+        return {'removed': True}
+
+    @app.post(API + '/joiner/export')
+    def joiner_export(body: JoinerExportRequest):
+        return joiner.export(body.clips)
+
+    @app.get(API + '/joiner/exports/{id}')
+    def joiner_download(id: str):
+        return FileResponse(joiner.path(id, export=True), media_type='video/mp4', filename='joined.mp4')
+
+    @app.post(API + '/joiner/clear')
+    def joiner_clear(body: EmptyRequest):
+        joiner.clear()
+        return {'cleared': True}
 
     @app.exception_handler(ControllerError)
     async def controller_error(request, exc):

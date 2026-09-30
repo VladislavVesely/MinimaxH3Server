@@ -1,0 +1,15 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+assert.ok(fs.existsSync('src/h3server/web/joiner.js'),'Joiner timeline module is missing');
+const c=vm.createContext({window:{}});vm.runInContext(fs.readFileSync('src/h3server/web/joiner.js','utf8'),c);
+const {reorder,errorMessage}=c.window.H3Joiner;
+const clips=[{id:'a'},{id:'b'},{id:'c'}];
+const ids=x=>Array.from(x,y=>y.id);
+assert.deepEqual(ids(reorder(clips,'c','a')),['c','a','b']);
+assert.deepEqual(ids(reorder(clips,'a','c')),['b','a','c']);
+assert.deepEqual(ids(reorder(clips,'a',null)),['b','c','a']);
+assert.deepEqual(ids(reorder(clips,'foreign','a')),['a','b','c']);
+assert.deepEqual(ids(reorder(clips,'a','a')),['a','b','c']);
+assert.deepEqual(ids(clips),['a','b','c']);
+assert.match(errorMessage({code:'joiner_incompatible',fields:['width','codec configuration']}),/width.*codec configuration/);
+assert.match(errorMessage({code:'joiner_tools_missing'}),/FFmpeg/);
+console.log('Joiner reorders without loss, rejects foreign drags, and explains incompatible clips/tools');

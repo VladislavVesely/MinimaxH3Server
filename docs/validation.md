@@ -1,5 +1,35 @@
 # Validation and acceptance status
 
+## Local video joiner
+
+47 focused Python tests passed across joiner, failure/cleanup, authenticated API
+and existing controller security tests. Coverage includes real H.264/AAC and HEVC
+packet preservation, every decoded video frame in order, rotation preservation,
+export decoder-metadata verification, mismatched geometry/audio, unknown IDs,
+symlinks, quotas/duration, missing tools, partial export cleanup, session/CSRF and
+HTTP byte ranges. Seven focused JS checks passed (joiner, video previews, last
+frames, job deletion, queue click, tabs and asset dimensions); syntax/diff checks
+passed. No full suite, dependency installation or GPU inference was run.
+
+The rebuilt packaged controller passed Chrome and WebKit native acceptance for
+local file selection/drop, actual drag reorder, sequential preview, removal,
+incompatible export refusal, confirmed clearing, real History imports and
+exports, and 375px layout. The two existing owned H3 clips were
+`ed74f1da26704297832748497c1a2e66` and `0f12f2caf8d64df99a4ceccfd2f6e5bb`.
+Independent comparison of exported MP4s against originals proved exact compressed
+video AND audio packet payloads and all 248 decoded video frames in timeline order
+in both engines (24 frames for synthetic red/blue fixtures). No remote job
+mutations or server deployment were needed. Browser HEVC playback, Windows/Linux
+packaged joining and maximum-size/hour-long timelines remain unverified.
+
+The diagnostic initially lost a DevTools response-body capture; it was replaced
+with an explicit authenticated read of the originals, the temporary test
+controller was stopped, and both complete native runs were repeated successfully.
+Screenshots: `/tmp/h3-joiner-chrome.png`, `/tmp/h3-joiner-webkit.png`,
+`/tmp/h3-joiner-mobile-chrome.png`, `/tmp/h3-joiner-mobile-webkit.png`.
+Media evidence: `/tmp/h3-joiner-acceptance/`. AAC padding/container timing means
+sample-exact seamless audio is not claimed; no re-encoding is performed.
+
 ## History video preview loading
 
 Reproduced a gray WebKit preview: after metadata loading, readyState remained 1
