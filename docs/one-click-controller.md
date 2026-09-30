@@ -63,9 +63,18 @@ resolving the problem; completed deletions are not rolled back.
 ## Video joiner
 
 Open **Video joiner** in the sidebar. Choose/drop local MP4 files, or use
-**Add to joiner** on a Current/History output. Drag clips into order (or use
-Earlier/Later), select a clip to preview, remove unwanted clips, and select
-**Export joined video**. The download starts when ready; the Download joined MP4
+**Add to joiner** on a Current/History output. The visual timeline shows
+thumbnail-filled blocks whose widths follow clip duration. Drag a whole block
+before/after another (or use Earlier/Later), select and remove unwanted clips,
+and select **Export joined video**. Click a block or scrub the time ruler to seek
+the large preview; use Timeline zoom and horizontal scrolling for longer
+sequences. The ruler also supports arrow keys, Home and End. Selected blocks
+support Enter/Space and Delete/Backspace. No split/trim operations are performed;
+export always includes whole clips regardless of the preview playhead.
+
+Filmstrip thumbnails are browser-generated display previews, cached only in page
+memory. Their small display size does not affect originals or exported quality.
+Unsupported browser codecs show a preview placeholder without disabling export. The download starts when ready; the Download joined MP4
 link remains available until the timeline changes. Play sequence previews the
 original clips in order; playback can briefly pause between files.
 

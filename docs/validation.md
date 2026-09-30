@@ -1,5 +1,26 @@
 # Validation and acceptance status
 
+## Visual filmstrip joiner
+
+Whole clips now appear as adjacent thumbnail blocks proportional to duration,
+with a linked preview/playhead, draggable ruler seeking, keyboard seeking, zoom,
+horizontal scrolling and selected-clip controls. No backend/export change.
+Four focused JS checks and 47 Python joiner/security tests passed. Rebuilt native
+Chrome and WebKit acceptance verified actual thumbnail pixels, 2s:4s block-width
+ratio, native drag rearrangement, live ruler dragging, seeking across clip
+boundaries, keyboard Home, zoom, sequence playback, export, removal and 375px
+layout. WebKit omitted pointerdown after a native drag; the failing live-scrub
+check passed after adding ordinary mouse handling alongside pointer capture.
+
+Synthetic outputs in both browsers retained exact packets and all decoded frames;
+a real existing H3 clip pair also produced filmstrips and a whole-clip export
+matching original compressed video/audio payloads and all 248 decoded frames.
+Only local copies of existing test media were used; no remote write or inference.
+Screenshots: `/tmp/h3-filmstrip-chrome.png`, `/tmp/h3-filmstrip-webkit.png`,
+`/tmp/h3-filmstrip-mobile-webkit.png`, `/tmp/h3-filmstrip-real.png`.
+Media comparisons: `/tmp/h3-filmstrip-acceptance/`. Unsupported browser codecs may
+lack thumbnail/preview decoding; stream-copy export remains independently usable.
+
 ## Bulk job deletion
 
 41 focused Python deletion/security tests and seven JS checks passed, including
