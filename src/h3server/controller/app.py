@@ -43,7 +43,7 @@ from h3server.profiles import recommend_profiles
 
 API = "/api/v1/controller"
 BODY_LIMIT = 16384
-CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runtime_setup": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
+CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runtime_setup": True, "audio_export": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/studio.js": ("studio.js", "text/javascript"),
@@ -801,6 +801,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @observed
     def remote_cancel(job_id: str, body: EmptyRequest):
         return proxy.request('POST', f'/api/v1/jobs/{job_id}/cancel', body={})
+
+    @app.get(API + '/remote/jobs/{job_id}/audio')
+    @observed
+    def remote_audio(job_id: str):
+        return proxy.request('GET', f'/api/v1/jobs/{job_id}/audio')
 
     @app.get(API + '/remote/jobs/{job_id}/last-frame')
     @observed

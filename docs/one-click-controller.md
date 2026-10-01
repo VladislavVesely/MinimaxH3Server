@@ -126,6 +126,22 @@ preloading the whole history. The player loads a decoded frame before Play, show
 loading/error feedback and retains playback through dashboard refreshes. Preview
 and Download MP4 use the same original video; no lower-quality transcode is made.
 
+## Download video or audio
+
+Completed, unexpired videos in both Current and History offer **Download MP4**
+with the same styling as the other action buttons. It downloads the original MP4.
+**Download MP3** exports only its audio as a 320 kbps MP3, preserving mono/stereo
+and supported sample rates (otherwise resampling to 48 kHz). MP3 is a lossy
+re-encode, not lossless extraction; no normalization or original-video modification
+is performed. Videos without an audio track show a clear error, not an empty file.
+
+Export is explicit and authenticated, reads an owned output descriptor, and runs
+in a bounded codec subprocess (60-second audio limit, 4 MiB MP3 cap, 25-second
+wall timeout). One MP3 export runs at a time. Browser polling never exports audio.
+A controller with the audio-export endpoint is required; older controllers hide
+that action rather than offering a broken link. Existing jobs remain on the server
+and are available in History when opening a new controller/page.
+
 ## Export the last video frame
 
 Available completed videos in Current and History offer **Download last frame

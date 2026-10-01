@@ -263,6 +263,10 @@
     operation_failed: 'Operation failed. Check target permissions, exact approvals and the saved checkpoint; no completion is assumed.',
     backend_not_ready: 'The local runtime or verified model is not ready. Review diagnostics before submitting.',
     insufficient_storage: 'Insufficient server disk space. Free space or adjust retention before retrying.',
+    audio_track_missing: 'This video has no audio track to export.',
+    audio_export_busy: 'Another MP3 export is running. Please try again when it finishes.',
+    audio_export_timeout: 'MP3 export timed out. The original video is unchanged.',
+    audio_export_unavailable: 'Audio could not be exported. The video may be missing, expired or unsupported; the original is unchanged.',
     last_frame_unavailable: 'The video is missing, expired or cannot be decoded. No frame was exported.',
     last_frame_export_busy: 'Another last-frame export is still running. Wait for it to finish, then try again.',
     last_frame_export_timeout: 'Frame extraction timed out. No lower-quality fallback was used; try again when the server is less busy.',
@@ -1365,6 +1369,29 @@
     if (!blob.size || blob.size > 32 * 1024 * 1024) throw {code:'invalid_response'};
     return blob;
   }
+  function audioDownloadButton(jobId) {
+    const button = node('button', 'Download MP3', 'secondary'); button.type = 'button';
+    button.title = 'Audio only · 320 kbps MP3 (lossy re-encode). Original video unchanged.';
+    button.addEventListener('click', () => perform('Exporting MP3 audio…', async () => {
+      const epoch = assetEpoch;
+      button.disabled = true;
+      try {
+        const response = await fetch(API + '/remote/jobs/' + jobId + '/audio', {credentials:'same-origin', cache:'no-store', redirect:'error'});
+        if (!response.ok) {
+          let data = {}; try { data = await response.json(); } catch {}
+          throw {code:data.detail || data.error?.code || 'audio_export_unavailable'};
+        }
+        if (!response.headers.get('content-type')?.startsWith('audio/mpeg')) throw {code:'invalid_response'};
+        const blob = await response.blob();
+        if (!blob.size || blob.size > 4 * 1024 * 1024) throw {code:'invalid_response'};
+        if (epoch !== assetEpoch) throw {code:'asset_target_changed'};
+        const url = URL.createObjectURL(blob), link = node('a');
+        link.href = url; link.download = jobId + '.mp3'; document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } finally { button.disabled = false; }
+    }));
+    return button;
+  }
   function lastFrameButton(jobId, reuse) {
     const button = node('button', reuse ? 'Use last frame as first frame' : 'Download last frame (PNG)', 'secondary'); button.type = 'button';
     if (reuse) button.dataset.requiresFrames = 'true';
@@ -1503,12 +1530,14 @@
         if (dimensions?.width > 0 && dimensions?.height > 0) { video.width = dimensions.width; video.height = dimensions.height; }
         const error = node('p'); error.setAttribute('role', 'status');
         prepareVideoPreview(video, url, error);
-        const link = node('a', 'Download MP4'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
+        const link = node('a', 'Download MP4', 'button-link secondary'); link.href = url + '?download=true'; link.download = job.job_id + '.mp4';
         const actions = node('div', undefined, 'job-output-actions');
         const addToJoiner = node('button', 'Add to joiner'); addToJoiner.type = 'button'; addToJoiner.dataset.joiner = 'true';
         addToJoiner.addEventListener('click', () => { void joiner?.addHistory(job); });
         actions.append(addToJoiner);
-        actions.append(link, lastFrameButton(job.job_id, false), lastFrameButton(job.job_id, true));
+        actions.append(link);
+        if (capabilities.audio_export) actions.append(audioDownloadButton(job.job_id));
+        actions.append(lastFrameButton(job.job_id, false), lastFrameButton(job.job_id, true));
         card.output.append(video, actions,
           node('p', 'Last frame: uncompressed PNG, native resolution. No additional image loss; existing video compression cannot be undone.', 'field-hint'), error);
       } else if (job.output?.expired) card.output.append(node('p', 'Output expired by retention policy.'));

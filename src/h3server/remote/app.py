@@ -561,6 +561,30 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             'Content-Disposition':f'attachment; filename="{job_id}-last-frame.png"',
             'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
 
+    audio_export_lock = Lock()
+
+    @app.get('/api/v1/jobs/{job_id}/audio')
+    async def audio_export(job_id: JobID):
+        from fastapi.responses import Response
+        from h3server.audio_export import extract, NoAudio
+        def export():
+            if not audio_export_lock.acquire(blocking=False):raise FrameExportBusy()
+            try:
+                fd = worker.open_video(job_id)
+                try:return extract(fd)
+                finally:os.close(fd)
+            finally:audio_export_lock.release()
+        try:
+            async with asyncio.timeout(30):data = await asyncio.to_thread(export)
+        except FrameExportBusy:raise HTTPException(409,'audio_export_busy') from None
+        except KeyError:raise HTTPException(404,'job_not_found') from None
+        except NoAudio:raise HTTPException(422,'audio_track_missing') from None
+        except TimeoutError:raise HTTPException(504,'audio_export_timeout') from None
+        except (OSError,ValueError):raise HTTPException(410,'audio_export_unavailable') from None
+        return Response(data,media_type='audio/mpeg',headers={
+            'Content-Disposition':f'attachment; filename="{job_id}.mp3"',
+            'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
     @app.get("/api/v1/jobs/{job_id}/video", response_class=StreamingResponse)
     def video(job_id: JobID, download: bool = False, range_header: Annotated[str | None, Header(alias="Range")] = None):
         try:

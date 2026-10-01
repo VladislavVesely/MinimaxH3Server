@@ -2,7 +2,7 @@
 :root { --ink:#182044; --muted:#64708a; --paper:#f3f5fc; --line:#e2e7f3; --accent:#6254f4; --nav:#141c30; --green:#17814f; }
 body { font-size:14px; background:radial-gradient(ellipse at 75% 0,#eaeaff77,transparent 50%),var(--paper); }
 button,input,select,textarea { font-family:inherit; }
-button { gap:8px; border-radius:9px; font-size:12px; min-height:40px; padding:9px 15px; transition:background .15s,border-color .15s; }
+button,.button-link { gap:8px; border-radius:9px; font-size:12px; min-height:40px; padding:9px 15px; transition:background .15s,border-color .15s; }
 button.primary { background:linear-gradient(135deg,#7161ff,#5e50ee); border-color:#6656f7; box-shadow:0 4px 10px #6254f421; }
 button.primary:hover:enabled { background:#5142dc; }
 button:disabled { opacity:.85; }
