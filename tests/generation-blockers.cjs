@@ -9,7 +9,7 @@ function reasons(overrides = {}, selections = {}) {
   const fields = {'generation-profile':{value:'h3-convrot-int8'},width:{value:'1344'},height:{value:'768'},'sparse-preset': {value: 'off'}, 'use-turbo': {checked: false}, 'use-sage': {checked: false}, ...selections};
   const state = {modelLibrary:null,modelState:{},ready: true, busy: false, submittingGeneration: false, setup: {busy: false}, connection: {state: 'authenticated'}, runtimeReady: true,
     sparseState: {installed: true, supported: true}, turboState: {installed: true, supported: true}, sageState: {installed: true, supported: true}, ...overrides};
-  const context = vm.createContext({canvasFits:()=>true, conditioningReasons:()=>[], ...state, $: id => fields[id]});
+  const context = vm.createContext({characters:null,canvasFits:()=>true, conditioningReasons:()=>[], ...state, $: id => fields[id]});
   vm.runInContext(section, context);
   return Array.from(context.generationBlockReasons());
 }

@@ -63,6 +63,12 @@
   const assetDraft = {reference_images:[], reference_videos:[], reference_audios:[], first_frame:[], last_frame:[]};
   const turboProfiles = ['h3-convrot-int8', 'h3-convrot-mixed'];
   const joiner = window.H3Joiner?.create({api:API, getCsrf:() => csrf, onChange:() => render()});
+  const characters = window.H3Characters?.create({api:API, request,
+    upload:uploadCharacterAsset, getDraft:() => assetDraft,
+    applyDraft:(next, referenceMode) => { Object.assign(assetDraft, next); if (referenceMode) $('input-mode').value = 'references'; showInputAssets(); },
+    changed:() => { render(); scheduleEstimate(); },
+    isConnected:() => connection.state === 'authenticated', isBusy:() => busy || setup.busy
+  });
   const jobSelection = window.H3JobSelection?.create({
     run: action => perform('Deleting selected jobs and their files…', action),
     remove: async id => {
@@ -156,6 +162,7 @@
     if (pageActive) await dashboard();
   }
   async function afterAuthentication() {
+    void characters?.load();
     preferences = await request('/preferences');
     $('forget-connection').hidden = !preferences.connection;
     if (capabilities.scan === true && !setup.busy) await scanHardware();
@@ -358,6 +365,7 @@
       sparseState = { installed: false, busy: false, supported: false };
       showSage(); showTurbo(); showSparse();
       referenceState = {}; inputModes = ['text']; assetEpoch++;
+      characters?.reset();
       for (const key of Object.keys(assetDraft)) assetDraft[key] = [];
       showInputAssets();
       resetDashboardPolling();
@@ -379,6 +387,7 @@
 
   function generationBlockReasons() {
     const reasons = conditioningReasons();
+    reasons.push(...(characters?.reasons() || []));
     if (!ready) reasons.push('Open a valid local controller session.');
     if (connection.state !== 'authenticated') reasons.push('Connect and authenticate to the server.');
     if (setup.busy) reasons.push('Wait for setup to finish.');
@@ -406,6 +415,7 @@
   }
 
   function render() {
+    characters?.update();
     const state = connection.state;
     const usable = ready && !busy;
     const available = usable && !setup.busy;
@@ -1231,6 +1241,7 @@
       $('lora').value = draft.lora;
       assetEpoch++;
       for (const key of Object.keys(assetDraft)) assetDraft[key] = assets[key];
+      characters?.detach();
       syncDuration('frames'); syncResolutionPresets(); showInputAssets(); render(); scheduleEstimate();
       notice.textContent = `Inputs from job ${job.job_id.slice(0,8)} copied into the generation draft. Nothing was queued or installed. Review the settings, then click Queue generation when ready.`;
     } catch (error) { notice.textContent = 'Could not reuse inputs. ' + (error.message || 'The saved inputs are unavailable.') + (applied ? ' Review the draft before queueing; its display could not be fully refreshed.' : ' Existing draft unchanged.'); }
@@ -1572,6 +1583,7 @@
     inputModes = capability.input_modes || ['text'];
     referenceState = capability.optional_features?.reference || {};
     showInputAssets(false);
+    void characters?.load();
     const profiles = capability.profiles || [];
     const profileKey = JSON.stringify([capability.backend, profiles]);
     if (profileKey !== activeProfileKey) {
@@ -1726,6 +1738,7 @@
     $('input-mode-status').hidden = inputModes.includes(mode);
     $('input-mode-status').textContent = inputModes.includes(mode) ? '' : 'This daemon/profile does not support this input mode. First/last frames require a pruned profile; references currently require ConvRot INT8.';
     $('reference-model-status').textContent = referenceState.installed ? 'Ref2VA INT8 checkpoint verified and available.' : referenceState.busy ? `Downloading Ref2VA: ${Math.round((referenceState.completed || 0)/1048576)} / ${Math.round((referenceState.total || 0)/1048576)} MiB` : referenceState.error || 'References require a separate ~21 GB INT8 checkpoint (~42 GB disk with its verified runtime copy). Your FL2VA model is preserved.';
+    characters?.sync();
     if (!rebuild) { for (const update of assetDimensionUpdates) update(); return; }
     assetDimensionUpdates.length = 0;
     for (const [field, assets] of Object.entries(assetDraft)) {
@@ -1759,6 +1772,15 @@
         card.append(remove); root.append(card);
       });
     }
+  }
+  async function uploadCharacterAsset(kind, file) {
+    const epoch = assetEpoch;
+    if (!file.size || file.size > 64*1024*1024) throw Error('File must be between 1 byte and 64 MiB.');
+    const response = await fetch(API + '/remote/assets/' + kind, {method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error', headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf}, body:file});
+    const value = await response.json();
+    if (!response.ok) throw {code:value.detail || value.error?.code || value.error};
+    if (epoch !== assetEpoch) throw Error('The server changed during upload.');
+    return value;
   }
   async function uploadInputAssets(field, files) {
     const maximum = field === 'reference_images' ? 9 : field.startsWith('reference_') ? 3 : 1;

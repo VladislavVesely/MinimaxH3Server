@@ -158,6 +158,25 @@ h3 { font-size:15px; }
 #job-events { min-height:90px; max-height:220px; font-size:10px; background:#141c2e; padding:12px; }
 .studio-history #jobs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
 .studio-history .job-card { margin:0; }
+.characters-library { margin:18px 0; padding:12px; border:1px solid #dfe4f0; border-radius:10px; }
+.character-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+.character-card { min-width:0; display:flex; flex-direction:column; gap:8px; padding:12px; background:#f8f9ff; border:1px solid #dfe4f0; border-radius:10px; }
+.character-card p { margin:0; overflow-wrap:anywhere; }
+.character-card img { width:100%; height:150px; object-fit:contain; background:#edf0f8; border-radius:7px; }
+.character-card audio { width:100%; height:34px; }
+.character-dialog { width:min(600px,90vw); max-height:85vh; overflow:auto; border:1px solid #dfe4f0; border-radius:12px; padding:24px; }
+.character-dialog::backdrop { background:#141c2e99; }
+.character-dialog form { display:flex; flex-direction:column; gap:10px; }
+.character-dialog img,.character-dialog video { display:block; max-width:100%; max-height:300px; object-fit:contain; margin:8px 0; }
+.character-dialog input,.character-dialog textarea,.character-dialog audio { max-width:100%; width:100%; }
+.character-variant-editor { display:flex; flex-direction:column; gap:8px; padding:14px; border:1px solid #dfe4f0; margin:10px 0; border-radius:8px; }
+.character-completions { list-style:none; margin:0; padding:6px; max-height:250px; overflow:auto; border:1px solid #958afd; border-radius:8px; }
+.character-completions li[aria-selected="true"] { background:#ebe7ff; }
+.character-completions button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; }
+.character-completions img { width:36px; height:36px; object-fit:contain; }
+.character-prompt-preview { white-space:pre-wrap; overflow-wrap:anywhere; max-height:380px; overflow:auto; padding:12px; background:#f8f9ff; font-size:12px; }
+.character-prompt-preview button { display:inline; padding:2px 5px; margin:0; font:inherit; color:#51479c; }
+#character-prompt-status { color:#994d0e; }
 .joiner-panel { max-width:none; }
 .joiner-panel > p { max-width:1050px; }
 .joiner-drop { text-align:center; padding:28px; background:linear-gradient(150deg,#faf9ff,#f3f5ff); border:1px dashed #b6acef; border-radius:12px; }

@@ -42,7 +42,8 @@ class CharacterInput(BaseModel):
     def bounded(self):
         if not self.name.strip(): raise ValueError('Empty name')
         if len({v.id for v in self.variants}) != len(self.variants): raise ValueError('Duplicate variant')
-        if len(self.model_dump_json().encode()) > 14000: raise ValueError('Character metadata limit')
+        data = self.model_dump(include=set(CharacterInput.model_fields))
+        if len(json.dumps(data, ensure_ascii=False).encode()) > 14000: raise ValueError('Character metadata limit')
         return self
 
 
@@ -76,7 +77,7 @@ class CharacterStore:
     def _read(self):
         try: value = read_json(self.paths, 'state/characters.json', limit=4*1024*1024)
         except FileNotFoundError: return []
-        if set(value) != {'schema_version', 'characters'} or value['schema_version'] != 1:
+        if type(value) is not dict or set(value) != {'schema_version', 'characters'} or type(value['schema_version']) is not int or value['schema_version'] != 1:
             raise ValueError('Invalid character library')
         rows = value['characters']
         if type(rows) is not list or len(rows) > 256: raise ValueError('Character library limit')
@@ -85,8 +86,9 @@ class CharacterStore:
         return records
 
     def _write(self, rows):
-        if len(rows) > 256: raise ValueError('Character library limit')
-        atomic_json(self.paths, 'state/characters.json', dict(schema_version=1, characters=rows))
+        value = dict(schema_version=1, characters=rows)
+        if len(rows) > 256 or len(json.dumps(value).encode()) > 4*1024*1024: raise ValueError('Character library limit')
+        atomic_json(self.paths, 'state/characters.json', value)
 
     def list(self):
         with self.lock(): return self._read()

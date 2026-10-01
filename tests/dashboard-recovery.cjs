@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync(require.resolve('../src/h3server/web/app.js'),'utf8');
 const elements=new Map(),timers=new Map(),requests=[];let next=0,fail=true;
-const c=vm.createContext({pageActive:true,ready:true,connection:{state:'authenticated'},jobTimer:null,dashboardEpoch:0,dashboardRequest:0,dashboardFailures:0,runtimeReady:true,
+const c=vm.createContext({characters:null,pageActive:true,ready:true,connection:{state:'authenticated'},jobTimer:null,dashboardEpoch:0,dashboardRequest:0,dashboardFailures:0,runtimeReady:true,
  activeProfileKey:JSON.stringify(['fixture',['A']]),sageState:{},turboState:{},modelLibrary:null,performance:{now:()=>0},
  $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
  setTimeout:(fn,ms)=>{timers.set(++next,{fn,ms});return next;},clearTimeout:id=>timers.delete(id),

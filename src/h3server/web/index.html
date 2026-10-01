@@ -10,6 +10,7 @@
   <script src="/assets/joiner.js" defer></script>
   <script src="/assets/job-selection.js" defer></script>
   <script src="/assets/software.js" defer></script>
+  <script src="/assets/characters.js" defer></script>
   <script src="/assets/app.js" defer></script>
   <script src="/assets/studio.js" defer></script>
 </head>
@@ -129,6 +130,14 @@
           <p id="reuse-inputs-status" class="field-hint" role="status" aria-live="polite" tabindex="-1" hidden></p>
           <button id="dashboard-refresh" class="secondary" type="button" disabled>Refresh dashboard</button><p id="readiness" role="status">Daemon disconnected. No readiness assumed.</p>
           <p id="models-status" role="status">Resident model status unavailable.</p><button id="unload-models" class="secondary" type="button" disabled>Unload models</button><p id="unload-models-reason" class="field-hint">Connect to check retained models. Unloading never deletes model files.</p>
+          <details id="characters-library" class="characters-library"><summary>Characters · server library</summary>
+            <p class="field-hint">Global characters saved on this generation server, available from any client. Choose one image variant per character; its voice is attached automatically. References guide identity and timbre, not exact copies.</p>
+            <button id="characters-refresh" type="button" class="secondary">Refresh characters</button>
+            <button id="character-new" type="button" class="secondary">New character</button>
+            <p id="characters-status" role="status" aria-live="polite"></p>
+            <div id="character-cards" class="character-grid"></div>
+            <p id="character-selected" role="status"></p>
+          </details>
           <form id="generation-form"><fieldset id="generation-fields" disabled><legend>Generation settings</legend>
             <div class="field"><label for="input-mode">Input mode</label><select id="input-mode"><option value="text">Text to video</option><option value="references">Reference images, video and audio</option><option value="frames">First / last frame images</option></select></div>
             <p id="input-mode-status" class="field-hint" role="status" hidden></p>
@@ -146,7 +155,13 @@
               <label for="upload-last_frame">Last frame image</label><input id="upload-last_frame" type="file" accept="image/png,image/jpeg,image/webp"><div id="assets-last_frame" class="asset-grid"></div>
             </section>
             <p id="asset-rules" class="field-hint" hidden>Uploads remain on your server for job history; removing them here only changes the draft. Maximum 64 MiB per file; PNG/JPEG/static WebP up to 16 megapixels and 8192 pixels per axis; MP4/WebM up to 1920×1088 area and 60 fps; WAV/FLAC/MP3 mono/stereo. Video/audio duration 0.2–15 seconds. Reference storage budget 8 GiB. Conditioned generation uses more memory. SageAttention and Turbo are available; sparse attention must be Off.</p>
-            <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" required maxlength="15000" rows="3"></textarea></div>
+            <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" required maxlength="15000" rows="8" aria-autocomplete="list" aria-controls="character-completions" aria-expanded="false"></textarea></div>
+            <ul id="character-completions" class="character-completions" role="listbox" aria-label="Reference suggestions" hidden></ul>
+            <p class="field-hint">Type &lt; for reference suggestions; use ↑/↓ and Enter, or click. Inspect linked characters and media in the prompt preview below. Speaker IDs (Sx) follow speaking order, not subject order.</p>
+            <button id="character-scaffold" type="button" class="secondary">Prefill reference definitions</button>
+            <p id="character-prompt-status" role="status" aria-live="polite"></p>
+            <button id="character-review" type="button" class="secondary" hidden>I reviewed the reference labels</button>
+            <details><summary>Clickable prompt preview</summary><div id="character-prompt-preview" class="character-prompt-preview"></div></details>
             <label for="generation-profile">Generation profile</label><select id="generation-profile"></select>
             <div class="form-row resolution-presets"><div class="field"><label for="aspect-ratio">Aspect ratio</label><select id="aspect-ratio"><option value="custom">Custom</option></select></div><div class="field"><label for="resolution-preset">Resolution preset</label><select id="resolution-preset"><option value="custom">Custom</option></select></div></div>
             <p class="field-hint">Presets use supported 32-pixel alignment; widescreen ratios may be approximate. You can edit Width and Height below for a custom size.</p>

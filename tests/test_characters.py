@@ -49,6 +49,43 @@ def test_library_protects_job_assets(tmp_path,monkeypatch):
     assert worker.delete(j.job_id)['removed_assets']==[asset]
 
 
+def test_mp3_voice_protected_and_wrong_kind_rejected(tmp_path,monkeypatch):
+    store,data=library(tmp_path,monkeypatch)
+    monkeypatch.setattr('h3server.assets.probe',lambda fd:dict(kind='audio',mime='audio/mpeg',width=0,height=0,duration=1,frames=0))
+    voice=AssetStore(store.paths).put(b'MP3 fixture','audio')['id']
+    data['voice_asset_id']=voice
+    row=store.create(data)
+    with store.lock():assert voice in store.protected_assets_locked()
+    with pytest.raises(ValueError):store.create({**data,'variants':[{**data['variants'][0],'image_asset_id':voice}]})
+    with pytest.raises(ValueError):store.create({**data,'voice_asset_id':data['variants'][0]['image_asset_id']})
+    assert store.get(row['id'])['voice_asset_id']==voice
+
+
+def test_concurrent_creates_keep_both_records(tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    store,data=library(tmp_path,monkeypatch)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rows=list(pool.map(lambda _:store.create(data),range(8)))
+    assert len(store.list())==8
+    assert len({r['id'] for r in rows})==8
+
+
+def test_record_budget_remains_readable(tmp_path,monkeypatch):
+    store,data=library(tmp_path,monkeypatch)
+    # Include enough Unicode to exercise persisted escaping and record overhead.
+    data['variants']=[{**data['variants'][0],'id':f'{i:032x}','description':'x'*500} for i in range(16)]
+    row=store.create(data)
+    assert store.get(row['id'])==row
+
+
+def test_corrupt_library_fails_closed(tmp_path,monkeypatch):
+    import json
+    store,data=library(tmp_path,monkeypatch);store.create(data)
+    file=store.paths.root/'state/characters.json'
+    file.write_text(json.dumps({'schema_version':True,'characters':[]}))
+    with pytest.raises(ValueError):store.list()
+
+
 def test_api_crud_auth_and_conflict(tmp_path,monkeypatch):
     _,data=library(tmp_path,monkeypatch);_,_,app=service(tmp_path)
     with TestClient(app) as c:

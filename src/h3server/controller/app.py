@@ -47,6 +47,7 @@ CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runt
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/studio.js": ("studio.js", "text/javascript"),
+              "/assets/characters.js": ("characters.js", "text/javascript"),
               "/assets/software.js": ("software.js", "text/javascript"),
               "/assets/studio.css": ("studio.css", "text/css"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),

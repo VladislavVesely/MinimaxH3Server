@@ -179,6 +179,52 @@ and activation. No automatic fallback. See [source evidence and exact artifacts]
 [runtime operations](docs/research/h3-pruned-operation.md) and
 [UI/build integration](docs/research/h3-pruned-integration.md).
 
+### Server character library
+
+In **Generate → Characters · server library**, create a character with an identity
+name/description, named image variants and an optional **MP3 voice reference**.
+Records and immutable media live on the generation server, not on your controller
+or in browser storage, so other connected clients see the same library. The
+metadata includes nullable `project_id` for future project scoping; all characters
+are global today. Concurrent edits are revision-checked rather than silently
+replacing another client's changes.
+
+Choose a variant and click **Use [character]**. One image per character plus its
+optional voice is added to the generation draft and Reference mode is selected.
+Multiple characters are supported within the existing nine-image/three-audio
+limits. Removing a character selection removes only references added by the
+picker, preserving independently uploaded references. Selecting does not install
+Ref2VA or change the active model; ConvRot INT8 and the reference checkpoint are
+still required to generate.
+
+An empty prompt receives an editable full-reference scaffold following MiniMax's
+six-section guide. **Prefill reference definitions** updates definitions while
+preserving the scene text. Canonical labels are `<Subject N>`, `<Picture N>`,
+`<Video N>` and `<Audio N>`; pictures defining characters are cited inside subject
+definitions, not falsely treated as first/last frames. Voice assets guide timbre
+and delivery, not copied source dialogue. Assign `(Sx)` IDs in actual speaking
+order, independently of subject numbers, and put dialogue inside
+`<d>[Language] ...</d>`.
+
+Type `<` to open reference suggestions; select using arrows/Enter or a click.
+**Clickable prompt preview** opens the corresponding image/character and voice
+player. If a selection or attachment changes the label assignments in authored
+text, the text is preserved and generation pauses for explicit label review.
+Historical job reuse remains self-contained; selected characters are snapshots,
+so reselect after library edits to use their updated variants/voice.
+
+Character references guide identity/voice; exact retention is not guaranteed.
+Images follow existing PNG/JPEG/static-WebP limits; MP3 clips must be 0.2–15 seconds
+and at most 64 MiB. Library media shares the 8 GiB reference-storage budget.
+Up to 16 variants per character and 256 global characters are supported, within
+a 4 MiB metadata budget. Job deletion protects library media; library edits/deletion
+remove metadata bindings, not the immutable bytes that historical jobs may need.
+
+The browser acceptance test `tests/browser/characters.spec.js` uses real media
+validation and requires Pillow, PyAV and ffmpeg; without them it is explicitly
+skipped. `H3_TEST_MEDIA_PATH` can point to an isolated codec package directory.
+Its runtime fixture does not test native H3 identity/voice quality.
+
 ### Explicit legacy alternatives
 
 | Experimental profile | Upstream GPU recipe | Local planning budget (unmeasured) |
