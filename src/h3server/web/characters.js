@@ -1,6 +1,10 @@
 'use strict';
 (() => {
   const types={reference_images:'Picture',reference_videos:'Video',reference_audios:'Audio'};
+  function newId() {
+    // getRandomValues also works on LAN HTTP, where randomUUID is unavailable.
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), value=>value.toString(16).padStart(2,'0')).join('');
+  }
   function bindings(selected,draft) {
     const result=selected.map((s,i)=>{
       const variant=s.character.variants.find(v=>v.id===s.variant_ids[0]);
@@ -152,7 +156,7 @@
       d.append(button('Close',()=>d.close()));d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();
     }
     function input(parent,label,value='',multiline=false) {
-      const id='character-field-'+crypto.randomUUID(),l=el('label',label),n=el(multiline?'textarea':'input');l.htmlFor=id;n.id=id;n.value=value;n.maxLength=multiline?500:100;parent.append(l,n);return n;
+      const id='character-field-'+newId(),l=el('label',label),n=el(multiline?'textarea':'input');l.htmlFor=id;n.id=id;n.value=value;n.maxLength=multiline?500:100;parent.append(l,n);return n;
     }
     function openEditor(record) {
       const token=epoch,d=el('dialog');editor=d;d.className='character-dialog';
@@ -167,7 +171,7 @@
       const variants=el('div'),items=[];form.append(variants);
       function addVariant(value={}) {
         if(items.length>=16)return;
-        const root=el('section');root.className='character-variant-editor';const item={id:value.id||crypto.randomUUID().replaceAll('-',''),image_asset_id:value.image_asset_id||null};
+        const root=el('section');root.className='character-variant-editor';const item={id:value.id||newId(),image_asset_id:value.image_asset_id||null};
         item.name=input(root,'Variant name',value.name||'Variant '+(items.length+1));item.name.required=true;
         item.description=input(root,'Variant description',value.description,true);
         const fileLabel=el('label','Variant image'),file=el('input');file.type='file';file.accept='image/png,image/jpeg,image/webp';fileLabel.append(file);root.append(fileLabel);item.file=file;

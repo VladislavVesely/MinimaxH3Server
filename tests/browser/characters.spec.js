@@ -37,8 +37,27 @@ test('historical reference draft detaches library selections without a false rev
   expect(reasons).toEqual([]);
 });
 
+test('character editor opens and adds variants without secure-context randomUUID',async({page})=>{
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.setContent('<textarea id="prompt" maxlength="15000"></textarea><select id="input-mode"><option value="references">References</option></select><button id="character-new">New character</button>'+['characters-status','character-prompt-status','character-review','character-cards','characters-refresh','character-selected','character-prompt-preview','character-completions','character-scaffold'].map(id=>'<div id="'+id+'"></div>').join(''));
+  await page.evaluate(()=>Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true}));
+  await page.addScriptTag({path:path.join(root,'src/h3server/web/characters.js')});
+  await page.evaluate(async()=>{
+    const draft={reference_images:[],reference_videos:[],reference_audios:[]};
+    const unit=window.H3Characters.create({api:'',request:async()=>({characters:[]}),upload:async()=>{},getDraft:()=>draft,applyDraft(){},changed(){},isConnected:()=>true,isBusy:()=>false});
+    await unit.load();
+  });
+  await page.getByRole('button',{name:'New character',exact:true}).click();
+  await expect(page.getByRole('dialog')).toBeVisible();await expect(page.getByLabel('Character name',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Add variant',exact:true}).click();await expect(page.getByLabel('Variant name',{exact:true})).toHaveCount(2);
+  const ids=await page.locator('dialog input,dialog textarea').evaluateAll(nodes=>nodes.map(n=>n.id).filter(Boolean));
+  expect(new Set(ids).size).toBe(ids.length);expect(errors).toEqual([]);
+});
+
 test('server library variants, MP3, picker, autocomplete and reference review',async({page,controller})=>{
   test.skip(!codecs,'Native Pillow/PyAV and ffmpeg required for media upload acceptance');
+  // LAN HTTP omits randomUUID but still exposes cryptographically secure getRandomValues.
+  await page.addInitScript(()=>Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true}));
   const errors=[];page.on('pageerror',e=>errors.push(e.message));await login(page,controller);
   const png=execFileSync(python,['-c','from PIL import Image; import sys; Image.new("RGB",(32,32),(20,100,180)).save(sys.stdout.buffer,"PNG")'],{env:{...process.env,PYTHONPATH:pythonpath}});
   const mp3=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','anullsrc=r=24000:cl=mono','-t','1','-f','mp3','pipe:1']);
