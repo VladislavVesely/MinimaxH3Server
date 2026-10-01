@@ -233,6 +233,7 @@ python3 -m venv .venv
 (cd tests/browser && npm ci && npx playwright install chromium && npm test)
 .venv/bin/python scripts/build_controller.py
 .venv/bin/python scripts/smoke_controller.py dist/h3-controller
+.venv/bin/python scripts/smoke_controller_replacement.py dist/h3-controller
 ./dist/h3-controller
 ```
 
@@ -243,7 +244,12 @@ builds are not cross-compiles. Build tooling installs controller dependencies on
 never Torch or weights. Wheel build uses the installed build tools (`--no-isolation`);
 keep setuptools >=68 installed. Verification compares every application source/resource
 in the remote wheel to this checkout, checks embedded resources and exercises the
-native authenticated profile catalog against source. Output: `dist/h3-controller[.exe]`, `dist/SHA256SUMS`;
+native authenticated profile catalog against source. Builds refuse to overwrite an
+existing executable: use `--distpath dist/build-N` for subsequent builds. Do not
+move or replace older archived executables while their controllers are running;
+their lazy imports reopen that file. New builds extract Python modules into each
+process's private directory so executable replacement cannot break late imports.
+Output: `dist/h3-controller[.exe]`, `dist/SHA256SUMS`;
 intermediate pure wheel: `build/controller-payload/`. Generated files are ignored.
 For source launch, first build a wheel (`python -m build --wheel`), verify its hash,
 then `python -m h3server --wheel dist/h3server-0.1.0-py3-none-any.whl --sha256 HASH`.

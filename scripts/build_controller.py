@@ -4,6 +4,7 @@ No model/runtime dependencies are installed. The embedded digest is an integrity
 pin within the distribution, not independent release provenance; authenticate the
 executable/checksum through your trusted distribution channel.
 """
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -42,6 +43,14 @@ def verify_wheel(path):
 
 def main():
     root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--distpath', type=Path, default=root / 'dist',
+                        help='Separate output directory; preserve older live archived executables')
+    output = parser.parse_args().distpath.resolve()
+    executable = output / ('h3-controller.exe' if sys.platform == 'win32' else 'h3-controller')
+    if executable.exists() or executable.is_symlink():
+        raise SystemExit('Controller executable already exists. Use a new --distpath directory; '
+                         'replacing or moving an older archived executable can break its running processes.')
     payload = root / 'build/controller-payload'
     shutil.rmtree(payload, ignore_errors=True)
     payload.mkdir(parents=True)
@@ -49,11 +58,10 @@ def main():
     wheel, = payload.glob('*.whl')
     digest = verify_wheel(wheel)
     (payload / 'release.json').write_text(json.dumps({'wheel': wheel.name, 'sha256': digest}, sort_keys=True), encoding='utf-8')
-    subprocess.run([sys.executable, '-m', 'PyInstaller', '--clean', '--noconfirm',
+    subprocess.run([sys.executable, '-m', 'PyInstaller', '--clean', '--noconfirm', '--distpath', str(output),
                     'packaging/controller.spec'], cwd=root, check=True)
-    executable = root / 'dist' / ('h3-controller.exe' if sys.platform == 'win32' else 'h3-controller')
     checksum = hashlib.sha256(executable.read_bytes()).hexdigest()
-    (root / 'dist/SHA256SUMS').write_text(f'{checksum}  {executable.name}\n', encoding='utf-8')
+    (output / 'SHA256SUMS').write_text(f'{checksum}  {executable.name}\n', encoding='utf-8')
     print(f'Built native {sys.platform}: {executable}; verified wheel {digest}')
 
 

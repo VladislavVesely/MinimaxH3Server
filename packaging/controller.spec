@@ -12,7 +12,10 @@ a = Analysis([str(root / 'src/h3server/__main__.py')], pathex=[str(root / 'src')
              hiddenimports=['uvicorn.logging', 'uvicorn.loops.asyncio',
                             'uvicorn.protocols.http.h11_impl', 'uvicorn.lifespan.on'],
              hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=['torch', 'transformers', 'diffusers'],
-             noarchive=False)
+             # Extract Python modules into the process-private _MEIPASS directory.
+             # A PYZ reader reopens the launch executable for lazy imports; replacing
+             # that executable during a rebuild otherwise breaks live controllers.
+             noarchive=True)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name='h3-controller',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
