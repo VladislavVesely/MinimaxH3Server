@@ -39,6 +39,7 @@
   let activeProfileKey = null;
   let setupTimer = null;
   let jobTimer = null;
+  let dashboardFailures = 0;
   let setupEpoch = 0;
   let setupRequest = 0;
   let dashboardEpoch = 0;
@@ -186,6 +187,7 @@
   function resetDashboardPolling() {
     clearTimeout(jobTimer);
     dashboardEpoch++;
+    dashboardFailures = 0;
   }
 
   const messages = {
@@ -292,7 +294,8 @@
   }
 
   function showError(error, focus = true) {
-    const message = messages[error.code] || 'The controller could not complete this operation. Refresh the connection and retry. No success is assumed.';
+    const message = error.dashboardPoll ? 'Dashboard connection interrupted. Retrying status automatically; existing jobs are not resubmitted. Readiness will be checked again.' : messages[error.code] || 'The controller could not complete this operation. Refresh the connection and retry. No success is assumed.';
+    $('error').dashboardPoll = error.dashboardPoll === true;
     $('error').textContent = message;
     $('error').hidden = false;
     if (focus) $('error').focus();
@@ -1517,7 +1520,9 @@
     clearTimeout(jobTimer);
     const epoch = dashboardEpoch;
     const sequence = ++dashboardRequest;
-    const current = () => epoch === dashboardEpoch && sequence === dashboardRequest && connection.state === 'authenticated';
+    const current = () => pageActive && epoch === dashboardEpoch && sequence === dashboardRequest && connection.state === 'authenticated';
+    let delay = null;
+    try {
     // Keep the last confirmed readiness during background polling. Only a real
     // response or connection failure may disable Queue, not an in-flight read.
     const capability = await request('/remote/capabilities');
@@ -1562,14 +1567,27 @@
     scheduleEstimate();
     await jobEvents(current);
     if (!current()) return;
+    dashboardFailures = 0;
+    if ($('error').dashboardPoll) { $('error').hidden = true; $('error').dashboardPoll = false; }
     render();
-    jobTimer = setTimeout(() => {
-      if (!current()) return;
-      const nextSequence = dashboardRequest + 1;
-      dashboard().catch(error => {
-        if (epoch === dashboardEpoch && nextSequence === dashboardRequest) { runtimeReady = false; render(); showError(error, false); }
-      });
-    }, data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy || modelLibrary?.busy || modelLibrary?.synchronization?.busy ? 2000 : 5000);
+    delay = data.jobs.some(job => ['queued', 'running'].includes(job.status)) || sageState.busy || turboState.busy || modelLibrary?.busy || modelLibrary?.synchronization?.busy ? 2000 : 5000;
+    } catch (error) {
+      if (current()) {
+        runtimeReady = false;
+        const retryable = ready && ['remote_unavailable', 'network_unavailable', 'invalid_response'].includes(error.code);
+        if (retryable) {
+          dashboardFailures = Math.min(dashboardFailures + 1, 5);
+          delay = Math.min(30000, 2000 * 2 ** (dashboardFailures - 1));
+          error.dashboardPoll = true;
+        }
+        render(); showError(error, false);
+      }
+      throw error;
+    } finally {
+      if (delay !== null && current()) jobTimer = setTimeout(() => {
+        if (current()) return dashboard().catch(() => {});
+      }, delay);
+    }
   }
   $('dashboard-refresh').addEventListener('click', () => perform('Checking daemon, model and queued jobs…', async () => {
     estimateKey = null;
