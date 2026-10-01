@@ -9,6 +9,7 @@
   <script src="/assets/job-timing.js" defer></script>
   <script src="/assets/joiner.js" defer></script>
   <script src="/assets/job-selection.js" defer></script>
+  <script src="/assets/software.js" defer></script>
   <script src="/assets/app.js" defer></script>
   <script src="/assets/studio.js" defer></script>
 </head>
@@ -74,7 +75,7 @@
           <div class="panel-heading"><div><p class="eyebrow">02 / DISCOVER</p><h2 id="scan-heading">A closer look at your hardware</h2></div><span class="outline-pill">Read-only</span></div>
           <p class="section-copy">Inspect the OS, CPU, memory, GPUs, drivers and free disk. Missing tools mean unknown observations, not missing hardware.</p>
           <button id="scan" class="primary" type="button" disabled>Scan hardware</button><p id="scan-hint" class="field-hint">Authenticate to enable the read-only scan.</p>
-          <div id="scan-results" hidden><h3 id="hardware-heading" tabindex="-1">Hardware observations</h3><div id="hardware" class="hardware-grid"></div><details class="observations"><summary>Observation notes &amp; evidence</summary><ul id="observation-notes"></ul></details></div>
+          <div id="scan-results" hidden><h3 id="hardware-heading" tabindex="-1">Hardware observations</h3><div id="hardware" class="hardware-grid"></div><details class="observations"><summary>Observation notes &amp; evidence</summary><ul id="observation-notes"></ul></details><section id="installed-software" aria-labelledby="software-heading"><h3 id="software-heading">Installed software</h3><p class="field-hint" id="software-status">Scan the target to read installed versions.</p><div id="software-content"></div></section></div>
         </section>
         <section class="panel" id="installation" aria-labelledby="installation-heading">
           <p class="eyebrow">04 / INSTALL &amp; VALIDATE</p><h2 id="installation-heading">Choose your model</h2>

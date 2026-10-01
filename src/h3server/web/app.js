@@ -333,6 +333,7 @@
   }
 
   function clearScan() {
+    globalThis.H3Software?.clear();
     scanned = false;
     $('scan-results').hidden = true;
     $('hardware').replaceChildren();
@@ -816,6 +817,7 @@
     await refresh();
     if (connection.state !== 'authenticated') throw { code: 'authentication_required' };
     renderScan(data);
+    void globalThis.H3Software?.load(() => request('/software'));
     log('Read-only scan returned. Review unknown observations and experimental profiles; no generation readiness is proven.');
     // Automatic read-only discovery must not interrupt an active local edit.
     if (!$('joiner').contains(document.activeElement)) $('hardware-heading').focus();

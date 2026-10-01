@@ -74,6 +74,25 @@ sequentially; failures are reported and eligible failed items remain selected.
 Connection/session failures stop the remaining attempts. Retry explicitly after
 resolving the problem; completed deletions are not rolled back.
 
+## Installed software on the target
+
+Open **Install → Target system information** and use **Scan hardware**. The
+**Installed software** section loads separately from hardware discovery and shows
+observed versions without installing anything, importing Torch or loading models.
+
+Each managed runtime has its own Python version, key package versions, Torch CUDA
+build target, expandable full Python dependency list and source revisions. Actual
+package metadata is used, not a requirements file or stale dependency freeze.
+Python's recorded creation version is labelled separately from its observed
+interpreter version. CUDA runtime packages, the CUDA toolkit Python package,
+`nvcc` on PATH and NVIDIA driver compatibility are distinct observations.
+
+Registered model/component pins are shown as receipts, **not reverified weights**.
+System tools and the full dpkg package list are labelled as observed with unknown
+installation ownership; pre-existing software is not falsely attributed to this
+tool. Missing tools or partial records are explicit. Refresh using Scan hardware;
+there is no continuous inventory polling. Changing targets clears old results.
+
 ## Video joiner
 
 Open **Video joiner** in the sidebar. Choose/drop local MP4 files, or use

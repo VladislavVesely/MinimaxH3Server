@@ -47,6 +47,7 @@ CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runt
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/studio.js": ("studio.js", "text/javascript"),
+              "/assets/software.js": ("software.js", "text/javascript"),
               "/assets/studio.css": ("studio.css", "text/css"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
               "/assets/joiner.js": ("joiner.js", "text/javascript"),
@@ -585,6 +586,13 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @app.get(API + '/profiles')
     def profiles():
         return profile_catalog()
+
+    @app.get(API + '/software')
+    @observed
+    def software_inventory():
+        from h3server.controller.software_inventory import observe
+        with connection.lock:
+            return observe(connection, connection.remote_home())
 
     @app.post(API + "/scan")
     @observed
