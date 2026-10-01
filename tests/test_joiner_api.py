@@ -13,6 +13,18 @@ def test_joiner_routes_require_session_and_csrf(controller):
     assert client.post(API+'/joiner/clips', content=b'x', headers={**headers,'content-type':'application/octet-stream'}).status_code == 422
 
 
+def test_conversion_requires_explicit_boolean_consent(controller, clips):
+    app,client,_=controller;headers=bootstrap(app,client);ids=[]
+    for path in (clips[0],clips[2]):
+        response=client.post(API+'/joiner/clips',content=path.read_bytes(),headers={**headers,'content-type':'application/octet-stream'})
+        ids.append(response.json()['id'])
+    assert client.post(API+'/joiner/export',json={'clips':ids},headers=headers).json()['error']['code']=='joiner_incompatible'
+    assert not app.state.joiner.exports
+    assert client.post(API+'/joiner/export',json={'clips':ids,'convert':'true'},headers=headers).status_code==422
+    response=client.post(API+'/joiner/export',json={'clips':ids,'convert':True},headers=headers)
+    assert response.status_code==200 and response.json()['converted'] is True
+
+
 def test_upload_preview_export_remove_and_cleanup(controller, clips):
     app, client, network = controller
     headers=bootstrap(app,client)

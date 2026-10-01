@@ -2,6 +2,7 @@
 (() => {
   const LIMIT = 64 * 1024 * 1024;
   const messages = {
+    joiner_conversion_unsupported:'Conversion supports up to 1080p-area SDR clips with square pixels and matching color metadata. HDR, rotation and unusual color/timing conversions need an external editor; originals are unchanged.',
     joiner_tools_missing:'Install FFmpeg and ffprobe locally, then reload the controller. Nothing is installed automatically.',
     joiner_busy:'Another joiner operation is running. Wait for it to finish.',
     joiner_format_unsupported:'Use MP4 with one H.264/H.265 video track and optionally one AAC audio track (up to one hour per clip). Other tracks/formats are not silently converted or dropped.',
@@ -20,8 +21,20 @@
     body_too_large:'Each clip must be no larger than 64 MiB.'
   };
   function errorMessage(error) {
-    if (error?.code === 'joiner_incompatible') return 'Cannot join without conversion. Clips differ in: ' + (error.fields || []).join(', ') + '. Remove incompatible clips; no quality-reducing fallback will be used.';
+    if (error?.code === 'joiner_incompatible') return 'Cannot join without conversion. Clips differ in: ' + (error.fields || []).join(', ') + '. An updated controller can offer conversion after confirmation.';
     return messages[error?.code] || 'Joiner operation failed. Check the connection and available disk space, then try again.';
+  }
+  async function exportJoined(request, clips, confirm, conversionAvailable, onConversion = () => {}) {
+    const ids = clips.map(x => x.id);
+    try { return await request('/joiner/export', {clips:ids}); }
+    catch (error) {
+      if (error.code !== 'joiner_incompatible' || !conversionAvailable) throw error;
+      const first = clips[0], fields = Array.isArray(error.fields) ? error.fields.join(', ') : 'stream settings';
+      const approved = await confirm(`Clips differ in: ${fields}.\n\nConvert and join at ${Math.ceil(first.width / 2) * 2}×${Math.ceil(first.height / 2) * 2}, ${first.frame_rate || 'the first clip’s frame rate'}? Video will be re-encoded as H.264; audio, when present, as stereo AAC at 48 kHz. This may reduce quality.\n\nClips will fit with padding, not cropping or stretching. Frames may be duplicated/dropped to match frame rate; missing audio is filled with silence. Originals remain unchanged.\n\nConvert and join?`);
+      if (!approved) return null;
+      onConversion();
+      return request('/joiner/export', {clips:ids, convert:true});
+    }
   }
   function reorder(items, from, before) {
     const item = items.find(x => x.id === from);
@@ -52,7 +65,7 @@
     const player = $('joiner-player');
     const editor = $('joiner-editor'), scroller = $('joiner-scroll'), scrollbar = $('joiner-scrollbar');
     const focusTimeline = () => scroller.focus({preventScroll:true});
-    let items = [], selected = null, busy = false, available = false, initialized = false;
+    let items = [], selected = null, busy = false, available = false, initialized = false, conversionAvailable = false;
     let sequence = false, retained = 0, retainedExports = 0, dragging = null;
     let pendingSeek = null, thumbnailWorking = false, thumbnailEpoch = 0, scrub = false, mouseScrub = false;
     const thumbnails = new Map(), thumbnailQueue = [];
@@ -237,7 +250,7 @@
           headers:body === undefined ? {} : {'Content-Type': binary ? 'application/octet-stream' : 'application/json', 'X-CSRF-Token':getCsrf()},
           body:body === undefined ? undefined : binary ? body : JSON.stringify(body)});
         const value = await response.json();
-        if (!response.ok) throw new Error(errorMessage(value.error));
+        if (!response.ok) throw Object.assign(new Error(errorMessage(value.error)), {code:value.error?.code, fields:value.error?.fields});
         return value;
       } finally { clearTimeout(timer); }
     }
@@ -270,6 +283,7 @@
       try {
         const status = await request('/joiner'); available = status.available;
         retained = status.retained_clips; retainedExports = status.retained_exports;
+        conversionAvailable = status.conversion_available === true;
         tell(!available ? messages.joiner_tools_missing : retained || retainedExports ? 'An earlier page left temporary media. Clear workspace to release it before starting again.' : 'Add local MP4 files or use Add to joiner on a History clip.');
       } catch (error) { initialized = false; tell(error.message); }
       render();
@@ -367,10 +381,12 @@
     player.addEventListener('error', () => { if (selected) { sequence = false; tell('This browser cannot load/decode the preview. Check the connection; supported clips can still be exported without re-encoding.'); } });
     $('joiner-export').addEventListener('click', () => perform(async () => {
       stop(); tell('Joining original streams without re-encoding…');
-      const result = await request('/joiner/export', {clips:items.map(x => x.id)});
+      const result = await exportJoined(request, items, message => window.confirm(message), conversionAvailable,
+        () => tell('Converting and joining with your approval… This can take longer than stream-copy export.'));
+      if (!result) { tell('Conversion cancelled. No new export was created; originals and previous exports are unchanged.'); return; }
       retainedExports++;
       const link = $('joiner-download'); link.href = api + '/joiner/exports/' + result.id; link.hidden = false;
-      tell('Export ready. Video/audio streams were copied without re-encoding. Download to keep the file.');
+      tell(result.converted ? 'Export ready. Converted to H.264/AAC with your approval; originals are unchanged. Download to keep the file.' : 'Export ready. Video/audio streams were copied without re-encoding. Download to keep the file.');
       link.click();
     }));
     $('joiner-clear').addEventListener('click', () => {
@@ -380,5 +396,5 @@
     return {init, addHistory, canAdd:() => available && !busy && retained < 32,
       blocker:() => busy ? messages.joiner_busy : retained >= 32 ? messages.joiner_clip_limit : !available ? 'Local FFmpeg is not ready. Open Video joiner for details.' : 'Copy the original video into the local joiner. The History job is unchanged.'};
   }
-  window.H3Joiner = {create, reorder, errorMessage, locateTime, timelineShortcut, scrollMetrics};
+  window.H3Joiner = {create, exportJoined, reorder, errorMessage, locateTime, timelineShortcut, scrollMetrics};
 })();

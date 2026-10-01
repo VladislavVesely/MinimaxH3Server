@@ -215,6 +215,7 @@ class PreferencesRequest(StrictRequest):
 
 class JoinerExportRequest(StrictRequest):
     clips: list[str] = Field(min_length=2, max_length=32)
+    convert: bool = False
 
 
 class EmptyRequest(StrictRequest):
@@ -376,7 +377,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
 
     @app.post(API + '/joiner/export')
     def joiner_export(body: JoinerExportRequest):
-        return joiner.export(body.clips)
+        return joiner.export(body.clips, convert=body.convert)
 
     @app.get(API + '/joiner/exports/{id}')
     def joiner_download(id: str):

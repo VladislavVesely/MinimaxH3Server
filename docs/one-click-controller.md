@@ -99,16 +99,29 @@ original clips in order; playback can briefly pause between files.
 
 Joining happens locally with installed `ffmpeg` and `ffprobe`, without GPU work,
 remote installation or a daemon restart. Missing tools are explained and never
-installed automatically. Export copies encoded streams, not decoded/re-encoded
-frames: there is **no additional compression loss**. Source files and History jobs
+installed automatically. Matching clips use stream copy, not decoded/re-encoded
+frames: the default path has **no additional compression loss**. Source files and History jobs
 are unchanged. Only compatible MP4 H.264/H.265 with one video track and optional
 AAC audio are accepted. Stream layout, codec configuration, dimensions, rates,
-pixel/color/audio parameters and display metadata must match. Incompatible clips
-are refused rather than resized, transcoded or stripped of tracks. Output packet
-counts and decoder metadata are checked before offering the download.
+pixel/color/audio parameters and display metadata must match for stream copy.
+If they do not, the joiner asks whether to **Convert and join**. Declining creates
+no new export. Confirming explicitly permits lossy H.264/AAC re-encoding to the
+first clip's size (rounded up to even pixels) and frame rate. Images fit with
+black padding, not cropping/stretching; frame-rate conversion can duplicate/drop
+frames. Audio is normalized to stereo 48 kHz AAC, with silence for clips lacking
+audio when other clips have audio. Originals and prior exports are unchanged.
+Compatible clips still use stream copy even if conversion permission is supplied.
+
+Conversion currently supports SDR, square-pixel clips up to 1920×1088 area,
+matching color metadata and zero starting offsets; HDR, rotation, unusual color
+or timing metadata require an external editor rather than guessed transformations.
+It uses CRF 18 H.264 with a 12 Mbps ceiling and 192 kbps AAC, a 150-second encoding
+deadline and the workspace budget. Output geometry, track layout and duration are
+verified; failed/partial exports are removed. Stream-copy exports retain their
+packet-count/decoder-metadata verification.
 
 Limits: 2–32 timeline clips, 64 MiB per file, one hour total, 1 GiB temporary
-workspace including exports. The original encoded quality is retained, but MP4
+workspace including exports. Stream copy retains original encoded quality, but MP4
 container timestamps/metadata may change and AAC encoder padding can affect audio
 seams. This is not a sample-exact audio editor; no trimming or transitions.
 
