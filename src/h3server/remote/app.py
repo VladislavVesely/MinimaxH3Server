@@ -344,6 +344,35 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
     from h3server.assets import AssetStore, MAX_BYTES
     assets = AssetStore(worker.paths)
     asset_upload_lock = asyncio.Lock()
+    from h3server.characters import CharacterStore, CharacterInput, CharacterUpdate, RevisionInput, RevisionConflict
+    characters = CharacterStore(worker.paths)
+    CharacterID = Annotated[str, APIPath(pattern=r'^[a-f0-9]{32}$')]
+
+    def character_call(action):
+        try: return action()
+        except KeyError: raise HTTPException(404, 'character_not_found') from None
+        except RevisionConflict: raise HTTPException(409, 'character_revision_conflict') from None
+        except (ValueError, OSError): raise HTTPException(422, 'character_invalid_or_assets_changed') from None
+
+    @app.get('/api/v1/characters')
+    def list_characters():
+        return character_call(lambda: {'characters': characters.list()})
+
+    @app.get('/api/v1/characters/{id}')
+    def get_character(id: CharacterID):
+        return character_call(lambda: characters.get(id))
+
+    @app.post('/api/v1/characters', status_code=201)
+    def create_character(body: CharacterInput):
+        return character_call(lambda: characters.create(body.model_dump()))
+
+    @app.post('/api/v1/characters/{id}/update')
+    def update_character(id: CharacterID, body: CharacterUpdate):
+        return character_call(lambda: characters.update(id, body.model_dump(exclude={'revision'}), body.revision))
+
+    @app.post('/api/v1/characters/{id}/delete')
+    def delete_character(id: CharacterID, body: RevisionInput):
+        return character_call(lambda: characters.delete(id, body.revision))
 
     @app.post('/api/v1/assets/{kind}', status_code=201)
     async def upload_asset(kind: Literal['image', 'video', 'audio'], request: Request):

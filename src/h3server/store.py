@@ -404,7 +404,7 @@ class Store:
         with self._transaction() as db:
             return tuple(_stored(_decode_job, row)[0] for row in db.execute("SELECT * FROM jobs ORDER BY rowid DESC LIMIT ? OFFSET ?", (limit, offset)))
 
-    def delete_job(self, job_id, cleanup):
+    def delete_job(self, job_id, cleanup, *, protected_assets=()):
         """Keep the row until cleanup succeeds, so interrupted deletion is retryable.
 
         The write transaction also serializes the shared-reference snapshot with
@@ -428,7 +428,7 @@ class Store:
             shared=set()
             for row in db.execute('SELECT * FROM jobs WHERE job_id != ?',(job_id,)):
                 shared.update(assets(_stored(_decode_job,row)[0]))
-            removable=sorted(assets(job)-shared)
+            removable=sorted(assets(job)-shared-set(protected_assets))
             cleanup(removable)
             # Preserve the global contiguous replay sequence without retaining
             # the job ID or any of its log contents.

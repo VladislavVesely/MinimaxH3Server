@@ -20,7 +20,7 @@ import socket
 from urllib.parse import urlsplit
 from typing import Literal
 
-from fastapi import Body, FastAPI, Request, Query
+from fastapi import Body, FastAPI, Request, Query, Path as APIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -734,6 +734,31 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @observed
     def remote_asset_content(id: str, request: Request):
         return proxy.request('GET',f'/api/v1/assets/{id}/content',range_header=request.headers.get('range'))
+
+    @app.get(API + '/remote/characters')
+    @observed
+    def remote_characters():
+        return proxy.request('GET', '/api/v1/characters')
+
+    @app.post(API + '/remote/characters')
+    @observed
+    def remote_character_create(body: dict = Body()):
+        return proxy.request('POST', '/api/v1/characters', body=body)
+
+    @app.get(API + '/remote/characters/{id}')
+    @observed
+    def remote_character_get(id: str = APIPath(pattern=r'^[a-f0-9]{32}$')):
+        return proxy.request('GET', f'/api/v1/characters/{id}')
+
+    @app.post(API + '/remote/characters/{id}/update')
+    @observed
+    def remote_character_update(body: dict = Body(), id: str = APIPath(pattern=r'^[a-f0-9]{32}$')):
+        return proxy.request('POST', f'/api/v1/characters/{id}/update', body=body)
+
+    @app.post(API + '/remote/characters/{id}/delete')
+    @observed
+    def remote_character_delete(body: dict = Body(), id: str = APIPath(pattern=r'^[a-f0-9]{32}$')):
+        return proxy.request('POST', f'/api/v1/characters/{id}/delete', body=body)
 
     @app.get(API + '/remote/models/library')
     @observed

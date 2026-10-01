@@ -428,7 +428,9 @@ class Worker:
                                 try:os.unlink(asset+suffix,dir_fd=parent)
                                 except FileNotFoundError:pass
                     self.performance.delete_job(job_id)
-                removed=self.store.delete_job(job_id,cleanup)
+                from h3server.characters import CharacterStore
+                protected=CharacterStore(self.paths).protected_assets_locked()
+                removed=self.store.delete_job(job_id,cleanup,protected_assets=protected)
                 return {'deleted':job_id,'removed_assets':removed}
 
     def cancel(self, job_id: str):
