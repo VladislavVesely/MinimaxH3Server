@@ -103,6 +103,7 @@ class Backend:
     profiles: tuple[str, ...] = H3_PROFILES
     resident: bool = False
     command_for_profile: Callable[[str], tuple[str, ...]] | None = None
+    backend_for_profile: Callable[[str], "Backend"] | None = None
 
 
 def _job_id(value: str) -> str:
@@ -156,6 +157,7 @@ class Worker:
         self._process = None
         self._terminated_process = None
         self._active = None
+        self._resident_command = None
         self._resident_process = None
         self._resident_components = []
         self._resident_profile = None
@@ -224,17 +226,26 @@ class Worker:
             self._drop_resident()
             return self.models_status()
 
-    def readiness(self) -> tuple[str, ...]:
+    def selected_backend(self, profile):
+        backend = self.backend.backend_for_profile(profile) if self.backend.backend_for_profile else self.backend
+        if not isinstance(backend, Backend):
+            raise ValueError('Invalid selected runtime backend')
+        if self.backend.backend_for_profile and profile not in backend.profiles:
+            raise ValueError('Selected runtime does not provide the requested profile')
+        return backend
+
+    def readiness(self, profile=None) -> tuple[str, ...]:
         if self.maintenance_status()['active']:
             return ('Installation maintenance is active',)
         if self._stopping.is_set() or (self._thread is not None and not self._thread.is_alive()):
             return ("Worker scheduler is not available",)
         try:
             from h3server.backends.h3 import RuntimeReadiness
-            if isinstance(self.backend.readiness, RuntimeReadiness):
-                reasons = self.backend.readiness(refresh=self._active is None and not self._alive(self._resident_process))
+            backend = self.selected_backend(profile) if profile is not None else self.backend
+            if isinstance(backend.readiness, RuntimeReadiness):
+                reasons = backend.readiness(refresh=self._active is None and not self._alive(self._resident_process))
             else:
-                reasons = self.backend.readiness()
+                reasons = backend.readiness()
             if not isinstance(reasons, tuple) or any(not isinstance(item, str) for item in reasons):
                 raise ValueError("invalid readiness result")
             return reasons
@@ -296,16 +307,17 @@ class Worker:
             return self.maintenance_status()
 
     def submit(self, request: JobRequest):
-        request.validate_capabilities(self.backend.capabilities)
         if request.settings is None:
             raise ValueError("normalized generation settings are required")
         with self._lock:
-            self.backend.validate_request(request)
-            if self.maintenance_status()['active'] or self._stopping.is_set() or self.readiness():
+            backend = self.selected_backend(request.settings.profile)
+            request.validate_capabilities(backend.capabilities)
+            backend.validate_request(request)
+            if self.maintenance_status()['active'] or self._stopping.is_set() or self.readiness(request.settings.profile):
                 raise BackendUnavailable("backend is not ready")
             self.cleanup_outputs()
             self._disk_check()
-            job = self.store.accept_job(request, capabilities=self.backend.capabilities, pending_limit=self.queue_limit)
+            job = self.store.accept_job(request, capabilities=backend.capabilities, pending_limit=self.queue_limit)
             self._wake.set()
             return job
 
@@ -447,7 +459,14 @@ class Worker:
                 if time.monotonic() >= next_cleanup:
                     self.cleanup_outputs()
                     next_cleanup = time.monotonic() + min(60, self.retention_seconds)
-                job = None if self._stopping.is_set() or self.readiness() else self.store.claim_next_job()
+                profile = None
+                if self.backend.backend_for_profile:
+                    queued = [item for item in self._pending_jobs() if item.status is JobStatus.QUEUED]
+                    # Store pages are newest-first; preserve FIFO even when the
+                    # next model uses a different environment from the daemon.
+                    if queued:
+                        profile = queued[-1].request.settings.profile
+                job = None if self._stopping.is_set() or self.readiness(profile) else self.store.claim_next_job()
                 if job is not None:
                     self._active = job.job_id
             if job is None:
@@ -494,6 +513,7 @@ class Worker:
         return result
 
     def _execute(self, job):
+        backend = self.backend
         process = None
         keep_resident = False
         report = None
@@ -504,16 +524,17 @@ class Worker:
                 if self.store.get_job(job.job_id).status is not JobStatus.RUNNING:
                     return
                 # A queued request may outlive the adapter that accepted it.
+                backend = self.selected_backend(job.request.settings.profile)
                 try:
-                    job.request.validate_capabilities(self.backend.capabilities)
+                    job.request.validate_capabilities(backend.capabilities)
                 except ValueError:
                     raise ValueError('Queued LoRA/attention features are no longer supported by the active backend; check the profile and options') from None
-                self.backend.validate_request(job.request)
+                backend.validate_request(job.request)
                 self._disk_check()
                 request_path = self._prepare(job)
-                command = self.backend.command_for_profile(job.request.settings.profile) if self.backend.command_for_profile else self.backend.command
-                if self.backend.resident:
-                    if not self._alive(self._resident_process) or self._resident_profile != job.request.settings.profile:
+                command = backend.command_for_profile(job.request.settings.profile) if backend.command_for_profile else backend.command
+                if backend.resident:
+                    if not self._alive(self._resident_process) or self._resident_profile != job.request.settings.profile or self._resident_command != command:
                         self._drop_resident()
                         self._resident_process = subprocess.Popen(
                             [*command, '--resident'], stdin=subprocess.PIPE,
@@ -521,21 +542,23 @@ class Worker:
                             cwd=self.paths.root, start_new_session=True,
                             pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())
                         self._resident_profile = job.request.settings.profile
+                        self._resident_command = command
                     process = self._resident_process
                     process.stdin.write((json.dumps({'job_id': job.job_id, 'request_path': str(request_path)})+'\n').encode())
                     process.stdin.flush()
                 else:
+                    self._drop_resident()
                     process = subprocess.Popen(
                         [*command, '--request', str(request_path)],
                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         env=self._environment(), cwd=self.paths.root, start_new_session=True,
                         pass_fds=(self._owner_fd,) if self._owner_fd is not None else ())
                 self._process = process
-            report = self._consume(process, job.job_id)
+            report = self._consume(process, job.job_id, resident=backend.resident)
             with self._lock:
                 if self.store.get_job(job.job_id).status is not JobStatus.RUNNING:
                     return
-                if self.backend.resident:
+                if backend.resident:
                     if report is None or report['ok'] is not True or not self._alive(process):
                         exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                         detail = '' if exited is None else f' (exit/signal {exited.si_status}; check system/GPU memory if killed)'
@@ -552,7 +575,7 @@ class Worker:
             # lock, kill the process group and revoke/delete the partial output.
             try:
                 info = os.fstat(fd)
-                if not self.backend.validate_video(fd):
+                if not backend.validate_video(fd):
                     raise ValueError("invalid MP4 output")
                 os.fsync(fd)
                 with self._lock:
@@ -569,7 +592,7 @@ class Worker:
                         os.unlink("request.json", dir_fd=directory)
                     self.store.transition_job(job.job_id, JobStatus.COMPLETED,
                                               output=OutputMetadata("video.mp4", info.st_size, "video/mp4"))
-                    if self.backend.resident:
+                    if backend.resident:
                         self._resident_components = report['components']
                         keep_resident = True
                         measurement = report['measurement']
@@ -602,14 +625,15 @@ class Worker:
                     finally:
                         if process is not None and process.stdout is not None:
                             process.stdout.close()
-                    if self.backend.resident:
+                    if backend.resident:
                         self._drop_resident()
                 if self.store.get_job(job.job_id).status is not JobStatus.COMPLETED:
                     self._cleanup_partial(job.job_id)
                 self._active = self._process = None
                 self._job_estimates.pop(job.job_id, None)
 
-    def _consume(self, process, job_id):
+    def _consume(self, process, job_id, *, resident=None):
+        resident = self.backend.resident if resident is None else resident
         buffer = b""
         total = count = 0
         deadline = time.monotonic() + self.max_runtime_seconds
@@ -642,9 +666,9 @@ class Worker:
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     count += 1
-                    if len(line) > (131072 if self.backend.resident else MAX_LINE_BYTES) or count > MAX_WORKER_EVENTS:
+                    if len(line) > (131072 if resident else MAX_LINE_BYTES) or count > MAX_WORKER_EVENTS:
                         raise ValueError('worker event limit')
-                    if self.backend.resident:
+                    if resident:
                         frame = json.loads(line)
                         if type(frame) is not dict or frame.get('job_id') != job_id:
                             raise ValueError('resident job binding mismatch')
@@ -680,7 +704,7 @@ class Worker:
                     with self._lock:
                         if self.store.get_job(job_id).status is JobStatus.RUNNING:
                             self.store.append_event("job", job_id, event)
-                if len(buffer) > (131072 if self.backend.resident else MAX_LINE_BYTES):
+                if len(buffer) > (131072 if resident else MAX_LINE_BYTES):
                     raise ValueError('worker line limit')
 
     def _open_output(self, job_id, *, allow_empty=False):
