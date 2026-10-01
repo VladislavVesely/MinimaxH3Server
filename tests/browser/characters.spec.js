@@ -54,6 +54,63 @@ test('character editor opens and adds variants without secure-context randomUUID
   expect(new Set(ids).size).toBe(ids.length);expect(errors).toEqual([]);
 });
 
+async function dismissalEditor(page) {
+  await page.setContent('<textarea id="prompt" maxlength="15000"></textarea><select id="input-mode"><option value="references">References</option></select><button id="character-new">New character</button>'+['characters-status','character-prompt-status','character-review','character-cards','characters-refresh','character-selected','character-prompt-preview','character-completions','character-scaffold'].map(id=>'<div id="'+id+'"></div>').join(''));
+  await page.addScriptTag({path:path.join(root,'src/h3server/web/characters.js')});
+  await page.evaluate(async()=>{
+    window.dismissalBusy=false;
+    const draft={reference_images:[],reference_videos:[],reference_audios:[]};
+    const unit=window.H3Characters.create({api:'',
+      request:async(path,body)=>body?{...body,id:'a'.repeat(32)}:{characters:[]},
+      upload:async()=>{window.uploadEntered=true;await new Promise(resolve=>window.finishUpload=resolve);return {id:'b'.repeat(64),mime:'image/png'};},
+      getDraft:()=>draft,applyDraft(){},changed(){},isConnected:()=>true,isBusy:()=>window.dismissalBusy});
+    await unit.load();
+  });
+  await page.getByRole('button',{name:'New character',exact:true}).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+}
+
+for(const route of ['outside','Escape','Cancel'])test(`editor dismissal via ${route} confirms and preserves declined edits`,async({page})=>{
+  await dismissalEditor(page);
+  const editor=page.getByRole('dialog');
+  await editor.getByLabel('Character name',{exact:true}).fill('Ada');
+  await editor.getByLabel('Identity description',{exact:true}).fill('Dark hair.');
+  await editor.getByLabel('Variant name',{exact:true}).fill('Blue coat');
+  await editor.getByLabel('Variant image',{exact:true}).setInputFiles({name:'test-only.png',mimeType:'image/png',buffer:Buffer.from('TEST ONLY unvalidated upload fixture')});
+  await editor.getByRole('button',{name:'Add variant',exact:true}).click();
+  const prompts=[];let accept=false;
+  page.on('dialog',async dialog=>{prompts.push(dialog.message());await (accept?dialog.accept():dialog.dismiss());});
+  const dismiss=()=>route==='outside'?page.mouse.click(2,2):route==='Escape'?page.keyboard.press('Escape'):editor.getByRole('button',{name:'Cancel',exact:true}).click();
+  await dismiss();await expect.poll(()=>prompts.length).toBe(1);
+  expect(prompts[0]).toBe('Discard character edits?');
+  await expect(editor).toBeVisible();await expect(editor.getByLabel('Character name',{exact:true})).toHaveValue('Ada');
+  await expect(editor.getByLabel('Identity description',{exact:true})).toHaveValue('Dark hair.');
+  await expect(editor.getByLabel('Variant name',{exact:true})).toHaveCount(2);
+  await expect(editor.getByLabel('Variant name',{exact:true}).first()).toHaveValue('Blue coat');
+  expect(await editor.getByLabel('Variant image',{exact:true}).first().evaluate(n=>n.files[0]?.name)).toBe('test-only.png');
+  accept=true;await dismiss();await expect(editor).toHaveCount(0);expect(prompts).toHaveLength(2);
+});
+
+test('editor dismissal ignores inside clicks and inside-to-outside drags',async({page})=>{
+  await dismissalEditor(page);const prompts=[];
+  page.on('dialog',async d=>{prompts.push(d.message());await d.dismiss();});
+  const box=await page.getByRole('dialog').boundingBox();
+  await page.mouse.click(box.x+3,box.y+3);await page.mouse.move(box.x+3,box.y+3);await page.mouse.down();await page.mouse.move(2,2);await page.mouse.up();
+  await expect(page.getByRole('dialog')).toBeVisible();expect(prompts).toEqual([]);
+});
+
+test('editor dismissal is blocked during save and successful save closes without confirmation',async({page})=>{
+  await dismissalEditor(page);const editor=page.getByRole('dialog'),prompts=[];
+  page.on('dialog',async d=>{prompts.push(d.message());await d.accept();});
+  await editor.getByLabel('Character name',{exact:true}).fill('Ada');
+  await editor.getByLabel('Variant image',{exact:true}).setInputFiles({name:'test-only.png',mimeType:'image/png',buffer:Buffer.from('TEST ONLY unvalidated upload fixture')});
+  await editor.getByRole('button',{name:'Save character',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>!!window.uploadEntered)).toBe(true);
+  await page.mouse.click(2,2);await page.keyboard.press('Escape');
+  await expect(editor).toBeVisible();await expect(editor.getByRole('button',{name:'Cancel',exact:true})).toBeDisabled();expect(prompts).toEqual([]);
+  await page.evaluate(()=>window.finishUpload());await expect(editor).toHaveCount(0);expect(prompts).toEqual([]);
+});
+
 test('server library variants, MP3, picker, autocomplete and reference review',async({page,controller})=>{
   test.skip(!codecs,'Native Pillow/PyAV and ffmpeg required for media upload acceptance');
   // LAN HTTP omits randomUUID but still exposes cryptographically secure getRandomValues.

@@ -160,6 +160,23 @@
     }
     function openEditor(record) {
       const token=epoch,d=el('dialog');editor=d;d.className='character-dialog';
+      function cancelEditor() {
+        if(working||isBusy())return;
+        if(window.confirm('Discard character edits?'))d.close();
+      }
+      // Backdrop events target the dialog too; its padding is still inside.
+      const onBackdrop=event=>{
+        const box=d.getBoundingClientRect();
+        return event.target===d&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom);
+      };
+      let backdropPress=false;
+      d.addEventListener('pointerdown',event=>{backdropPress=onBackdrop(event);});
+      d.addEventListener('pointercancel',()=>{backdropPress=false;});
+      d.addEventListener('click',event=>{
+        const dismiss=backdropPress&&onBackdrop(event);backdropPress=false;
+        if(dismiss){event.preventDefault();event.stopPropagation();cancelEditor();}
+      });
+      d.addEventListener('cancel',event=>{event.preventDefault();cancelEditor();});
       const form=el('form');d.append(form);form.append(el('h3',record?'Edit character':'New character'));
       const name=input(form,'Character name',record?.name);name.required=true;
       const description=input(form,'Identity description',record?.description,true);description.maxLength=1000;
@@ -181,7 +198,7 @@
       for(const v of record?.variants||[{}])addVariant(v);
       form.append(button('Add variant',()=>addVariant()));
       const status=el('p');status.setAttribute('role','status');form.append(status);
-      const save=el('button','Save character');save.type='submit';form.append(save,button('Cancel',()=>d.close()));
+      const save=el('button','Save character');save.type='submit';form.append(save,button('Cancel',cancelEditor));
       if(record)form.append(button('Delete character',()=>{
         if(!window.confirm('Delete this character from the server library? Existing jobs and media will remain.'))return;
         void saveAction(async()=>{await request('/remote/characters/'+record.id+'/delete',{revision:record.revision});if(token!==epoch)return;await choose(record,null);d.close();await load(true);});
