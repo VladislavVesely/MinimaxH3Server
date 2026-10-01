@@ -23,3 +23,11 @@ Always ask on outside click, Escape and Cancel, including an initially empty for
 ## Workspace and baseline
 
 Worktree `.worktrees/character-dismissal`, branch `feature/character-dismissal`, base `828b060`. Targeted baseline character/API/static-asset tests: 22 passed. The previously approved unrelated full-suite failures remain outside this change.
+
+## Verification and deployment
+
+Commit `3c9e4de` was merged into main. All eight character browser tests passed, including real PNG/MP3 acceptance, three confirmation routes, declined text/file/variant preservation, inside-click/drag protection, and blocking dismissal during an upload while successful save closes without a prompt. Character Node tests, LAN request-ID check and 22 targeted Python tests passed. Native controller and executable-replacement smoke passed.
+
+Built `dist/character-dismissal/h3-controller`. Installed and activated the matching server release `sha256-1066d924bef2100550e52b765adc0a755b68c3dcd91186e20d3c8dfc642a2eb5`, environment `9a968ebe2bae0ca49ade7871a1f30b22a4127873d787899af63c5b09292dd3c1`, through the reviewed update flow using reject-busy activation. No generation jobs were cancelled, drivers changed, or model weights requested. The original ConvRot INT8/mixed, SageAttention, Turbo, sparse and Ref2VA selection was reconciled successfully.
+
+Replaced only the feature's own LAN controller instance on port 8795, leaving older archived binaries and other controller processes alone. Verified the actual LAN editor prompts through all three dismissal routes and preserves the edited name when confirmation is declined; accepting removes the editor. Live probing used a stubbed confirmation decision, while automated Playwright tests handled the actual browser confirmation dialogs. No real test characters were saved. Remote health returned HTTP 200 and runtime-ready. The renewed LAN access key remains in the normal private settings directory; no credentials are recorded here.
