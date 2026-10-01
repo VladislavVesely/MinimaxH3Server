@@ -8,20 +8,27 @@ WHEEL_SHA256 = 'fafc66569bed62a16839e820c2612141b5a20accf55b876d941bab9c0ac5d888
 RECEIPT = 'state/sageattention-receipt.json'
 
 
-def installed(paths):
-    from h3server.backends.base import read_json
+def receipt_path(paths, *, environment=None):
+    from h3server.backends.environment_scope import receipt_path as scoped
+    return scoped(paths, RECEIPT, environment)
+
+
+def installed(paths, *, environment=None):
+    from h3server.backends.environment_scope import receipt as read_receipt, prefix, torch_version
     try:
-        receipt = read_json(paths, RECEIPT)
-        return (metadata.version('sageattention') == VERSION
+        target = prefix(paths, environment)
+        receipt = read_receipt(paths, RECEIPT, environment)
+        local = target == Path(sys.prefix).absolute()
+        return ((not local or metadata.version('sageattention') == VERSION)
                 and receipt == {'version': VERSION, 'wheel_sha256': WHEEL_SHA256,
-                                'environment': str(Path(sys.prefix).resolve()),
-                                'torch': metadata.version('torch'), 'gpu_probe': True})
+                                'environment': str(target),
+                                'torch': torch_version(paths, environment), 'gpu_probe': True})
     except (OSError, ValueError, metadata.PackageNotFoundError):
         return False
 
 
-def require(paths):
-    if not installed(paths):
+def require(paths, *, environment=None):
+    if not installed(paths, environment=environment):
         raise ValueError('SageAttention was requested but is not installed and GPU-verified; install the optional component or disable it')
 
 

@@ -454,11 +454,12 @@ def execute_document(request_path, *, emit, profile=None, cache=None):
         signal.signal(signal.SIGTERM, old_signal)
 
 
-def backend(paths, profile):
+def backend(paths, profile, *, python=None):
     from h3server.backends.h3 import RuntimeReadiness, validate_media_fd
     from h3server.remote.worker import Backend
     selected = get_artifact_set(profile)
-    command = (sys.executable, '-m', 'h3server.backends.pruned', '--profile', profile)
+    command = (python or sys.executable, '-m', 'h3server.backends.pruned', '--profile', profile)
+    target_environment = Path(python).parent.parent if python else None
     readiness = RuntimeReadiness(paths, profile=profile, command=command)
     def validate(request):
         if parse_request(asdict(request)).settings.profile != profile:
@@ -471,13 +472,15 @@ def backend(paths, profile):
             if not reference.installed(paths):raise ValueError('Install the pinned Ref2VA checkpoint first')
         if request.settings.sage_attention:
             from h3server.backends.sage_attention import require
-            require(paths)
+            if target_environment is None: require(paths)
+            else: require(paths, environment=target_environment)
         if request.settings.turbo_lora:
             from h3server.backends.turbo import require
             require(paths, request.settings.turbo_artifact_digest)
         if request.settings.sparse_preset != 'off':
             from h3server.backends.sparse import require
-            require(paths, request.settings.sparse_artifact_digest)
+            if target_environment is None: require(paths, request.settings.sparse_artifact_digest)
+            else: require(paths, request.settings.sparse_artifact_digest, environment=target_environment)
     capabilities = CAPABILITIES if profile == 'h3-convrot-int8' else Capabilities(
         lora=CAPABILITIES.lora, sparse_attention=Capability(CapabilityStatus.UNSUPPORTED, ('Sparse not verified for this profile',)))
     from functools import partial

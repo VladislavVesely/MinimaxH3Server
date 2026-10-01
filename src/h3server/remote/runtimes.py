@@ -159,7 +159,7 @@ class RuntimeBindings:
             raise ValueError('Runtime binding changed; explicit verification required')
         return {**binding, 'python': str(self.paths.environments / binding['environment'] / 'bin/python')}
 
-    def publish(self, profile, identifier, *, artifact):
+    def publish(self, profile, identifier, *, artifact, maintenance_fd=None):
         """Called by the maintenance owner after provisioning, never by inventory."""
         import fcntl
         before = self._snapshot(profile, identifier, artifact)
@@ -167,7 +167,7 @@ class RuntimeBindings:
                                      mode='r+b', create_parents=True) as guard:
             fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
             bindings = self._bindings()
-            report = probe_environment(self.paths, profile, identifier, guard.fileno())
+            report = probe_environment(self.paths, profile, identifier, guard.fileno() if maintenance_fd is None else maintenance_fd)
             if not isinstance(report, dict) or report.get('environment_ready') is not True or report.get('environment') != str(self.paths.environments / identifier):
                 raise ValueError('Selected runtime native verification failed')
             if before != self._snapshot(profile, identifier, artifact):

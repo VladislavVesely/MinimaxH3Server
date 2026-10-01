@@ -43,7 +43,7 @@ from h3server.profiles import recommend_profiles
 
 API = "/api/v1/controller"
 BODY_LIMIT = 16384
-CAPABILITIES = {"scan": True, "installer": True, "generation": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
+CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runtime_setup": True, "turbo_artifact_digest": TURBO_DIGEST, "sparse_artifact_digest": SPARSE_DIGEST}
 
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/studio.js": ("studio.js", "text/javascript"),
@@ -222,6 +222,7 @@ class EmptyRequest(StrictRequest):
 
 
 class SetupStartRequest(StrictRequest):
+    desired: list[str] | None = Field(default=None, max_length=16)
     sage_attention: bool = False
     turbo_lora: bool = False
     sparse_attention: bool = False
@@ -317,6 +318,12 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     setup.sage_request = lambda method: proxy.request_json(method, '/api/v1/features/sageattention')
     setup.turbo_request = lambda method: proxy.request_json(method, '/api/v1/features/turbo', body={'artifact_digest': TURBO_DIGEST})
     setup.sparse_request = lambda method: proxy.request_json(method, '/api/v1/features/sparse', body={'artifact_digest': SPARSE_DIGEST})
+    def component_request(method,body=None):
+        if method=='GET':return proxy.request_json('GET','/api/v1/models/library')
+        if method=='CANCEL':return proxy.request_json('POST','/api/v1/models/install/cancel',body=body)
+        artifact=deployment.stage_component_release()
+        return proxy.request_json('POST','/api/v1/models/install',body={**body,'runtime_artifact':artifact})
+    setup.component_request=component_request
 
     def setup_idle(*, cancel=False):
         if setup.active():
@@ -599,11 +606,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     def setup_start(body: SetupStartRequest):
         if connection._local_mode and connection._local_platform!='Linux':
             raise ControllerError('local_install_unsupported')
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention, desired=body.desired)
 
     @app.post(API + '/setup/retry', status_code=202)
     def retry_setup(body: SetupRetryRequest):
-        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention)
+        return setup.start(body.profile, body.artifact_set_digest, body.request_id, retry_digest=body.plan_digest, sage_attention=body.sage_attention, turbo_lora=body.turbo_lora, sparse_attention=body.sparse_attention, desired=body.desired)
 
     @app.post(API + '/setup/observe')
     @observed
@@ -727,6 +734,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @app.post(API + '/remote/models/install')
     @observed
     def remote_model_install(body: dict = Body()):
+        if body.get('action')=='synchronize' and deployment.release is not None:
+            from h3server.remote.app import ComponentSyncInput
+            try: ComponentSyncInput.model_validate(body)
+            except ValueError: raise ControllerError('invalid_request') from None
+            body={**body,'runtime_artifact':deployment.stage_component_release()}
         return proxy.request('POST', '/api/v1/models/install', body=body)
 
     @app.post(API + '/remote/models/install/cancel')

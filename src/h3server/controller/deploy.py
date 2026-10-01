@@ -157,6 +157,27 @@ class Deployment:
             self.reset()
         self.root = root
 
+    def stage_component_release(self):
+        """Stage only the current immutable wheel; never replace setup/service pointers."""
+        with self.connection.lock:
+            self._authenticated()
+            artifact=self.release.artifact
+            with self.connection.staging_transaction(self.root,discovery=True) as check:
+                with self.connection.private_sftp() as sftp:
+                    check()
+                    _write(sftp,f'{self.root}/releases/{artifact.release_id}/{artifact.filename}',self.release.data,immutable=True)
+                    check()
+            return asdict(artifact)
+
+    def stage_component_intent(self, desired, request_id):
+        with self.connection.lock:
+            self._authenticated()
+            with self.connection.staging_transaction(self.root,discovery=True) as check:
+                with self.connection.private_sftp() as sftp:
+                    check()
+                    _write(sftp,self.root+'/config/component-setup-intent.json',json.dumps({'state':'pending','desired':desired,'request_id':request_id},sort_keys=True).encode())
+                    check()
+
     def _stage(self, approval=None, *, publish=True):
         with self.connection.private_sftp() as sftp:
             _directory(sftp, self.root + "/state")

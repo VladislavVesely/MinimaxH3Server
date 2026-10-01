@@ -33,9 +33,16 @@ def require_consent(paths):
         raise ValueError('Explicit pinned sparse download consent required')
 
 
-def gpu_binding():
-    return dict(artifact_digest=DIGEST, environment=str(Path(sys.prefix).resolve()),
-                torch=metadata.version('torch'), gpu_probe=True)
+def gpu_receipt_path(paths, environment=None):
+    from h3server.backends.environment_scope import receipt_path
+    return receipt_path(paths, GPU_RECEIPT, environment)
+
+
+def gpu_binding(paths=None, environment=None):
+    if paths is None:
+        return dict(artifact_digest=DIGEST, environment=str(Path(sys.prefix).resolve()), torch=metadata.version('torch'), gpu_probe=True)
+    from h3server.backends.environment_scope import prefix, torch_version
+    return dict(artifact_digest=DIGEST, environment=str(prefix(paths, environment)), torch=torch_version(paths, environment), gpu_probe=True)
 
 
 def verify_code(paths, *, verify=True):
@@ -54,16 +61,17 @@ def verify_code(paths, *, verify=True):
     return signatures
 
 
-def installed(paths, *, verify=False):
+def installed(paths, *, verify=False, environment=None):
     try:
+        from h3server.backends.environment_scope import receipt
         signatures = verify_code(paths, verify=verify)
-        return read_json(paths, GPU_RECEIPT) == {'runtime': gpu_binding(), 'files': signatures}
+        return receipt(paths, GPU_RECEIPT, environment) == {'runtime': gpu_binding() if environment is None else gpu_binding(paths, environment), 'files': signatures}
     except (OSError, ValueError, metadata.PackageNotFoundError):
         return False
 
 
-def require(paths, digest):
-    if digest != DIGEST or not installed(paths, verify=True):
+def require(paths, digest, *, environment=None):
+    if digest != DIGEST or not installed(paths, verify=True, environment=environment):
         raise ValueError('Sparse preset is missing, changed or not GPU-verified; install its optional component')
 
 
@@ -171,7 +179,7 @@ def probe(paths):
     from h3_optimizations.native import selftest
     if not selftest.check(force=True):
         raise RuntimeError('Sparse native GPU numerical check failed')
-    atomic_json(paths, GPU_RECEIPT, {'runtime': gpu_binding(), 'files': verify_code(paths)})
+    atomic_json(paths, gpu_receipt_path(paths), {'runtime': gpu_binding(paths), 'files': verify_code(paths)})
     print('Sparse native CUDA kernels passed numerical validation; base dependencies unchanged', flush=True)
 
 

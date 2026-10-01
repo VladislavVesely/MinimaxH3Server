@@ -13,7 +13,8 @@ import uuid
 
 from h3server.backends import load_manifest, turbo, sparse, reference, sage_attention
 from h3server.backends.base import atomic_json, read_json, regular_file, directory, parts
-from h3server.backends.catalog import PRUNED_PROFILE_NAMES, get_artifact_set
+from h3server.backends.catalog import PRUNED_PROFILE_NAMES
+from h3server.remote.model_catalog import MODEL_NAMES, selection as get_artifact_set, snapshot_id
 from h3server.backends.comfy_runtime import compatible_runtime
 from h3server.downloads import record_consent, require_consent
 from h3server.installer.diagnostics import safe_log
@@ -26,13 +27,13 @@ OPTIONALS=('sageattention','turbo','sparse','reference')
 
 def model_files(name):
     selected=get_artifact_set(name)
-    return {f'models/h3-{selected.digest}/{a.local_relative_path}':(a.size_bytes,a.sha256) for a in selected.artifacts}
+    return {f'models/h3-{snapshot_id(name)}/{a.local_relative_path}':(a.size_bytes,a.sha256) for a in selected.artifacts}
 
 
 def partial_files(name):
-    if name in PRUNED_PROFILE_NAMES:
+    if name in MODEL_NAMES:
         selected=get_artifact_set(name)
-        return {f'tmp/downloads/{selected.digest}/{a.local_relative_path}.part':None for a in selected.artifacts}
+        return {f'tmp/downloads/{snapshot_id(name)}/{a.local_relative_path}.part':None for a in selected.artifacts}
     module=MODULES[name]
     return {f'tmp/{getattr(module,"COMPONENT",name)}-{module.DIGEST}/{e["name"]}.part':None for e in module.FILES}
 
@@ -100,7 +101,11 @@ class Components:
         rows=[];signatures={}
         registered=self.library._registered(compatible_only=False) if self.library.supported else {}
         supported=self.library.supported
-        for name in PRUNED_PROFILE_NAMES:
+        try:managed=read_json(self.paths,self.library.registry).get('schema')==2
+        except FileNotFoundError:managed=False
+        selected_profiles=set(registered)
+        if not managed:selected_profiles.add(self.library.profile)
+        for name in MODEL_NAMES:
             selected=get_artifact_set(name);files=model_files(name)
             stats={p:inspect_file(self.paths,p) for p in files}
             partials={p:inspect_file(self.paths,p) for p in partial_files(name)};signatures[name]={**stats,**partials}
@@ -108,33 +113,53 @@ class Components:
             try:require_consent(self.paths,profile_name=name)
             except (OSError,ValueError):approved=False
             ready=approved and all(s is not None and s[2]==files[p][0] for p,s in stats.items())
-            compatible=supported and compatible_runtime(self.library.profile,name)
-            rows.append(dict(id=name,kind='model',installed=ready,present=bool(any(stats.values()) or any(partials.values()) or name in registered),
-                can_install=compatible,can_remove=supported,artifact_digest=selected.digest,
-                total_bytes=selected.weight_bytes,reason='' if compatible else 'Requires a different runtime; batch runtime switching is not supported.'))
+            runtime_ready=supported and bool(self.library.python_for_profile(name))
+            ready=ready and runtime_ready and name in selected_profiles
+            shared_legacy=name not in PRUNED_PROFILE_NAMES and any(n!=name and n not in PRUNED_PROFILE_NAMES for n in registered)
+            if shared_legacy and name not in registered:ready=False
+            present=bool(any(stats.values()) or any(partials.values()) or name in registered) and not (shared_legacy and name not in registered)
+            rows.append(dict(id=name,kind='model',installed=ready,present=present,
+                can_install=supported,can_remove=supported,artifact_digest=selected.digest,runtime_installed=bool(runtime_ready),
+                total_bytes=selected.weight_bytes,reason='' if runtime_ready else 'Installs an isolated runtime, dependencies and model weights. Existing runtimes are preserved.'))
         for name in OPTIONALS:
             installer=self.installers[name];data=installer.status()
+            if name in ('sageattention','sparse'):
+                per_profile=self.library.optional_profiles(name)
+                if per_profile:data={**data,'installed':all(per_profile.values())}
             module=sage_attention if name=='sageattention' else MODULES[name]
             files={} if name=='sageattention' else optional_files(name)
             stats={p:inspect_file(self.paths,p) for p in files}
             if name in MODULES:stats.update({p:inspect_file(self.paths,p) for p in partial_files(name)})
             stats[module.RECEIPT]=inspect_file(self.paths,module.RECEIPT)
+            if name in ('sageattention','sparse'):
+                import sys
+                for python in self.library.runtime_targets(name):
+                    env=None if python==sys.executable else Path(python).parent.parent
+                    path=sage_attention.receipt_path(self.paths,environment=env) if name=='sageattention' else sparse.gpu_receipt_path(self.paths,env)
+                    stats[path]=inspect_file(self.paths,path)
             if name=='sageattention' and installer._read().get('state')=='removing':stats['uninstall_pending']=True
             signatures[name]=stats
             required=False
             if name=='sageattention' and (data['installed'] or any(stats.values())):
                 import sys
                 try:
-                    relative=Path(sys.prefix).relative_to(self.paths.root).as_posix()+'/resolved.txt'
-                    with regular_file(self.paths,relative) as f:required=f'sageattention=={sage_attention.VERSION}' in f.read(2*1024**2).decode().splitlines()
+                    for python in self.library.runtime_targets('sageattention'):
+                        prefix=Path(sys.prefix) if python==sys.executable else Path(python).parent.parent
+                        relative=prefix.relative_to(self.paths.root).as_posix()+'/resolved.txt'
+                        with regular_file(self.paths,relative) as f:required=required or f'sageattention=={sage_attention.VERSION}' in f.read(2*1024**2).decode().splitlines()
                 except (ValueError,OSError):required=True
             rows.append(dict(id=name,kind='optional',installed=data['installed'],present=bool(data['installed'] or any(stats.values())),
                 required=required,can_install=supported,can_remove=supported and not required,artifact_digest=getattr(module,'DIGEST',sage_attention.WHEEL_SHA256),
                 total_bytes=data.get('total',0),reason='Required by the frozen base runtime; cannot be removed separately.' if required else '' if supported else 'Requires a managed pruned runtime.'))
-        identity={'schema':1,'instance':self.instance,'runtime':self.library.profile,'environment':self.library.environment,
+        try:intent=read_json(self.paths,'config/component-setup-intent.json')
+        except FileNotFoundError:intent=None
+        pending=intent.get('desired') if intent and intent.get('state')!='completed' else None
+        if pending is not None and (not isinstance(pending,list) or set(pending)-set(MODEL_NAMES)-set(OPTIONALS)):
+            raise ValueError('Invalid saved component intent')
+        identity={'intent':intent,'schema':1,'instance':self.instance,'runtime':self.library.profile,'environment':self.library.environment,
                   'items':rows,'files':signatures}
         digest=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
-        return dict(schema=1,supported=bool(supported),digest=digest,items=rows)
+        return dict(schema=1,supported=bool(supported),digest=digest,items=rows,pending_desired=pending)
 
     def status(self):
         with self.lock:
@@ -143,9 +168,11 @@ class Components:
             result={**state,'busy':busy}
             current=state.get('current')
             if busy and current and current['action']=='install':
-                installer=self.library if current['id'] in PRUNED_PROFILE_NAMES else self.installers[current['id']]
+                installer=self.library if current['id'] in MODEL_NAMES else self.installers[current['id']]
                 child=installer._read()
-                result['current_completed']=child.get('completed',0);result['current_total']=child.get('total',0)
+                result['current_completed']=child.get('completed',0)
+                result['current_total']=0 if child.get('state','').startswith('runtime_') else child.get('total',0)
+                result['current_message']=child.get('runtime_message','') if child.get('state','').startswith('runtime_') else ''
                 result['current_phase']=child.get('state','installing')
             return result
 
@@ -163,7 +190,7 @@ class Components:
                     self.worker.end_maintenance(state['operation'])
                 self._publish(state='interrupted',error='Interrupted. Completed changes are retained; review the remaining changes and Apply again.')
 
-    def start(self,desired,inventory_digest,license_sha256,license_acknowledged,eligibility_confirmed,download_approved):
+    def start(self,desired,inventory_digest,license_sha256,license_acknowledged,eligibility_confirmed,download_approved,runtime_artifact=None):
         with self.lock:
             self.recover()
             if self.thread and self.thread.is_alive():raise ValueError('Component synchronization is busy')
@@ -178,8 +205,8 @@ class Components:
             removals=[n for n,i in items.items() if i['present'] and n not in desired]
             if any(not items[n]['can_install'] for n in additions):raise ValueError('Selected component requires a different runtime')
             if any(not items[n]['can_remove'] for n in removals):raise ValueError('Selected component is required by the runtime and cannot be removed separately')
-            models=set(desired)&set(PRUNED_PROFILE_NAMES)
-            active={p for p in models if compatible_runtime(self.library.profile,p)}
+            models=set(desired)&set(MODEL_NAMES)
+            active=models & set(PRUNED_PROFILE_NAMES)
             for name in set(additions)&set(OPTIONALS):
                 supported=active if name=='sageattention' else active & set(getattr(MODULES[name],'SUPPORTED_PROFILES',getattr(MODULES[name],'TURBO_PROFILES',getattr(MODULES[name],'PROFILES',()))))
                 if not supported:raise ValueError('Keep a compatible model selected for '+name)
@@ -192,19 +219,29 @@ class Components:
                 raise ValueError('Component synchronization is busy') from None
             operation=uuid.uuid4().hex
             try:
-                actions=[{'id':n,'action':'install'} for n in additions if n in PRUNED_PROFILE_NAMES]
+                actions=[{'id':n,'action':'install'} for n in additions if n in MODEL_NAMES]
+                # A checked accelerator must also be installed in newly added
+                # runtime families, even if the daemon's copy already exists.
+                if any(n in MODEL_NAMES for n in additions):
+                    for optional in ('sageattention','sparse'):
+                        if optional in desired and optional not in additions:additions.append(optional)
                 actions += [{'id':n,'action':'install'} for n in additions if n in OPTIONALS]
                 actions += [{'id':n,'action':'remove'} for n in removals if n in OPTIONALS]
-                actions += [{'id':n,'action':'remove'} for n in removals if n in PRUNED_PROFILE_NAMES]
+                actions += [{'id':n,'action':'remove'} for n in removals if n in MODEL_NAMES]
                 approval=dict(license_sha256=license_sha256,license_acknowledged=True,eligibility_confirmed=True,download_approved=True)
                 # Journal ownership before taking the durable gate: a crash cannot
                 # leave an unidentified maintenance owner. The guard transfers to
                 # the thread and mutating subprocesses without an unlock window.
                 self._publish(state='running',operation=operation,desired=desired,actions=actions,current=None,
-                              completed_actions=0,total_actions=len(actions),stop_requested=False,error=None)
+                              completed_actions=0,total_actions=len(actions),stop_requested=False,error=None,runtime_artifact=runtime_artifact)
                 self.worker.begin_maintenance(operation,policy='reject')
                 if self.inventory()['digest']!=inventory_digest:raise ValueError('Component inventory changed')
-                registered={n:get_artifact_set(n).digest for n,i in items.items() if n in PRUNED_PROFILE_NAMES and i['installed']}
+                try:
+                    intent=read_json(self.paths,'config/component-setup-intent.json')
+                    if intent.get('state')!='completed':
+                        atomic_json(self.paths,'config/component-setup-intent.json',{**intent,'state':'claimed','operation':operation,'desired':desired})
+                except FileNotFoundError:pass
+                registered={n:get_artifact_set(n).digest for n,i in items.items() if n in MODEL_NAMES and i['installed']}
                 atomic_json(self.paths,self.library.registry,{'schema':2,'profiles':registered})
                 with self.worker._lock:self.worker._drop_resident();self.library._refresh_backend()
                 self.stop.clear();self.thread=threading.Thread(target=self._run,args=(operation,actions,desired,approval,guard_context,guard),daemon=True,name='h3-component-sync');self.thread.start()
@@ -216,14 +253,18 @@ class Components:
             return self.status()
 
     def _install(self,name,operation,approval,guard):
-        if name in PRUNED_PROFILE_NAMES:
+        if name in MODEL_NAMES:
             installer=self.library
             record_consent(self.paths,profile_name=name,artifact_set_digest=get_artifact_set(name).digest,**approval)
             installer._publish(state='verifying',operation=None,profile=name,completed=0,total=get_artifact_set(name).weight_bytes,error=None)
             installer.stop=self.stop
-            installer._run(name,operation,release=False)
+            installer._run(name,operation,release=False,maintenance_fd=guard.fileno(),artifact=self._read().get('runtime_artifact'))
         else:
             installer=self.installers[name]
+            if name in ('sageattention','sparse'):
+                if name in MODULES:atomic_json(self.paths,MODULES[name].CONSENT,MODULES[name].BINDING)
+                self._runtime_optional(name,operation,guard)
+                return
             if name in MODULES:
                 module=MODULES[name];atomic_json(self.paths,module.CONSENT,module.BINDING)
                 installer.stop=self.stop
@@ -232,32 +273,64 @@ class Components:
         state=installer._read()
         if state['state']!='installed':raise ValueError(state.get('error') or 'Component installation failed')
 
+    def _runtime_optional(self,name,operation,guard,*,remove=False):
+        import sys
+        from h3server.installer.steps import ProcessIO,environment
+        module=sage_attention if name=='sageattention' else sparse
+        installer=self.installers[name]
+        targets=self.library.runtime_targets(name)
+        for python,profile in targets.items():
+            if self.stop.is_set():raise InterruptedError('Stopped; completed changes retained')
+            current=python==sys.executable
+            present=module.installed(self.paths) if current else module.installed(self.paths,environment=Path(python).parent.parent)
+            if not remove and present:continue
+            if remove and current:
+                self._remove_sage(guard);continue
+            installer._publish(state='removing' if remove else 'installing',operation=None,completed=0,error=None)
+            if current:
+                installer._run(operation,release=False,maintenance_fd=guard.fileno())
+                if installer._read()['state']!='installed':raise ValueError(installer._read().get('error') or 'Optional runtime verification failed')
+            else:
+                io=ProcessIO(command_timeout=1200);io.lock_fd=guard.fileno()
+                io.run((python,'-m','h3server.remote.runtime_optional','--root',str(self.paths.root),'--profile',profile,
+                    '--component',name,'--action','remove' if remove else 'install','--operation',operation,'--lock-fd',str(guard.fileno())),
+                    env=environment(self.paths),log=installer)
+            if not remove:
+                checked=module.installed(self.paths) if current else module.installed(self.paths,environment=Path(python).parent.parent)
+                if not checked:raise ValueError('Optional component did not verify in '+profile)
+        installer._publish(state='not_installed' if remove else 'installed',operation=None,error=None)
+
     def _remove(self,name,desired,guard):
         self._remove_derived(name,desired)
-        if name in PRUNED_PROFILE_NAMES:
-            remove_files(self.paths,{**model_files(name),**partial_files(name)})
+        if name in MODEL_NAMES:
+            retained={path for model in desired if model in MODEL_NAMES and model!=name for path in (*model_files(model),*partial_files(model))}
+            remove_files(self.paths,{p:v for p,v in {**model_files(name),**partial_files(name)}.items() if p not in retained})
             registered=self.library._registered(compatible_only=False);registered.pop(name,None)
             atomic_json(self.paths,self.library.registry,{'schema':2,'profiles':registered})
             with self.worker._lock:self.library._refresh_backend()
         elif name=='sageattention':
-            self._remove_sage(guard)
+            self._runtime_optional(name,self._read()['operation'],guard,remove=True)
         else:
             module=MODULES[name];files={**optional_files(name),**partial_files(name)}
             files[module.RECEIPT]=None
-            if name=='sparse':files[sparse.GPU_RECEIPT]=None
+            if name=='sparse':
+                import sys
+                files[sparse.GPU_RECEIPT]=None
+                for python in self.library.runtime_targets('sparse'):
+                    files[sparse.gpu_receipt_path(self.paths,None if python==sys.executable else Path(python).parent.parent)]=None
             remove_files(self.paths,files)
             self.installers[name]._publish(state='not_installed',operation=None,completed=0,error=None)
 
     def _remove_derived(self,name,desired):
         from h3server.backends.safetensors_compat import REPAIRS
-        if name in PRUNED_PROFILE_NAMES:artifacts=get_artifact_set(name).artifacts
+        if name in MODEL_NAMES:artifacts=get_artifact_set(name).artifacts
         elif name=='reference':
             from types import SimpleNamespace
             artifacts=[SimpleNamespace(sha256=e['sha256'],local_relative_path=e['name']) for e in reference.FILES]
         else:return
         # Also preserve caches for removals not yet performed if a batch stops.
-        present={n for n in PRUNED_PROFILE_NAMES if n!=name and any(inspect_file(self.paths,p) for p in model_files(n))}
-        retained={a.sha256 for n in set(desired)|present if n in PRUNED_PROFILE_NAMES for a in get_artifact_set(n).artifacts}
+        present={n for n in MODEL_NAMES if n!=name and any(inspect_file(self.paths,p) for p in model_files(n))}
+        retained={a.sha256 for n in set(desired)|present if n in MODEL_NAMES for a in get_artifact_set(n).artifacts}
         if 'reference' in desired or name!='reference' and any(inspect_file(self.paths,p) for p in optional_files('reference')):retained.update(e['sha256'] for e in reference.FILES)
         files={f'cache/safetensors-compat/{a.sha256}/{Path(a.local_relative_path).name}':None for a in artifacts if a.sha256 in REPAIRS and a.sha256 not in retained}
         remove_files(self.paths,files)
@@ -272,7 +345,12 @@ class Components:
         self.installers['sageattention']._publish(state='removing',operation=None,error=None)
         # Never leave an old GPU-verification receipt advertising a package
         # after a failed/interrupted uninstall. The durable marker allows retry.
-        remove_files(self.paths,{sage_attention.RECEIPT:None})
+        receipts={sage_attention.receipt_path(self.paths):None}
+        try:
+            if read_json(self.paths,sage_attention.RECEIPT).get('environment') in (None,str(prefix)):
+                receipts[sage_attention.RECEIPT]=None
+        except FileNotFoundError:pass
+        remove_files(self.paths,receipts)
         io=ProcessIO(command_timeout=300);io.lock_fd=guard.fileno()
         io.run((sys.executable,'-m','pip','uninstall','--yes','sageattention'),env=environment(self.paths),log=self.installers['sageattention'])
         verify_provisioned(self.paths,self.library.profile)
@@ -286,6 +364,10 @@ class Components:
                 if action['action']=='install':self._install(action['id'],operation,approval,guard)
                 else:self._remove(action['id'],desired,guard)
                 self._publish(completed_actions=index+1)
+            try:
+                intent=read_json(self.paths,'config/component-setup-intent.json')
+                if intent.get('operation')==operation:atomic_json(self.paths,'config/component-setup-intent.json',{**intent,'state':'completed'})
+            except FileNotFoundError:pass
             self._publish(state='completed',current=None,error=None)
         except Exception as error:
             self._publish(state='cancelled' if self.stop.is_set() else 'failed',error=safe_log(str(error))[:2000])

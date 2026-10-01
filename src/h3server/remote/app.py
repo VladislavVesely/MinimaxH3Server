@@ -56,9 +56,17 @@ class ModelInstallInput(BaseModel):
     download_approved: Literal[True]
 
 
+class RuntimeArtifactInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    release_id: str = Field(pattern=r'^[A-Za-z0-9_-]+$', max_length=128)
+    filename: str = Field(pattern=r'^h3server-[A-Za-z0-9_.+-]+-py3-none-any\.whl$', max_length=200)
+    sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class ComponentSyncInput(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['synchronize']
+    runtime_artifact: RuntimeArtifactInput | None = None
     desired: list[Annotated[str, Field(min_length=1,max_length=64)]] = Field(max_length=16)
     inventory_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
     license_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
@@ -213,6 +221,11 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
 
     def library_document():
         return {**library.status(),'components':components.inventory(),'synchronization':components.status()}
+
+    def optional_document(installer,name):
+        state=installer.status()
+        profiles=library.optional_profiles(name) if library.supported else {}
+        return {**state,'by_profile':profiles,'installed':any(profiles.values()) if profiles else state['installed']}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -431,7 +444,7 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
                 "diagnostic": worker.backend.diagnostics(),
                 "resident_models": worker.models_status(), "model_library": library_document(), "performance_schema": 1,
                 "input_modes": ['text', 'frames', 'references'] if 'h3-convrot-int8' in worker.backend.profiles else ['text', 'frames'] if any(p in PRUNED_PROFILE_NAMES for p in worker.backend.profiles) else ['text'],
-                "optional_features": {"reference": reference.status(), "sage_attention": features.status(), "turbo_lora": turbo.status(), "sparse_attention": sparse.status()},
+                "optional_features": {"reference": reference.status(), "sage_attention": optional_document(features,'sageattention'), "turbo_lora": turbo.status(), "sparse_attention": optional_document(sparse,'sparse')},
                 "profiles": worker.backend.profiles, "fps": 24, "frames": {"min": 124, "max": 345, "stride": 17, "offset": 5},
                 "service_limits": {"axis_min": 32, "axis_max": canvas_limits(worker.backend.profiles[0])[0], "spatial_multiple": 32,
                                    "canvas_pixels": canvas_limits(worker.backend.profiles[0])[1], "steps_min": 2, "steps_max": 1000,

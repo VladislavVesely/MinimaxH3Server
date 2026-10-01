@@ -80,21 +80,20 @@
       desired.delete(id);for(const name of Object.keys(optional))if(desired.has(name)&&!desired.has(dependency(name))&&!context.library?.components?.items.find(i=>i.id===name)?.installed)desired.delete(name);
     }
     if(!context.library?.components?.supported){
-      if(!optional[id]&&checked)for(const n of [...desired])if(!optional[n]&&n!==id)desired.delete(n);
       const selected=[...desired].find(n=>!optional[n]);
-      if(!context.profiles?.find(p=>p.profile_name===selected)?.runtime_id?.startsWith('comfyui-h3-'))desired.delete('sageattention');
-      if(!['h3-convrot-int8','h3-convrot-mixed'].includes(selected))desired.delete('turbo');
-      if(selected!=='h3-convrot-int8')desired.delete('sparse');
-      for(const [name,input] of [['sageattention','install-sage'],['turbo','install-turbo'],['sparse','install-sparse']])$(input).checked=desired.has(name);
+      // The coordinator provisions a base, then reconciles the complete desired
+      // set. Do not silently discard other models or apply incompatible extras
+      // to the temporary bootstrap model.
+      for(const input of ['install-sage','install-turbo','install-sparse'])$(input).checked=false;
       if(selected){$('install-profile').value=selected;$('install-profile').dispatchEvent(new Event('change',{bubbles:true}));}
     }
     paintComponents();
   }
   function hydrate(inventory){desired=new Set(inventory.items.filter(i=>i.installed).map(i=>i.id));baseline=inventory.digest;dirty=false;}
   function paintComponents(){
-    const {profiles=[],library:state,connection={},setup={},busy=false}=context,inventory=state?.components,sync=state?.synchronization||{},batch=inventory?.supported===true;
+    const {profiles=[],library:state,connection={},setup={},busy=false}=context,inventory=state?.components,sync=setup.component_sync||state?.synchronization||{},batch=inventory?.supported===true;
     const connected=connection.state==='authenticated',loading=submitting||busy||setup.busy||sync.busy||state?.busy;
-    if(batch&&(!dirty||baseline===null)){hydrate(inventory);if(sync.busy&&Array.isArray(sync.desired))desired=new Set(sync.desired);}
+    if(batch&&(!dirty||baseline===null)){const first=baseline===null;hydrate(inventory);if(first&&Array.isArray(inventory.pending_desired)){desired=new Set(inventory.pending_desired);dirty=true;}else if(first&&['failed','cancelled','interrupted'].includes(sync.state)&&Array.isArray(sync.desired)){desired=new Set(sync.desired);dirty=true;}if(sync.busy&&Array.isArray(sync.desired))desired=new Set(sync.desired);}
     if(batch&&ownOperation&&ownOperation===sync.operation&&!sync.busy){if(sync.state==='completed')hydrate(inventory);else baseline=inventory.digest;ownOperation=null;}
     const rows=[...profiles.map(p=>({id:p.profile_name,kind:'model'})),...Object.keys(optional).map(id=>({id,kind:'optional'}))],found=new Set();
     for(const row of rows){
@@ -111,39 +110,39 @@
         if(optional[id]&&!installed){const dep=dependency(id),entry=inventory.items.find(i=>i.id===dep);if(!dep||!entry?.can_install&&!entry?.installed)unsupported='Requires a compatible model/runtime.';}
       }else{
         const option=[...$('install-profile').options].find(o=>o.value===id);
-        if(id==='reference')unsupported='Set up a ConvRot INT8 runtime first.';
-        else if(row.kind==='model'&&(!option||option.disabled))unsupported='Scan compatible hardware first.';
+        if(row.kind==='model'&&(!option||option.disabled))unsupported='Scan compatible hardware first.';
         else if(!connected||$('install-profile').disabled)unsupported='Connect and scan hardware first.';
-        else if(optional[id]){const selected=[...desired].find(n=>!optional[n]);if(id==='sageattention'&&!profiles.find(p=>p.profile_name===selected)?.runtime_id?.startsWith('comfyui-h3-'))unsupported='Select a pruned model first.';if(['turbo','sparse'].includes(id)&&!(['h3-convrot-int8',...(id==='turbo'?['h3-convrot-mixed']:[])].includes(selected)))unsupported='Select a compatible ConvRot model first.';}
+        else if(optional[id]){const models=[...desired].filter(n=>!optional[n]);if(id==='sageattention'&&!models.some(n=>profiles.find(p=>p.profile_name===n)?.runtime_id?.startsWith('comfyui-h3-')))unsupported='Select a pruned model first.';if(['turbo','sparse','reference'].includes(id)&&!models.some(n=>['h3-convrot-int8',...(id==='turbo'?['h3-convrot-mixed']:[])].includes(n)))unsupported='Select a compatible ConvRot model first.';}
       }
       card.input.checked=desired.has(id);card.input.disabled=!!(loading||unsupported||!connected);card.input.setAttribute('aria-label',label(id));card.about.setAttribute('aria-label','About '+label(id));text(card.name,label(id));
       text(card.status,batch?(installed?(desired.has(id)?'Installed':'Will remove'):desired.has(id)?'Will install':item?.present?'Incomplete · will clean up':'Not installed'):'Not selected'+(desired.has(id)?' · will install':''));
       const size=item?.total_bytes||profile?.weight_bytes;const pending=desired.has(id)&&!installed||!desired.has(id)&&item?.present;
-      text(card.meta,unsupported||((size?(size/1024**3).toFixed(2)+' GiB · ':'')+(optional[id]?'Optional component':'Model weights')));card.el.classList.toggle('installed',installed);card.el.classList.toggle('planned',!!pending);
+      text(card.meta,unsupported||((size?(size/1024**3).toFixed(2)+' GiB · ':'')+(optional[id]?'Optional component':item?.runtime_installed===false?'Runtime + dependencies + model weights':'Model weights')));card.el.classList.toggle('installed',installed);card.el.classList.toggle('planned',!!pending);
     }
     for(const [id,card]of cardNodes)if(!found.has(id)){card.el.remove();cardNodes.delete(id);}
     const adds=batch?[...desired].filter(n=>!inventory.items.find(i=>i.id===n)?.installed):[...desired],removes=batch?inventory.items.filter(i=>i.present&&!desired.has(i.id)).map(i=>i.id):[];
-    text(changes,[adds.length?'Install: '+adds.map(label).join(', '):'',removes.length?'Remove: '+removes.map(label).join(', '):''].filter(Boolean).join(' · ')||(batch?'Your selection matches the installed components.':'Select one base model to set up its runtime. You can manage multiple compatible models afterward.'));
+    text(changes,[adds.length?'Install: '+adds.map(label).join(', '):'',removes.length?'Remove: '+removes.map(label).join(', '):''].filter(Boolean).join(' · ')||(batch?'Your selection matches the installed components.':'Select models and optional components. Missing runtimes and dependencies will be installed automatically.'));
     const stale=batch&&dirty&&baseline!==inventory.digest&&!ownOperation;
     let blocked=!connected?'Connect your target first.':loading?'Changes are in progress.':stale?'Installed components changed. Reset the selection to review the latest state.':context.licenseReady===false?'Loading pinned license information…':!adds.length&&!removes.length?'No pending changes.':!batch&&$('install').disabled?$('install-disabled-reason').textContent:'';
     if(batch&&!blocked){const invalid=adds.find(n=>cardNodes.get(n)?.input.disabled);if(invalid)blocked='Cannot install '+label(invalid)+': '+cardNodes.get(invalid).meta.textContent;}
     apply.disabled=!!blocked;reset.disabled=!!loading;stop.hidden=!sync.busy;stop.disabled=submitting||sync.stop_requested===true;text(reason,blocked||'Ready. Changes run only while the generation queue is idle.');text(apply,submitting?'Submitting…':batch?'Apply changes':'Set up selected components');
     progress.hidden=!(sync.busy||sync.state==='completed'||setup.busy);progress.max=Math.max(1,sync.total_actions||1);
     const fraction=sync.current_total>0?Math.min(1,(sync.current_completed||0)/sync.current_total):0;
-    if(setup.busy||sync.busy&&!sync.total_actions)progress.removeAttribute('value');else progress.value=(sync.completed_actions||0)+(sync.busy?fraction:0);
+    if(setup.busy&&!setup.component_sync||sync.busy&&!sync.total_actions)progress.removeAttribute('value');else progress.value=(sync.completed_actions||0)+(sync.busy?fraction:0);
     const action=sync.current;let message=sync.busy?`${sync.completed_actions||0} / ${sync.total_actions||0} changes finished · ${action?(action.action==='install'?'Installing ':'Removing ')+label(action.id):'Preparing…'}`:sync.state==='completed'?`All ${sync.total_actions||0} changes applied.`:sync.error||'';
-    if(sync.busy&&sync.current_phase)message+=' · '+sync.current_phase;
+    if(sync.busy&&sync.current_phase)message+=' · '+sync.current_phase.replace(/^runtime_/,'Runtime: ').replaceAll('_',' ');
+    if(sync.busy&&sync.current_message)message+=' · '+sync.current_message.slice(-180);
     if(sync.busy&&sync.current_total>0)message+=` · ${((sync.current_completed||0)/1024**3).toFixed(2)} / ${(sync.current_total/1024**3).toFixed(2)} GiB`;
-    if(setup.busy)message=$('setup-status').textContent;text(status,message);status.classList.toggle('error-box',['failed','interrupted'].includes(sync.state));
+    if(setup.busy&&!setup.component_sync)message=$('setup-status').textContent;text(status,message);status.classList.toggle('error-box',['failed','interrupted'].includes(sync.state));
     if(setup.busy||setup.state==='failed')diagnostics.open=true;
   }
   apply.addEventListener('click',async()=>{
     if(apply.disabled)return;submitting=true;paintComponents();
-    try{if(context.library?.components?.supported){await context.applyComponents?.({desired:[...desired],inventory_digest:baseline});}else $('install').click();}
+    try{if(context.library?.components?.supported){await context.applyComponents?.({desired:[...desired],inventory_digest:baseline});}else if(context.bootstrapComponents)await context.bootstrapComponents([...desired]);else $('install').click();}
     finally{submitting=false;paintComponents();}
   });
   reset.addEventListener('click',()=>{if(context.library?.components?.supported)hydrate(context.library.components);else{desired.clear();dirty=false;}paintComponents();});
-  stop.addEventListener('click',()=>context.cancelComponents?.(context.library?.synchronization?.operation));
+  stop.addEventListener('click',()=>context.setup?.busy?$('cancel-setup').click():context.cancelComponents?.(context.library?.synchronization?.operation));
   function update(value={}){
     context=value;const {connection={},setup={},runtimeReady=false}=value,key=JSON.stringify([connection.state,connection.mode,connection.host,connection.port,connection.username]);
     if(target!==key){target=key;desired.clear();dirty=false;baseline=null;ownOperation=null;}

@@ -27,6 +27,8 @@ class SetupCoordinator:
         self._phase_started = self._phase_ended = None
         self._cancel = threading.Event()
         self._requests = {}
+        self._desired = None
+        self._component_operation = None
         self._connection_status = {'state': 'disconnected'}
         self._status = {'state': 'idle', 'phase': 'idle', 'operation_id': None, 'error': None,
                         'installation_ready': False, 'model_ready': False, 'generation_tested': False}
@@ -61,7 +63,7 @@ class SetupCoordinator:
                 self._phase_ended = time.monotonic()
             self._status.update(values)
 
-    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False, turbo_lora=False, sparse_attention=False):
+    def start(self, profile, artifact_set_digest, request_id, *, retry_digest=None, sage_attention=False, turbo_lora=False, sparse_attention=False, desired=None):
         # Serialized with explicit controller operations, but never with worker IO.
         with self.recovery.operations, self._lock:
             selection = profile_document(profile)
@@ -73,9 +75,14 @@ class SetupCoordinator:
             if selection['artifact_set_digest'] != artifact_set_digest:
                 raise ControllerError('selection_changed')
             binding = (profile, artifact_set_digest)
+            if desired is not None:
+                from h3server.remote.model_catalog import MODEL_NAMES
+                allowed=set(MODEL_NAMES)|{'sageattention','turbo','sparse','reference'}
+                if not isinstance(desired,list) or len(desired)!=len(set(desired)) or set(desired)-allowed or profile not in desired:
+                    raise ControllerError('selection_changed')
             if sparse_attention and profile != 'h3-convrot-int8':
                 raise ControllerError('optional_install_busy_or_unsupported')
-            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention, turbo_lora, sparse_attention)
+            request_binding = (self.recovery.target(), binding, retry_digest, sage_attention, turbo_lora, sparse_attention, tuple(sorted(desired)) if desired is not None else None)
             if request_id in self._requests:
                 prior_binding, prior_status = self._requests[request_id]
                 if request_binding != prior_binding:
@@ -87,6 +94,8 @@ class SetupCoordinator:
                 raise ControllerError('setup_session_limit')
             target = self.recovery.setup_target() if retry_digest is None else self.recovery.target()
             self._retry_digest = retry_digest
+            self._desired = desired
+            self._component_operation = None
             self._sage_requested = sage_attention
             self._turbo_requested = turbo_lora
             self._sparse_requested = sparse_attention
@@ -98,7 +107,7 @@ class SetupCoordinator:
             self._phase_started, self._phase_ended = time.monotonic(), None
             self._status = {'state': 'running', 'phase': 'planning', 'operation_id': uuid.uuid4().hex,
                             'request_id': request_id, 'profile': profile, 'artifact_set_digest': artifact_set_digest,
-                            'sage_attention': sage_attention, 'turbo_lora': turbo_lora, 'sparse_attention': sparse_attention,
+                            'sage_attention': sage_attention, 'turbo_lora': turbo_lora, 'sparse_attention': sparse_attention, 'desired':desired,
                             'plan_digest': None, 'error': None, 'snapshot': None,
                             'installation_ready': False, 'model_ready': False, 'generation_tested': False}
             self._requests[request_id] = (request_binding, self._status)
@@ -123,7 +132,7 @@ class SetupCoordinator:
             self.recovery.revoke()
             if self.active():
                 self._status.update(state='cancelling')
-                if self._status['phase'] != 'downloading':
+                if self._status['phase'] not in ('downloading','components'):
                     self.connection.interrupt_setup()
                     self._connection_status = {'state': 'disconnected'}
             return self.status()
@@ -270,6 +279,8 @@ class SetupCoordinator:
             if self._retry_digest is not None and canonical_plan_digest(self.deployment.plan) != self._retry_digest:
                 raise ControllerError('selection_changed')
             self._root = self.deployment.root
+            if self._desired is not None and set(self._desired)!={selection[0]}:
+                self._call(lambda:self.deployment.stage_component_intent(self._desired,self._status['request_id']),mutation=True)
             if self._retry_digest is not None and not self._snapshot().get('retry', {}).get('eligible'):
                 raise ControllerError('setup_retry_not_safe')
             while True:
@@ -403,6 +414,7 @@ class SetupCoordinator:
                     if feature.get('state') == 'failed': raise ControllerError('turbo_install_failed')
                     self._wait()
                     feature = self._call(lambda: self.turbo_request('GET'))
+            if self._desired is not None and set(self._desired)!={selection[0]}:self._complete_components()
             self._publish(state='completed', phase='completed', model_ready=True)
         except Exception as error:
             safe = {'selection_changed', 'invalid_checkpoint', 'setup_remote_busy', 'setup_replan_limit', 'setup_plan_blocked',
@@ -414,7 +426,7 @@ class SetupCoordinator:
                     'recovery_binding_changed', 'matching_release_required', 'update_prerequisite_maintenance_required',
                     'stale_discovery_unproven', 'staging_lock_unavailable', 'staging_lock_lost',
                     'compatible_retry_not_safe', 'compatible_retry_contract_changed', 'setup_retry_not_safe',
-                    'sage_install_failed', 'turbo_install_failed', 'turbo_selection_changed', 'sparse_install_failed', 'sparse_selection_changed', 'optional_install_busy_or_unsupported'}
+                    'component_sync_failed', 'sage_install_failed', 'turbo_install_failed', 'turbo_selection_changed', 'sparse_install_failed', 'sparse_selection_changed', 'optional_install_busy_or_unsupported'}
             code = error.code if isinstance(error, ControllerError) and error.code in safe else 'setup_failed'
             cancelled = self._cancel.is_set() or not self.session_active()
             self._publish(state='cancelled' if cancelled else 'failed', error=None if cancelled else code)
@@ -427,7 +439,30 @@ class SetupCoordinator:
                                             'operation': self._download_operation})
                 except Exception:
                     pass  # may be offline; no cancellation of another operation
+            if self._cancel.is_set() and self._component_operation is not None:
+                try:self.component_request('CANCEL',{'operation':self._component_operation})
+                except Exception:pass
             self.recovery.revoke()
+
+    def _complete_components(self):
+        from h3server.backends import load_manifest
+        self._publish(phase='components')
+        library=self._call(lambda:self.component_request('GET'))
+        inventory=library.get('components',{})
+        if not inventory.get('supported'):raise ControllerError('component_sync_failed')
+        payload=dict(action='synchronize',desired=self._desired,inventory_digest=inventory['digest'],
+            license_sha256=load_manifest()['sources']['license']['sha256'],license_acknowledged=True,
+            eligibility_confirmed=True,download_approved=True)
+        result=self._call(lambda:self.component_request('POST',payload),mutation=True)
+        self._component_operation=result['operation']
+        while True:
+            self._publish(component_sync=result)
+            if not result.get('busy'):
+                if result.get('state')!='completed':raise ControllerError('component_sync_failed')
+                return
+            self._wait()
+            result=self._call(lambda:self.component_request('GET'))['synchronization']
+            if result.get('operation')!=self._component_operation:raise ControllerError('component_sync_failed')
 
     def _await_operation(self, action, digest, expected_operation=None, *, expected_setup_id=None):
         deadline = time.monotonic() + 30

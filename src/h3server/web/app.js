@@ -253,6 +253,7 @@
     invalid_credentials: 'The password is invalid. Enter a nonempty password without null characters.',
     already_connected: 'A connection already exists. Refresh its state, or disconnect before changing servers.',
     invalid_remote_home: 'The server’s home directory could not be read. Check the SSH account and retry the scan.',
+    controller_upgrade_required: 'Launch the rebuilt controller for first-time multi-model setup. Existing installed servers can already apply multi-runtime changes.',
     release_unavailable: 'Launch deployment with a verified release wheel and trusted SHA256 pin. No artifact is bundled in this source-only session.',
     remote_unavailable: 'Remote daemon unavailable. Reauthenticate after disconnect or reboot, then refresh the dashboard. No readiness assumed.',
     deployment_operation_failed: 'The target rejected or could not execute this operation. Replay progress; restore the matching release and reauthenticate if needed.',
@@ -386,9 +387,12 @@
       ['Turbo LoRA', turboState, $('use-turbo').checked, 'turn off Turbo'],
       ['SageAttention', sageState, $('use-sage').checked, 'turn off SageAttention']
     ]) {
+      const profile=$('generation-profile').value;
+      const supported=state.by_profile ? Object.hasOwn(state.by_profile,profile) : state.supported;
+      const installed=state.by_profile ? state.by_profile[profile]===true : state.installed;
       if (state.busy) reasons.push(`${name} setup is running. Wait for its download and checks to finish.`);
-      else if (selected && !state.supported) reasons.push(`${name} is not supported or verified for this model/component version. ${off.charAt(0).toUpperCase() + off.slice(1)} or check its setup status above.`);
-      else if (selected && !state.installed) reasons.push(`${name} is not installed and verified. Select its installation option above and click Install, or ${off}.`);
+      else if (selected && !supported) reasons.push(`${name} is not supported or verified for this model/component version. ${off.charAt(0).toUpperCase() + off.slice(1)} or check its setup status above.`);
+      else if (selected && !installed) reasons.push(`${name} is not installed and verified for this runtime. Check it in Install and apply changes, or ${off}.`);
     }
     return reasons;
   }
@@ -532,7 +536,7 @@
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
     globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady, busy,
-      licenseReady:!!modelLicenseDigest, applyComponents, cancelComponents});
+      licenseReady:!!modelLicenseDigest, multiRuntimeSetup:capabilities.multi_runtime_setup===true, applyComponents, cancelComponents, bootstrapComponents});
   }
 
   async function refresh() {
@@ -1017,6 +1021,15 @@
       if (option.textContent !== label) option.textContent = label;
     }
   }
+  let componentSetupDesired = null;
+  function bootstrapComponents(desired) {
+    if (!capabilities.multi_runtime_setup && desired.length>1) {
+      showError({code:'controller_upgrade_required'});return;
+    }
+    componentSetupDesired = capabilities.multi_runtime_setup ? [...desired] : null;
+    $('install').click();
+  }
+
   async function applyComponents(selection) {
     return perform('Applying selected component changes…', async () => {
       const result = await request('/remote/models/install', {action:'synchronize', ...selection,
@@ -1082,7 +1095,8 @@
     // Retain only the public intent ID across an ambiguous response, never secrets.
     await savePreferences();
     pendingInstall ||= { profile: selected.profile_name, artifact_set_digest: selected.artifact_set_digest,
-      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, request_id: requestId() };
+      sage_attention: $('install-sage').checked, turbo_lora: $('install-turbo').checked, sparse_attention: $('install-sparse').checked, request_id: requestId(),
+      ...(componentSetupDesired ? {desired:componentSetupDesired} : {}) };
     try {
       const result = await request('/setup/start', pendingInstall);
       inspectedSetup = null;

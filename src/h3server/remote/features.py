@@ -8,7 +8,7 @@ import uuid
 
 from h3server.backends.base import atomic_json, read_json, regular_file
 from h3server.backends.catalog import PRUNED_PROFILE_NAMES
-from h3server.backends.sage_attention import VERSION, WHEEL_SHA256, RECEIPT, installed
+from h3server.backends.sage_attention import VERSION, WHEEL_SHA256, RECEIPT, installed, receipt_path
 from h3server.installer.diagnostics import safe_log
 from h3server.installer.steps import ProcessIO, environment
 
@@ -32,7 +32,7 @@ class SageInstaller:
             state = self._read()
             verified = installed(self.paths)
             return {**state, 'installed': verified, 'version': VERSION,
-                    'supported': bool(self.worker.backend.profiles) and all(p in PRUNED_PROFILE_NAMES for p in self.worker.backend.profiles),
+                    'supported': any(p in PRUNED_PROFILE_NAMES for p in self.worker.backend.profiles),
                     'busy': self.thread is not None and self.thread.is_alive()}
 
     def _publish(self, **values):
@@ -91,7 +91,11 @@ class SageInstaller:
                 if existing not in (None, VERSION):
                     raise RuntimeError('A different SageAttention version is installed; refusing to replace it silently')
                 from h3server.backends.comfy_runtime import verify_provisioned
-                profile = self.worker.backend.profiles[0]
+                identifier=Path(sys.prefix).name
+                profile = next(p for p in self.worker.backend.profiles if p in PRUNED_PROFILE_NAMES)
+                if len(identifier)==64 and all(c in '0123456789abcdef' for c in identifier):
+                    try:profile=read_json(self.paths,'environments/'+identifier+'/runtime.json')['profile']
+                    except FileNotFoundError:pass
                 prefix = verify_provisioned(self.paths, profile, allow_unverified_sage=True)
                 addon_only = f'sageattention=={VERSION}' not in (prefix / 'resolved.txt').read_text().splitlines()
                 relative = 'tmp/sageattention-' + operation + '.txt'
@@ -109,7 +113,7 @@ class SageInstaller:
                             '--no-deps', '--force-reinstall', '--only-binary=:all:', '--require-hashes',
                             '-r', str(self.paths.root / relative)), env=env, log=self)
                     io.run((sys.executable, '-m', 'h3server.backends.sage_attention'), env=env, log=self)
-                    atomic_json(self.paths, RECEIPT, {'version': VERSION, 'wheel_sha256': WHEEL_SHA256,
+                    atomic_json(self.paths, receipt_path(self.paths), {'version': VERSION, 'wheel_sha256': WHEEL_SHA256,
                         'environment': str(Path(sys.prefix).resolve()), 'torch': metadata.version('torch'), 'gpu_probe': True})
                     verify_provisioned(self.paths, profile)
                     self._publish(state='installed', error=None)

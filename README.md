@@ -46,12 +46,14 @@ executable on PATH. To deploy a separately authenticated wheel:
 3. In **Install**, use the model/optional-component checkboxes. Installed items
    start checked. Open each ⓘ dialog for size, compatibility and pinned license
    details. There is no Review button or duplicate model selector.
-4. For an installed pruned runtime, check additions/uncheck removals and click
-   **Apply changes** once. Compatible additions run before managed removals;
-   history, outputs and shared dependencies are preserved. Cross-runtime batch
-   switching and hardware-ineligible choices are disabled with explanations.
-   Fresh setup uses **Set up selected components** for one base model and its
-   supported optional accelerators, including guarded provisioning/reboot if needed.
+4. Check additions/uncheck removals and click **Apply changes** once. Missing
+   model runtimes install their pinned sources, isolated Python environment and
+   dependencies before verified weights; selecting GGUF does not replace ConvRot
+   or switch the daemon environment. Generation selects the model's interpreter.
+   Additions finish before managed removals; history, outputs and shared dependencies
+   are preserved. Hardware-ineligible choices remain disabled. Fresh setup retains
+   the full selection, bootstraps one model with guarded prerequisites/reboot, then
+   reconciles the remaining models and optional components.
 5. Watch actual action/download progress. Reload observes the running operation
    without starting another. Stop preserves completed changes, not rollback;
    interrupted work needs explicit review and retry. Busy generation jobs are
@@ -109,7 +111,10 @@ executable on PATH. To deploy a separately authenticated wheel:
   Linux/Windows use the launcher's normal state directory (or `--state-dir`).
   Sage choices persist there too; no installation or generation starts on launch.
 
-When replacing a rebuilt controller, **quit other controller versions first**.
+A rebuilt controller needs a new process for Python backend changes. You can launch
+it on a separate port while preserving an older controller's private joiner workspace;
+finish/export that work before closing the old process. Avoid concurrent changes
+from multiple controllers.
 On the next explicit Install, an older release's staging-only discovery can be
 rediscovered with the current release and selected model, without deleting old
 artifacts. The current discovery must have a verified plan/root and no launch or

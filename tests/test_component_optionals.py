@@ -10,6 +10,7 @@ def test_optional_add_remove_uses_parent_guard_and_preserves_other_assets(compon
     original=f.module.optional_files
     monkeypatch.setattr(f.module,'optional_files',lambda n:{target:(3,'a'*64)} if n==name else original(n))
     monkeypatch.setattr(installer,'status',lambda:dict(installed=(f.root/target).exists(),busy=False))
+    monkeypatch.setattr(module,'installed',lambda *args,**kwargs:(f.root/target).exists())
     def run(operation,*,release,maintenance_fd):
         assert release is False and os.fstat(maintenance_fd).st_uid==os.getuid()
         assert f.worker.maintenance_status()['active']

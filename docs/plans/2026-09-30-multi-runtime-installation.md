@@ -69,12 +69,20 @@ Run focused tests only. Build packaged controller. Verify exact remote prior sou
 
 Do not mark this feature complete until selecting different families, provisioning their dependencies, and routing generation through the correct environments are tested together. Record explicitly which GPU paths were actually exercised versus fixture-tested.
 
-## Current status
+## Initial foundation checkpoint
 
-Local foundations implemented:
+Local foundations initially implemented:
 
 - `remote/runtimes.py`: exact runtime-family/release/freeze binding, target-interpreter verification before publication, guarded registry writes, and read-only lookup. Fifteen fixture tests cover coexistence, family mismatch, release/freeze changes, invalid paths, failed/wrong-environment probes, symlink/hardlink/permission rejection, malformed registry and changes during verification.
 - `remote/worker.py`: optional concrete per-profile backend selection for admission, FIFO scheduling, execution protocol, command and media validation. Resident processes recycle when the command/environment changes, including for the same profile. Four fixture-subprocess tests cover mixed resident/nonresident routing, selected-runtime readiness, wrong-profile rejection and recycling. Tests first reproduced missing dispatch, then exposed the scheduler's residual daemon-environment readiness gate before its fix.
 - **119 focused tests passed** across bindings, dispatch, worker/residency, library/API and existing component reconciliation; `git diff --check` passed. Native GPU execution was not tested for this change.
 
-These foundations are not connected to provisioning, the model-library registry or accelerator scoping yet and have not been deployed. No existing controller/server process was changed. The running checklist still cannot provision another runtime family; this is not a completed feature.
+At this checkpoint the foundations were not yet connected or deployed; the running checklist could not provision another runtime family.
+
+## Integrated and deployed implementation
+
+All six tasks are now connected: model-library bindings/dispatch, environment-scoped accelerators, current-wheel staging, isolated complete runtime provisioning, full fresh desired-state reconciliation and the selectable multi-runtime checklist. Native environment bindings publish before weight download; models become selectable for generation only after verified weights are registered. Failed additions cannot remove retained models.
+
+Focused integration includes an authenticated API-to-provisioning-to-selected-interpreter execution fixture. Native Chrome/WebKit acceptance passed on the preserved 8789 controller and the separate rebuilt 8790 controller. The daemon was deployed under exact-source, backup and idle maintenance guards; retained components/history remained unchanged. See `docs/validation.md` for evidence and paths.
+
+This completes the connected implementation, not real multi-family GPU certification: no new production multi-GB install/removal/generation was run. Missing OS prerequisites on an already installed host require explicit guarded prerequisite repair; the ordinary daemon never grants itself sudo or replays privileged/reboot steps.
