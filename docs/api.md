@@ -15,10 +15,17 @@ Browser launch uses `/#token=...`: the UI removes the fragment before POSTing
 `{"token":"..."}` to `/bootstrap` with its exact Origin. It is single-use, expires
 after 120s, and returns an HttpOnly SameSite=Strict `h3_session` cookie plus
 `csrf_token`. Never put tokens/passwords in query strings. Cookies are local HTTP,
-not transport-encrypted remote credentials. Sessions expire after eight hours or
-controller shutdown; keep the application restricted to loopback.
+not transport-encrypted remote credentials. Default sessions have no server deadline
+and survive controller shutdown/restart using owner-only private access state. Keep
+the application restricted to loopback or explicitly enabled trusted LAN mode.
+Login/bootstrap/status also return an opaque `remember_token`, which the UI stores
+in localStorage (never the access key or SSH password). `POST /session/restore`
+with `{token}` and the exact Origin restores a missing cookie without re-entering
+the key. Cookies are HttpOnly/SameSite=Strict, refreshed on authenticated successful
+status responses; the remembered grant handles browsers' own cookie lifetime limits.
+`--reset-access-key` explicitly rotates the key and revokes old cookies/grants.
 
-All other endpoints require that cookie. Unsafe methods additionally require exact
+Apart from bootstrap, LAN login and browser restoration, other endpoints require that cookie. Unsafe methods additionally require exact
 `Origin`, `X-CSRF-Token` and no query string. Fetch `/status` to recover the CSRF
 value in an already authenticated session. The controller's errors are
 `{"error":{"code":"stable_code"}}`; validation does not reflect secrets. Common

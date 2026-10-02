@@ -55,5 +55,8 @@ def test_assets_are_package_resources():
     script = root.joinpath("app.js").read_text()
     assert "history.replaceState" in script
     assert script.index("history.replaceState") < script.index("fetch(")
-    assert "localStorage" not in script and "sessionStorage" not in script
+    # Only an opaque browser grant is retained, never the access key or SSH password.
+    assert script.count('localStorage.setItem(') == 1
+    assert 'localStorage.setItem(rememberedAccessKey, data.remember_token)' in script
+    assert 'sessionStorage' not in script
     assert "innerHTML" not in script and "console.log" not in script

@@ -45,6 +45,7 @@ def main(argv=None):
     parser.add_argument('--version', action='version', version='h3-controller ' + version('h3server'))
     parser.add_argument('--lan-ip', help='explicit private IPv4 address to serve on your trusted LAN (unencrypted HTTP)')
     parser.add_argument('--no-browser', action='store_true', help='print the one-use launch URL instead of opening a browser')
+    parser.add_argument('--reset-access-key', action='store_true', help='explicitly replace the saved access key and revoke remembered browsers')
     parser.add_argument('--state-dir', type=Path, default=state_directory())
     parser.add_argument('--port', type=int, default=0, help='controller port, default: reserve an available port')
     parser.add_argument('--wheel', type=Path, help='override bundled release with an operator-verified wheel')
@@ -84,15 +85,15 @@ def main(argv=None):
         except OSError:
             raise SystemExit('cannot bind controller address/port; choose an assigned local address and unused --port') from None
         origin = 'http://' + (args.lan_ip or '127.0.0.1') + ':' + str(listener.getsockname()[1])
+        from h3server.controller.access import LocalAccess
+        access = LocalAccess(args.state_dir)
+        credentials = access.reset() if args.reset_access_key else access.initialize()
+        if args.reset_access_key and (args.state_dir / 'lan-access.txt').exists():
+            access.export()
         lan_key = None
         if args.lan_ip:
-            import secrets, tempfile
-            from h3server.controller.preferences import Preferences
-            Preferences(args.state_dir)._prepare()
-            lan_key = secrets.token_urlsafe(32)
-            with tempfile.NamedTemporaryFile(mode='w',prefix='lan-access-',suffix='.txt',dir=args.state_dir,delete=False) as access:
-                access.write(f'LAN controller: {origin}\nAccess key: {lan_key}\n\nTrusted LAN only: HTTP is unencrypted. Key expires when this controller exits.\n')
-            print('LAN access key saved privately to: ' + access.name,flush=True)
+            lan_key = credentials['key']
+            print('LAN access key saved privately to: ' + str(access.export()),flush=True)
             print('LAN address: ' + origin + ' (unencrypted; trusted LAN only)',flush=True)
         app = create_app(state_dir=args.state_dir, origin=origin, release=release,lan_access_key=lan_key)
         url = origin + '/#token=' + app.state.session.bootstrap_token

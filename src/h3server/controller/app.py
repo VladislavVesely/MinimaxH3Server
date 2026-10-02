@@ -89,9 +89,13 @@ class LocalSecurity:
             await self.app(scope, receive, send)
             return
 
+        renew_cookie = None
+
         async def secured_send(message):
             if message["type"] == "http.response.start":
                 headers = [(k, v) for k, v in message.get("headers", []) if k.decode().lower() not in SECURITY_HEADERS]
+                if renew_cookie is not None and message.get('status', 500) < 400:
+                    headers.append((b'set-cookie', renew_cookie))
                 message = {**message, "headers": headers + [(k.encode(), v.encode()) for k, v in SECURITY_HEADERS.items()]}
             await send(message)
 
@@ -117,7 +121,7 @@ class LocalSecurity:
         if unsafe and scope.get("query_string"):
             await reject("invalid_request", 422)
             return
-        bootstrap = scope["path"] == API + "/bootstrap" or (self.lan and scope['path'] == API + '/lan-login')
+        bootstrap = scope['path'] in {API + '/bootstrap', API + '/session/restore'} or (self.lan and scope['path'] == API + '/lan-login')
         public = (scope["path"] in {"/", API + '/access'} or scope["path"] in WEB_ASSETS) and scope["method"] in {"GET", "HEAD"}
         if not public and not bootstrap:
             cookie_headers = headers.get("cookie", [])
@@ -138,6 +142,8 @@ class LocalSecurity:
             if unsafe and (len(csrf) != 1 or not self.session.csrf_valid(csrf[0])):
                 await reject("csrf_forbidden", 403)
                 return
+            if scope['path'] == API + '/status':
+                renew_cookie = self.session.cookie_header.encode('ascii')
         lengths = headers.get("content-length", [])
         if (len(lengths) > 1 or (lengths and not re.fullmatch(r"[0-9]{1,10}", lengths[0]))
                 or (lengths and "transfer-encoding" in headers)):
@@ -272,7 +278,7 @@ class ActionRequest(StrictRequest):
 def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None = None,
                connection: SSHConnection | None = None, socket_factory=socket.create_connection,
                transport_factory=paramiko.Transport, release=None, lan_access_key: str | None = None) -> FastAPI:
-    """No network/FS actions at construction; all SSH/scan IO runs in workers.
+    """Only private access-state IO at construction; all SSH/scan IO runs in workers.
 
     A supplied connection/session supports embedding and tests. Credentials are
     accepted only at the explicit authenticate step after host-key trust.
@@ -285,7 +291,9 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             raise ValueError('LAN mode requires an exact private IPv4 origin and an access key')
     if not match or int(match[2]) > 65535:
         raise ValueError("origin must be an exact loopback HTTP origin with an explicit port")
-    session = session if session is not None else BrowserSession()
+    if session is None:
+        from h3server.controller.access import LocalAccess
+        session = BrowserSession(store=LocalAccess(state_dir), access_key=lan_access_key)
     connection = connection if connection is not None else SSHConnection(
         state_dir, socket_factory=socket_factory, transport_factory=transport_factory)
 
@@ -302,7 +310,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         try:
             yield
         finally:
-            session.invalidate()
+            session.close()
             recovery.expire()
             expiry.cancel()
             await run_in_threadpool(setup.close)
@@ -435,11 +443,11 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         if len(login_attempts)>=10:
             raise ControllerError('lan_login_rate_limited',429)
         login_attempts.append(now)
-        if not hmac.compare_digest(body.token.get_secret_value().encode('utf-8',errors='surrogatepass'),lan_access_key.encode()):
+        if not hmac.compare_digest(body.token.get_secret_value().encode('utf-8',errors='surrogatepass'),(session.access_key or lan_access_key).encode()):
             raise ControllerError('lan_login_invalid',401)
         cookie,csrf=session.authorize_lan()
-        response=JSONResponse({'csrf_token':csrf})
-        response.set_cookie('h3_session',cookie,httponly=True,samesite='strict',path='/',max_age=int(session.session_ttl))
+        response=JSONResponse({'csrf_token':csrf, 'remember_token':session.remember_token})
+        response.set_cookie('h3_session',cookie,httponly=True,samesite='strict',path='/',max_age=session.cookie_max_age)
         return response
 
     @app.post(API + "/bootstrap")
@@ -448,9 +456,18 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         if tokens is None:
             raise ControllerError("bootstrap_invalid", 401)
         cookie, csrf = tokens
-        response = JSONResponse({"csrf_token": csrf})
-        response.set_cookie("h3_session", cookie, httponly=True, samesite="strict", path="/",
-                            max_age=int(session.session_ttl))
+        response = JSONResponse({'csrf_token':csrf, 'remember_token':session.remember_token})
+        response.set_cookie('h3_session',cookie,httponly=True,samesite='strict',path='/',max_age=session.cookie_max_age)
+        return response
+
+    @app.post(API + '/session/restore')
+    def restore_browser(body: BootstrapRequest):
+        tokens = session.restore(body.token.get_secret_value())
+        if tokens is None:
+            raise ControllerError('browser_access_invalid',401)
+        cookie, csrf = tokens
+        response = JSONResponse({'csrf_token':csrf, 'remember_token':session.remember_token})
+        response.set_cookie('h3_session',cookie,httponly=True,samesite='strict',path='/',max_age=session.cookie_max_age)
         return response
 
     @app.get(API + "/status")
@@ -460,7 +477,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
             if setup.active():
                 return {**setup.connection_status(),
                         'recovery': recovery.status(), 'setup': setup.status(),
-                        'csrf_token': session.csrf_token,
+                        'csrf_token': session.csrf_token, 'remember_token': session.remember_token,
                         'capabilities': {**CAPABILITIES, 'release_available': release is not None}}
             if recovery.active():
                 state = {'state': 'disconnected'}
@@ -474,7 +491,7 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
                 recovery_state = recovery.status()
                 if recovery_state['state'] == 'recovered':
                     state = connection.status()
-            return {**state, 'recovery': recovery_state, 'setup': setup.status(), "csrf_token": session.csrf_token,
+            return {**state, 'recovery': recovery_state, 'setup': setup.status(), "csrf_token": session.csrf_token, 'remember_token': session.remember_token,
                     "capabilities": {**CAPABILITIES, 'release_available': release is not None}}
 
     @app.get(API + "/fingerprint")

@@ -5,9 +5,12 @@
 Run the native executable; default is the deployment wizard. It reserves one IPv4
 loopback socket and hands **that socket** to the real ASGI server (no close/rebind
 race). Browser opening occurs after startup. `--no-browser` prints the one-use
-fragment URL to the local console. Tokens expire after 120 seconds; authenticated
-sessions after eight hours. Restart for a fresh token. Ctrl+C shuts down the local
-server, invalidates its session and closes SSH. Remote detached work is independent.
+fragment URL to the local console. Bootstrap tokens are one-use and expire after
+120 seconds, but authenticated sessions have no application timeout. The access
+key and trusted-browser credentials persist across restarts. Ctrl+C shuts down the
+local server and closes SSH without revoking browser access. Remote detached work
+is independent. `--reset-access-key` deliberately rotates the key and revokes old
+cookies/remembered grants. Clearing browser data also requires unlocking again.
 If a browser cannot be opened, use the printed URL; never publish the token.
 
 State defaults (`--state-dir` overrides):
@@ -16,7 +19,10 @@ State defaults (`--state-dir` overrides):
 - Linux: `$XDG_STATE_HOME/h3server` or `~/.local/state/h3server`
 - Windows: `%LOCALAPPDATA%\H3Server`
 
-Only the dedicated `known_hosts` trust store is persisted locally, not passwords.
+The dedicated `known_hosts` trust store and owner-only `local-access.json` browser
+credentials are persisted locally. LAN mode exports the stable key to
+`lan-access.txt`. SSH passwords are saved only with the existing explicit opt-in
+preferences; browser storage retains only an opaque remembered-access grant.
 POSIX checks ownership, regular-file type/link count and 0700/0600 permissions.
 Windows uses pywin32 security descriptors: current owner only, protected DACLs,
 no inherited group grants, no reparse/junction traversal or hardlinked trust files.

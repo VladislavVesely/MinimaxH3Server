@@ -97,3 +97,25 @@ def test_legacy_deploy_dispatch(monkeypatch):
     monkeypatch.setattr(cli, 'main', call)
     assert deploy.main(['deploy', '--no-browser']) == 0
     call.assert_called_once_with(['deploy', '--no-browser'])
+
+
+def test_access_survives_launches_until_explicit_reset(tmp_path, monkeypatch, capsys):
+    from h3server import __main__ as cli
+    from test_deploy import wheel
+    path = wheel(tmp_path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    keys = []
+    class Server:
+        def __init__(self, config):
+            keys.append(config.app.state.session.access_key)
+        def run(self, sockets):
+            self.launch()
+    monkeypatch.setattr(cli, 'BrowserServer', Server)
+    args = ['--no-browser', '--wheel', str(path), '--sha256', digest, '--state-dir', str(tmp_path / 'state')]
+    assert cli.main(args) == 0
+    assert cli.main(args) == 0
+    assert keys[0] and keys[0] == keys[1]
+    assert cli.main(args + ['--reset-access-key']) == 0
+    assert keys[2] != keys[1]
+    output = capsys.readouterr().out
+    assert all(key not in output for key in keys)

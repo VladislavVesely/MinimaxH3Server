@@ -238,8 +238,8 @@
     local_target_required: 'Select and connect the Local target first.',
     lan_login_invalid: 'Incorrect LAN access key. Read the key file on the controller computer.',
     lan_login_rate_limited: 'Too many login attempts. Wait one minute and retry.',
-    bootstrap_invalid: 'Session token is invalid or expired. Restart the local controller and open its new launch URL.',
-    session_required: 'Local session unavailable or expired. Open a fresh launch URL from the local controller.',
+    bootstrap_invalid: 'This one-use launch link is invalid, already used or expired. Open the controller’s current launch URL or enter its LAN access key.',
+    session_required: 'This browser is not unlocked. Open the controller’s launch URL or enter its saved LAN access key.',
     csrf_forbidden: 'The local session changed. Reload this page before trying again.',
     host_forbidden: 'This address is not the controller’s exact loopback address. Open its launch URL.',
     origin_forbidden: 'This request did not come from the controller’s own page. Open its launch URL.',
@@ -313,7 +313,37 @@
     log(message);
   }
 
-  async function request(path, body, {signal} = {}) {
+  const rememberedAccessKey = 'h3-remembered-access';
+  let browserRestoration = null;
+  function rememberBrowser(data) {
+    if (typeof data.remember_token !== 'string') return;
+    try { localStorage.setItem(rememberedAccessKey, data.remember_token); } catch (_) { /* Cookie-only access if storage is unavailable. */ }
+  }
+  async function restoreTrustedBrowser() {
+    if (browserRestoration) return browserRestoration;
+    let token;
+    try { token = localStorage.getItem(rememberedAccessKey); } catch (_) { return false; }
+    if (!token) return false;
+    browserRestoration = (async () => {
+      try {
+        const response = await fetch(API + '/session/restore', {method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
+        const data = await response.json();
+        if (!response.ok) {
+          if (response.status === 401 && data.error?.code === 'browser_access_invalid') {
+            try { localStorage.removeItem(rememberedAccessKey); } catch (_) { /* Storage unavailable. */ }
+          }
+          return false;
+        }
+        csrf = data.csrf_token;
+        rememberBrowser(data);
+        return true;
+      } catch (_) { return false; } // Preserve the grant on transient network failures.
+    })();
+    try { return await browserRestoration; } finally { browserRestoration = null; }
+  }
+
+  async function request(path, body, {signal, restore = true} = {}) {
     let response;
     try {
       response = await fetch(API + path, {
@@ -329,6 +359,10 @@
     try { data = await response.json(); } catch { throw { code: 'invalid_response' }; }
     if (!response.ok) {
       const code = data.error?.code || data.detail || (typeof data.error === 'string' ? data.error : null);
+      // Restore rejected reads only. Never automatically replay a mutation.
+      if (response.status === 401 && code === 'session_required' && body === undefined && restore && await restoreTrustedBrowser()) {
+        return request(path, undefined, {signal, restore:false});
+      }
       if (code === 'session_required' || code === 'csrf_forbidden') {
         ready = false;
         csrf = null;
@@ -336,6 +370,7 @@
       }
       throw { code };
     }
+    rememberBrowser(data);
     return data;
   }
 
@@ -1937,7 +1972,12 @@
       if (bootstrapToken) {
         const pending = request('/bootstrap', { token: bootstrapToken });
         bootstrapToken = null;
-        csrf = (await pending).csrf_token;
+        try { csrf = (await pending).csrf_token; }
+        catch (error) {
+          if (error.code !== 'bootstrap_invalid') throw error;
+          // A stale launch bookmark must not invalidate existing browser trust.
+          csrf = (await request('/status')).csrf_token;
+        }
       }
       await refresh();
       renderCatalog(await request('/profiles'));
