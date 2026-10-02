@@ -871,6 +871,13 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
         # Remote GenerationInput is authoritative; never forward auth/origin headers.
         return proxy.request('POST', '/api/v1/jobs', body=body)
 
+    from h3server.remote.app import FavoriteInput
+
+    @app.post(API + '/remote/jobs/{job_id}/favorite')
+    @observed
+    def remote_favorite(body: FavoriteInput, job_id: str = APIPath(pattern=r'^[0-9a-f]{32}$')):
+        return proxy.request('POST', f'/api/v1/jobs/{job_id}/favorite', body=body.model_dump())
+
     @app.post(API + '/remote/jobs/{job_id}/delete')
     @observed
     def remote_delete(job_id: str, body: EmptyRequest):

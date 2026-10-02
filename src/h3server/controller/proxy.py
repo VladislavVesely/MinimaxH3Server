@@ -86,7 +86,7 @@ class RemoteProxy:
 
     def request(self, method, path, *, body=None, range_header=None, binary=None):
         if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32})?|assets/[a-f0-9]{64}(?:/content)?|health|capabilities|settings/memory|models(?:/library)?|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/(?:video(?:\?download=true)?|last-frame|audio))?)', path)
-                or method == 'POST' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32}/(?:update|delete))?|assets/(?:image|video|audio)|settings/memory|models/(?:unload|install(?:/cancel)?)|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/(?:cancel|delete))?)', path)):
+                or method == 'POST' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32}/(?:update|delete))?|assets/(?:image|video|audio)|settings/memory|models/(?:unload|install(?:/cancel)?)|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/(?:cancel|delete|favorite))?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
         if binary is not None:
             from h3server.assets import MAX_BYTES

@@ -30,6 +30,11 @@ from h3server.remote.worker import BackendUnavailable, QueueFull, Worker, _direc
 from h3server.store import Store
 
 
+class FavoriteInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    favorite: StrictBool
+
+
 class EmptyInput(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
@@ -528,6 +533,12 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
             return _job_data(store, store.get_job(job_id), worker)
         except KeyError:
             raise HTTPException(404, "job_not_found") from None
+
+    @app.post('/api/v1/jobs/{job_id}/favorite')
+    def favorite_job(job_id: JobID, body: FavoriteInput):
+        try: job = store.set_job_favorite(job_id, body.favorite)
+        except KeyError: raise HTTPException(404, 'job_not_found') from None
+        return {'job_id':job.job_id, 'favorite':job.favorite}
 
     @app.post('/api/v1/jobs/{job_id}/delete')
     def delete_job(job_id: JobID):

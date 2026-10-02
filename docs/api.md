@@ -140,6 +140,22 @@ negative prompts/guidance, reference inputs and any supplied `sparse_attention`
 identifiers, not filesystem/URL inputs; unsupported formats/options fail validation.
 Consult live capability/readiness before submitting.
 
+### Generation favorites
+
+Authenticated `POST /api/v1/jobs/{job_id}/favorite` accepts exactly
+`{"favorite": true}` or `{"favorite": false}`. Returns `job_id` and `favorite`.
+The value must be a JSON boolean; extras/malformed identifiers are rejected (422),
+unknown jobs return 404. Controller route:
+`/api/v1/controller/remote/jobs/{job_id}/favorite`, protected by session/Origin/CSRF.
+Job GET/list documents include `favorite`, default false for legacy jobs.
+
+Favorites belong to the generation server and persist across clients/restarts,
+including queued/running jobs through completion. Setting the same value is
+idempotent; concurrent client writes use last committed desired state. Favorites
+do not alter inputs, status, timings, output, ordering or deletion policy. No
+additional polling timer is introduced. Clear favorites before rolling back to
+older server releases which cannot decode the additive favorite metadata.
+
 ### Server-wide runtime memory policy
 
 Authenticated `GET /api/v1/settings/memory` returns `settings`, canonical `revision`,

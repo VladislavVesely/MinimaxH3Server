@@ -165,6 +165,9 @@ def _request_data(request: JobRequest) -> dict:
 
 def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     request = _load(row["request"])
+    favorite = request.pop('_favorite', False) if type(request) is dict else False
+    if type(favorite) is not bool:
+        raise ValueError('invalid favorite metadata')
     timing = request.pop('_timing', None) if type(request) is dict else None
     if timing is not None:
         timing = JobTiming(**_keys(timing, {'queued_at', 'started_at', 'finished_at'}))
@@ -185,7 +188,7 @@ def _decode_job(row: sqlite3.Row) -> tuple[Job, OutputMetadata | None]:
     if type(request["loras"]) is not list:
         raise ValueError("invalid LoRA list")
     request["loras"] = tuple(request["loras"])
-    job = Job(_identifier(row["job_id"]), JobRequest(**request), JobStatus(row["status"]), timing)
+    job = Job(_identifier(row["job_id"]), JobRequest(**request), JobStatus(row["status"]), timing, favorite)
     output = None
     if row["output"] is not None:
         data = _load(row["output"])
@@ -389,6 +392,20 @@ class Store:
         with self._transaction() as db:
             return self._job(db, job_id)[0]
 
+    def set_job_favorite(self, job_id: str, favorite: bool) -> Job:
+        _identifier(job_id)
+        if type(favorite) is not bool:
+            raise ValueError('favorite must be boolean')
+        with self._transaction(write=True) as db:
+            job = self._job(db, job_id)[0]
+            if job.favorite == favorite:
+                return job
+            payload = _load(db.execute('SELECT request FROM jobs WHERE job_id=?', (job_id,)).fetchone()[0])
+            if favorite: payload['_favorite'] = True
+            else: payload.pop('_favorite', None)
+            db.execute('UPDATE jobs SET request=? WHERE job_id=?', (_dump(payload), job_id))
+            return self._job(db, job_id)[0]
+
     def get_job_output(self, job_id: str) -> OutputMetadata | None:
         with self._transaction() as db:
             return self._job(db, job_id)[1]
@@ -461,14 +478,15 @@ class Store:
             timing = JobTiming(timing.queued_at, timing.started_at)
         else:
             timing = JobTiming(timing.queued_at, timing.started_at, now)
-        request_payload = _dump({**_request_data(job.request), '_timing': asdict(timing)})
+        request_payload = _dump({**_request_data(job.request), '_timing': asdict(timing),
+                               **({'_favorite': True} if job.favorite else {})})
         db.execute("UPDATE jobs SET status=?, output=?, request=? WHERE job_id=?",
                    (target.value, payload, request_payload, job_id))
         stage_status = {JobStatus.QUEUED: StageStatus.PENDING, JobStatus.RUNNING: StageStatus.RUNNING,
                         JobStatus.COMPLETED: StageStatus.COMPLETED, JobStatus.CANCELLED: StageStatus.CANCELLED,
                         JobStatus.FAILED: StageStatus.FAILED, JobStatus.INTERRUPTED: StageStatus.FAILED}[target]
         self._append(db, "job", job_id, Event(target.value, stage_status))
-        return Job(job_id, job.request, target, timing)
+        return Job(job_id, job.request, target, timing, job.favorite)
 
     def transition_job(self, job_id: str, target: JobStatus, *, output: OutputMetadata | None = None) -> Job:
         with self._transaction(write=True) as db:

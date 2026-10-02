@@ -324,3 +324,4 @@ class Job:
     request: JobRequest
     status: JobStatus = JobStatus.QUEUED
     timing: JobTiming | None = None
+    favorite: bool = False

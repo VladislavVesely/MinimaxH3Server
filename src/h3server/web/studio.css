@@ -158,7 +158,13 @@ h3 { font-size:15px; }
 .job-card[data-status=completed] { border-left:3px solid #72c69c; }
 .job-card[data-status=running] { border-left:3px solid #8e7dff; }
 .job-card[data-status=failed] { border-left:3px solid #d97b83; }
-.job-heading { gap:9px; }
+.job-card { position:relative; }
+.job-card[data-favorite=true] { background:#fffaf0; border-color:#e5c572; box-shadow:0 3px 12px #b57d1110; }
+.job-heading { gap:9px; padding-right:42px; }
+.favorite-star { position:absolute; top:12px; right:12px; width:34px; height:34px; min-width:34px; min-height:34px; padding:0; border-radius:50%; font-size:24px; line-height:1; color:#71809b; background:#fff; border:1px solid #dce3f0; }
+.favorite-star[aria-pressed=true] { color:#946000; background:#fff0b5; border-color:#d5a137; }
+.favorite-star:hover { background:#fff5d8; }
+.favorite-star:focus-visible { outline:3px solid #8e7dff; outline-offset:2px; }
 .job-heading h4 { font-size:12px; }
 .job-card video { border-radius:8px; background:#151c2b; max-height:340px; }
 .job-output-actions button,.job-output-actions a { font-size:11px; min-height:33px; }

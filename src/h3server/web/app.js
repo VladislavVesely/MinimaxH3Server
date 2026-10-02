@@ -1491,6 +1491,7 @@
       let card = jobCards.get(job.job_id);
       if (!card) {
         const item = node('article', undefined, 'job-card');
+        item.dataset.jobId = job.job_id;
         const status = node('p');
         const output = node('div');
         const heading = node('div', undefined, 'job-heading');
@@ -1523,7 +1524,28 @@
           if (busy || reuse.disabled) return;
           void perform('Prefilling saved generation inputs…', () => reuseJobInputs(currentJobs.find(value => value.job_id === job.job_id) || job));
         });
-        heading.append(selectionLabel, title, logs, reuse, remove);
+        const favorite = node('button', '☆', 'favorite-star'); favorite.type = 'button';
+        favorite.addEventListener('click', event => {
+          event.stopPropagation();
+          if (busy || favorite.disabled || card.favoritePending) return;
+          const desired = !card.favoriteValue;
+          card.favoritePending = true; favorite.disabled = true;
+          void perform(desired ? 'Adding generation to favorites…' : 'Removing generation from favorites…', async () => {
+            try {
+              const result = await request('/remote/jobs/' + job.job_id + '/favorite', {favorite:desired});
+              if (jobCards.get(job.job_id) !== card) return;
+              const current = currentJobs.find(value => value.job_id === job.job_id);
+              if (current) current.favorite = result.favorite;
+              reconcileJobs(currentJobs);
+              // Supersede pre-save reads so stale polling cannot undo the star.
+              await dashboard();
+            } finally {
+              card.favoritePending = false;
+              if (jobCards.get(job.job_id) === card) reconcileJobs(currentJobs);
+            }
+          });
+        });
+        heading.append(selectionLabel, title, logs, reuse, remove, favorite);
         const meter = node('progress'); meter.setAttribute('aria-label', `Progress for job ${job.job_id.slice(0, 8)}`);
         const detail = node('p', undefined, 'job-detail');
         const settings = job.request?.settings;
@@ -1531,13 +1553,22 @@
         const timing = node('p', undefined, 'job-timing');
         timing.title = 'Current attempt: Run includes loading, sampling and encoding. Total includes queue waiting.';
         item.append(heading, caption, jobInputs(job.request), status, timing, meter, detail, output);
-        card = { item, status, timing, meter, detail, output, remove, cancel: null, outputIdentity: null };
+        card = { item, status, timing, meter, detail, output, remove, favorite, favoritePending:false, favoriteValue:false, cancel: null, outputIdentity: null };
         jobCards.set(job.job_id, card);
         $('jobs').insertBefore(item, nextItem);
       }
       if (card.item !== nextItem) $('jobs').insertBefore(card.item, nextItem);
       nextItem = card.item.nextElementSibling;
       card.item.dataset.status = job.status;
+      card.favoriteValue = job.favorite === true;
+      card.item.dataset.favorite = String(card.favoriteValue);
+      card.favorite.hidden = typeof job.favorite !== 'boolean';
+      card.favorite.disabled = busy || card.favoritePending;
+      const starGlyph = card.favoriteValue ? '★' : '☆';
+      if (card.favorite.textContent !== starGlyph) card.favorite.textContent = starGlyph;
+      card.favorite.setAttribute('aria-pressed', String(card.favoriteValue));
+      card.favorite.setAttribute('aria-label', `${card.favoriteValue ? 'Remove from' : 'Add to'} favorites: job ${job.job_id.slice(0,8)}`);
+      card.favorite.title = card.favoriteValue ? 'Remove from favorites' : 'Add to favorites';
       card.remove.disabled = busy || ['queued', 'running'].includes(job.status);
       card.remove.title = ['queued', 'running'].includes(job.status) ? 'Cancel this job first, then wait for it to stop before deleting.' : 'Permanently delete this job and its unshared files';
       const phase = jobPhases.get(job.job_id);
