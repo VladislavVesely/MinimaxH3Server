@@ -78,6 +78,8 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     import comfy.options
     comfy.options.enable_args_parsing(False)
     from comfy.cli_args import args, LatentPreviewMethod
+    from h3server.runtime_memory import configure_comfy
+    memory_policy = configure_comfy(args)
     args.cpu = cpu_smoke
     args.use_sage_attention = False  # Start from the dense default; route per request below.
     if sage_attention:
@@ -95,6 +97,7 @@ def load_runtime(environment, paths, snapshot, selected, *, cpu_smoke=False, pre
     # Long-lived host caches must remain pageable. The upstream automatic pinned
     # budget can lock most of a 32-GB host and OOM on the second encoder transfer.
     args.disable_pinned_memory = resident
+    print('Runtime memory policy: ' + json.dumps(memory_policy, sort_keys=True) + '; headroom is a target, not an OOM guarantee.', flush=True)
     # folder_paths creates input_directory on import. Validate its parent before
     # letting that upstream side effect run, including on an interrupted restart.
     with directory(paths, 'tmp/comfy/input', create=True):

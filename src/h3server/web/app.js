@@ -69,6 +69,10 @@
     changed:() => { render(); scheduleEstimate(); },
     isConnected:() => connection.state === 'authenticated', isBusy:() => busy || setup.busy
   });
+  const memorySettings = window.H3MemorySettings?.create({request,
+    run:fn=>perform('Applying server memory settings…',fn),
+    onApplied:async()=>{estimateKey=null;estimateContext='';await dashboard();}
+  });
   const jobSelection = window.H3JobSelection?.create({
     run: action => perform('Deleting selected jobs and their files…', action),
     remove: async id => {
@@ -588,7 +592,8 @@
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
-    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady, busy,
+    memorySettings?.context({connected:ready&&authenticated,target:{...lastTarget,mode:connection.mode||'ssh',fingerprint:connection.fingerprint},busy:busy||setup.busy||modelState.busy});
+    globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady, busy, memorySettings,
       licenseReady:!!modelLicenseDigest, multiRuntimeSetup:capabilities.multi_runtime_setup===true, applyComponents, cancelComponents, bootstrapComponents});
   }
 

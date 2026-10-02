@@ -417,6 +417,24 @@ def create_app(store: Store, worker: Worker, *, token: str, heartbeat_seconds: f
         if code==206:headers['Content-Range']=f'bytes {start}-{end}/{size}'
         return StreamingResponse(chunks(),status_code=code,media_type=info['mime'],headers=headers,background=BackgroundTask(stream.close))
 
+    from h3server.runtime_memory import MemorySettingsRequest
+
+    @app.get('/api/v1/settings/memory')
+    def memory_settings():
+        try: return worker.memory_settings()
+        except (OSError, ValueError):
+            raise HTTPException(503, 'memory_settings_unavailable') from None
+
+    @app.post('/api/v1/settings/memory')
+    def update_memory_settings(payload: MemorySettingsRequest):
+        try: return worker.update_memory_settings(payload.settings, payload.revision)
+        except ValueError as error:
+            code = {'memory settings busy':'memory_settings_busy', 'memory settings changed':'memory_settings_changed',
+                    'memory settings unsupported':'memory_settings_unsupported'}.get(str(error))
+            raise HTTPException(409 if code else 503, code or 'memory_settings_unavailable') from None
+        except OSError:
+            raise HTTPException(503, 'memory_settings_unavailable') from None
+
     @app.get('/api/v1/models')
     def models_status():
         return worker.models_status()

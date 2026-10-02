@@ -284,6 +284,9 @@ pathlib.Path(request['output_path']).write_bytes(b'TEST ONLY fixture-mp4 bytes, 
         daemon_paths = AppPaths(Path(temporary)/'fixture-daemon') if os.environ.get('H3_TEST_CONTROLLED_SETUP') == 'stale-release' else paths
         for directory in daemon_paths.directories(): directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         store = Store(daemon_paths.state/'remote.sqlite')
+        if os.environ.get('H3_TEST_MEMORY_SETTINGS') == '1':
+            # TEST ONLY policy API seam. These tests never submit GPU/fixture jobs.
+            backend = replace(backend, resident=True)
         worker = Worker(store, daemon_paths, backend=backend, min_free_bytes=0)
         daemon = remote_app(store, worker, token=load_token(daemon_paths), heartbeat_seconds=.2)
         remote_listener.bind(('127.0.0.1',0))

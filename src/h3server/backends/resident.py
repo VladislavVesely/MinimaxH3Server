@@ -109,8 +109,10 @@ def hardware(rt,runtime_id):
         driver=p.stdout.decode().splitlines()[0].strip()[:64]
     except (OSError,subprocess.SubprocessError,IndexError,UnicodeError):pass
     revision=hashlib.sha256()
-    for name in ('resident.py','pruned.py','h3.py','sparse.py','turbo.py','conditioning.py','reference.py','../assets.py','../performance.py'):
+    for name in ('resident.py','pruned.py','h3.py','sparse.py','turbo.py','conditioning.py','reference.py','../assets.py','../performance.py','../runtime_memory.py'):
         revision.update((Path(__file__).parent/name).read_bytes())
+    from h3server.runtime_memory import encoded, startup_settings
+    revision.update(encoded(startup_settings()).encode())
     return {'gpus':[{'name':torch.cuda.get_device_name(i),'vram_bytes':torch.cuda.get_device_properties(i).total_memory,
                      'compute_capability':list(torch.cuda.get_device_capability(i))} for i in range(torch.cuda.device_count())],
             'active_gpu':torch.cuda.current_device(),'cpu_model':cpu,'logical_cpus':os.cpu_count(),'ram_bytes':ram,

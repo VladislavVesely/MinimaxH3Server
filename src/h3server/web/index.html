@@ -11,6 +11,7 @@
   <script src="/assets/job-selection.js" defer></script>
   <script src="/assets/software.js" defer></script>
   <script src="/assets/characters.js" defer></script>
+  <script src="/assets/memory-settings.js" defer></script>
   <script src="/assets/app.js" defer></script>
   <script src="/assets/studio.js" defer></script>
 </head>
@@ -19,7 +20,7 @@
   <aside class="sidebar" aria-label="Studio navigation">
     <a class="brand" href="#main" aria-label="H3 Server home"><span class="brand-mark">H3</span><span>H3 Server<small>SELF-HOSTED STUDIO</small></span></a>
     <p class="nav-label">WORKSPACE</p>
-    <nav aria-label="Workspace"><a class="nav-item selected" data-workspace="install" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Install <span class="nav-tag">01</span></a><a class="nav-item" data-workspace="generate" href="#generation"><span aria-hidden="true">▷</span> Generate <span class="nav-tag">02</span></a><a class="nav-item" data-workspace="history" href="#history"><span aria-hidden="true">◷</span> History <span class="nav-tag">03</span></a><a class="nav-item" data-workspace="joiner" href="#joiner"><span aria-hidden="true">⇥</span> Video joiner <span class="nav-tag">04</span></a></nav>
+    <nav aria-label="Workspace"><a class="nav-item selected" data-workspace="install" href="#connection" aria-current="page"><span aria-hidden="true">◈</span> Install <span class="nav-tag">01</span></a><a class="nav-item" data-workspace="generate" href="#generation"><span aria-hidden="true">▷</span> Generate <span class="nav-tag">02</span></a><a class="nav-item" data-workspace="history" href="#history"><span aria-hidden="true">◷</span> History <span class="nav-tag">03</span></a><a class="nav-item" data-workspace="joiner" href="#joiner"><span aria-hidden="true">⇥</span> Video joiner <span class="nav-tag">04</span></a><a class="nav-item" data-workspace="settings" href="#memory-settings"><span aria-hidden="true">⚙</span> Settings <span class="nav-tag">05</span></a></nav>
     <div class="steps-wrap"><p class="nav-label">SETUP CHECKLIST</p><ol class="steps">
       <li id="step-connect" aria-current="step"><span class="step-number">1</span><span>Connect securely<small>Verify identity &amp; sign in</small></span></li>
       <li id="step-scan"><span class="step-number">2</span><span>Discover hardware<small>Read-only observations</small></span></li>
@@ -200,6 +201,22 @@
         <div class="joiner-actions"><button id="joiner-play" type="button" disabled>Play sequence</button><button id="joiner-export" class="primary" type="button" disabled>Export joined video</button><a id="joiner-download" download="joined.mp4" hidden>Download joined MP4</a><button id="joiner-clear" type="button" disabled>Clear workspace</button></div>
         <p id="joiner-status" role="status" aria-live="polite">Securing local session…</p>
         <p class="field-hint">Preview switches between originals and may pause briefly at cuts. Compatible exports retain encoded quality, though MP4/AAC padding can affect audio seams. Approved conversion re-encodes to the first clip’s size and frame rate with aspect-preserving padding; it may reduce quality. No trimming or transitions. Temporary copies/exports last until Clear workspace or controller exit; download exports to keep them. Reloading loses timeline order. Original files and History jobs are never deleted here.</p>
+      </section>
+      <section class="panel" id="memory-settings" aria-labelledby="memory-heading">
+        <div class="panel-heading"><h2 id="memory-heading">GPU memory settings</h2><button id="memory-refresh" type="button" disabled>Reload saved settings</button></div>
+        <p class="field-hint">Saved on the generation server and shared across clients. Changes require an idle queue with no maintenance. Applying changed settings releases resident models; the next GPU worker uses the new policy. No jobs are cancelled and resolution, frames and prompts stay unchanged.</p>
+        <form id="memory-form"><fieldset id="memory-fields" disabled><legend>Runtime memory policy</legend>
+          <label class="check-label"><input id="memory-auto" type="checkbox" checked> <span>Automatic GPU headroom (runtime default)</span></label>
+          <div class="field"><label for="memory-reserve">GPU headroom (GiB)</label><input id="memory-reserve" type="number" min="0" max="64" step="0.25" value="4" disabled></div>
+          <p class="field-hint">Extra GPU memory reserved when deciding how many weights to load. This is a target, not a hard allocation cap or an OOM guarantee. More headroom can increase CPU offloading, RAM use and latency. Zero removes the extra reserve. Auto preserves the upstream default.</p>
+          <div class="field"><label for="memory-offload">Offloading mode</label><select id="memory-offload"><option value="automatic">Automatic</option><option value="low_vram">Low VRAM · more CPU offloading</option></select></div>
+          <label class="check-label"><input id="memory-expandable" type="checkbox"> <span>Expandable CUDA allocations</span></label>
+          <p class="field-hint allocator-flag"><code>PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True</code> is set before PyTorch loads. It may reduce allocation fragmentation on supported CUDA systems, but cannot create more VRAM. Disabling uses the allocator default in a fresh worker.</p>
+          <button id="memory-apply" class="primary" type="submit" disabled>Apply memory settings</button>
+        </fieldset></form>
+        <button id="memory-defaults" type="button" disabled>Restore defaults to draft</button>
+        <p id="memory-status" role="status" aria-live="polite">Connect a generation server to load its settings.</p>
+        <p class="field-hint">Applies to pruned H3/ComfyUI runtimes. Low-VRAM offloading is separate from Turbo’s weight-merging option and does not enable that option or alter quantization.</p>
       </section>
       </div>
       <aside class="activity panel" aria-labelledby="activity-heading"><div class="panel-heading"><h2 id="activity-heading">Session activity</h2><span class="tiny-dot" aria-hidden="true"></span></div><p class="field-hint">Local operation summaries, not a remote log stream. No credentials are recorded.</p><div class="operation-status"><p id="operation" role="status">Waiting for a local session.</p><progress id="progress" aria-label="Current operation; completion is not measurable" hidden></progress><p id="progress-note" class="field-hint" hidden>Working… duration and percentage are not reported by the controller.</p></div><ol id="activity-log" role="log" aria-label="Session activity log" aria-live="polite" aria-relevant="additions"></ol><div class="activity-footer">SAFE BY DESIGN<p>Scanning does not install packages, download models, or modify the server.</p></div></aside>

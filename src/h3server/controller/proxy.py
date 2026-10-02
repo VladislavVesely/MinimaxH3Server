@@ -76,14 +76,17 @@ class RemoteProxy:
         data = asyncio.run(collect())
         if response.status_code >= 400:
             detail = json.loads(data).get('detail')
+            if path == '/api/v1/settings/memory':
+                safe = {'memory_settings_unavailable','memory_settings_busy','memory_settings_changed','memory_settings_unsupported'}
+                raise ControllerError(detail if detail in safe else 'memory_settings_unavailable', response.status_code)
             if detail in ('turbo_selection_changed', 'sparse_selection_changed'):
                 raise ControllerError(detail)
             raise ControllerError('optional_install_busy_or_unsupported')
         return json.loads(data)
 
     def request(self, method, path, *, body=None, range_header=None, binary=None):
-        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32})?|assets/[a-f0-9]{64}(?:/content)?|health|capabilities|models(?:/library)?|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/(?:video(?:\?download=true)?|last-frame|audio))?)', path)
-                or method == 'POST' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32}/(?:update|delete))?|assets/(?:image|video|audio)|models/(?:unload|install(?:/cancel)?)|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/(?:cancel|delete))?)', path)):
+        if not (method == 'GET' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32})?|assets/[a-f0-9]{64}(?:/content)?|health|capabilities|settings/memory|models(?:/library)?|performance(?:\?offset=[0-9]{1,10})?|features/(?:sageattention|turbo|sparse|reference)|jobs(?:\?limit=1000)?|events\?after=[0-9]{1,19}&follow=false|jobs/[a-f0-9]{32}(?:/(?:video(?:\?download=true)?|last-frame|audio))?)', path)
+                or method == 'POST' and re.fullmatch(r'/api/v1/(?:characters(?:/[a-f0-9]{32}/(?:update|delete))?|assets/(?:image|video|audio)|settings/memory|models/(?:unload|install(?:/cancel)?)|performance/estimate|features/(?:sageattention|turbo|sparse|reference)|jobs(?:/[a-f0-9]{32}/(?:cancel|delete))?)', path)):
             raise ControllerError('proxy_route_forbidden', 404)
         if binary is not None:
             from h3server.assets import MAX_BYTES

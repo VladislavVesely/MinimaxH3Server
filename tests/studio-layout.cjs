@@ -10,7 +10,7 @@ const {chromium,webkit}=require('./browser/node_modules/@playwright/test');
    const file=path.join('src/h3server/web',path.basename(pathname));return fs.existsSync(file)?route.fulfill({path:file,contentType:pathname.endsWith('.css')?'text/css':'application/javascript'}):route.fulfill({status:404,body:''});
   });
   await page.goto('http://studio.test/');
-  assert.equal(await page.locator('[data-workspace]').count(),4,'Four distinct studio workspaces must exist');
+  assert.equal(await page.locator('[data-workspace]').count(),5,'Five distinct studio workspaces include server Settings');
   await page.evaluate(()=>H3Studio.update({connection:{state:'authenticated'},runtimeReady:false}));
   assert.equal(await page.locator('#connection').isVisible(),true,'Unknown readiness keeps Install visible');
   await page.evaluate(()=>H3Studio.update({connection:{state:'authenticated'},runtimeReady:true}));

@@ -31,6 +31,11 @@ def configuration(request, paths=None):
         if paths is None:raise ValueError('Conditioned measurements require resolved asset geometry')
         result['conditioning_shapes']={key:[[v['width'],v['height'],v['frames'],round(v['duration'],3)] for v in values]
                                        for key,values in AssetStore(paths).conditioning(request.settings).items()}
+    if paths is not None:
+        from h3server.runtime_memory import load, DEFAULTS
+        policy = load(paths)
+        if policy != DEFAULTS:
+            result['runtime_memory'] = policy
     result['loras']=list(request.loras)
     result['prompt_length_bucket']=((len(request.prompt)+255)//256)*256
     from h3server.backends.catalog import get_artifact_set, PRUNED_PROFILE_NAMES

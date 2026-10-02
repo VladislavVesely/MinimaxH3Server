@@ -140,6 +140,26 @@ negative prompts/guidance, reference inputs and any supplied `sparse_attention`
 identifiers, not filesystem/URL inputs; unsupported formats/options fail validation.
 Consult live capability/readiness before submitting.
 
+### Server-wide runtime memory policy
+
+Authenticated `GET /api/v1/settings/memory` returns `settings`, canonical `revision`,
+`supported`, `busy`, `loaded`, and `applies_to: "next_gpu_worker"`.
+`POST` accepts exactly `{ "settings": { "reserve_vram_gib": null,
+"offload_mode": "automatic", "expandable_segments": false }, "revision": "<64 hex>" }`.
+Headroom is Auto (`null`) or a finite number from 0 to 64 GiB; offloading is
+`automatic` or `low_vram`; allocator enablement is strictly boolean. Defaults are
+unchanged. Unknown fields/invalid values return 422. Busy/maintenance, unsupported
+backends, or changed revisions return 409; malformed stored policy returns 503.
+Changed settings are persisted and idle resident models released under the same
+lock as queue submission. No job is cancelled. Identical settings are a no-op.
+
+Controller browser routes are `/api/v1/controller/remote/settings/memory`.
+GET also returns a `target_key`; POST must include that key alongside the remote
+body. It binds the draft to the connected SSH identity/local account and is checked
+under the connection lock before forwarding; changing targets returns 409 without
+forwarding. Host/Origin/session/CSRF protections still apply. No arbitrary process
+environment, runtime arguments, paths or allocator strings are accepted.
+
 ### Events, errors and retention
 
 SSE `event: job` includes numeric `id` and a durable event record. Cursors are

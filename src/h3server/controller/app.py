@@ -48,6 +48,7 @@ CAPABILITIES = {"scan": True, "installer": True, "generation": True, "multi_runt
 WEB_ASSETS = {"/assets/app.js": ("app.js", "text/javascript"),
               "/assets/studio.js": ("studio.js", "text/javascript"),
               "/assets/characters.js": ("characters.js", "text/javascript"),
+              "/assets/memory-settings.js": ("memory-settings.js", "text/javascript"),
               "/assets/software.js": ("software.js", "text/javascript"),
               "/assets/studio.css": ("studio.css", "text/css"),
               "/assets/job-timing.js": ("job-timing.js", "text/javascript"),
@@ -797,6 +798,32 @@ def create_app(*, state_dir: Path, origin: str, session: BrowserSession | None =
     @observed
     def remote_model_install_cancel(body: dict = Body()):
         return proxy.request('POST', '/api/v1/models/install/cancel', body=body)
+
+    from h3server.runtime_memory import MemorySettingsRequest
+
+    class ControllerMemorySettingsRequest(MemorySettingsRequest):
+        target_key: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+    def memory_target_key():
+        import hashlib, json
+        state = connection.status()
+        identity = [state.get('mode','ssh'), state.get('fingerprint'), getattr(connection,'_host_id',None),
+                    getattr(connection,'_username',None), getattr(connection,'_local_home',None) if state.get('mode')=='local' else None]
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+    @app.get(API + '/remote/settings/memory')
+    @observed
+    def remote_memory_settings():
+        with connection.lock:
+            return {**proxy.request_json('GET', '/api/v1/settings/memory'), 'target_key':memory_target_key()}
+
+    @app.post(API + '/remote/settings/memory')
+    @observed
+    def remote_memory_settings_update(body: ControllerMemorySettingsRequest):
+        with connection.lock:
+            if body.target_key != memory_target_key():
+                raise ControllerError('memory_settings_target_changed')
+            return proxy.request('POST', '/api/v1/settings/memory', body=body.model_dump(exclude={'target_key'}))
 
     @app.get(API + '/remote/models')
     @observed

@@ -226,6 +226,35 @@ class Worker:
             self._drop_resident()
             return self.models_status()
 
+    def memory_settings(self):
+        from h3server.runtime_memory import load, revision
+        with self._lock:
+            settings = load(self.paths)
+            state = self.maintenance_status()
+            return {'settings':settings, 'revision':revision(settings), 'supported':self.backend.resident,
+                    'busy':not state['idle'] or bool(state['active']),
+                    'loaded':self._alive(self._resident_process), 'applies_to':'next_gpu_worker'}
+
+    def update_memory_settings(self, settings, expected_revision):
+        from h3server.runtime_memory import validate, PATH
+        from h3server.backends.base import atomic_json
+        settings = validate(settings)
+        with self._lock:
+            current = self.memory_settings()
+            if not current['supported']:
+                raise ValueError('memory settings unsupported')
+            if current['busy']:
+                raise ValueError('memory settings busy')
+            if expected_revision != current['revision']:
+                raise ValueError('memory settings changed')
+            if settings != current['settings']:
+                # Submit/claim/apply share this lock; no accepted work is cancelled.
+                atomic_json(self.paths, PATH, {'schema':1, 'settings':settings})
+                self._drop_resident()
+                self._hardware = None
+                self._job_estimates.clear()
+            return self.memory_settings()
+
     def selected_backend(self, profile):
         backend = self.backend.backend_for_profile(profile) if self.backend.backend_for_profile else self.backend
         if not isinstance(backend, Backend):
@@ -512,6 +541,8 @@ class Worker:
         result.update(self.paths.cache_environment())
         result.update({"HOME": str(self.paths.root), "PYTHONUNBUFFERED": "1", "PYTHONNOUSERSITE": "1",
                        "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        from h3server.runtime_memory import environment, load
+        result.update(environment(load(self.paths)))
         return result
 
     def _execute(self, job):

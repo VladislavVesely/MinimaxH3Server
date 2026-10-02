@@ -5,12 +5,13 @@
   const $=id=>document.getElementById(id);
   const make=(tag,cls,value)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(value!==undefined)el.textContent=value;return el;};
   const text=(el,value)=>{if(el.textContent!==value)el.textContent=value;};
-  const pages={install:['Set up your studio','Connect your machine and choose the components you want to keep.'],generate:['Generation studio','Bring your ideas to life. Your current generations stay right here.'],history:['Your generation history','Revisit results, reuse their inputs or bring a clip into the joiner.'],joiner:['Your next sequence','Arrange whole clips on the timeline. Keep their original encoded quality.']};
+  const pages={install:['Set up your studio','Connect your machine and choose the components you want to keep.'],generate:['Generation studio','Bring your ideas to life. Your current generations stay right here.'],history:['Your generation history','Revisit results, reuse their inputs or bring a clip into the joiner.'],joiner:['Your next sequence','Arrange whole clips on the timeline. Keep their original encoded quality.'],settings:['Server settings','Adjust GPU memory headroom and allocator behavior for future generations.']};
   const host=document.querySelector('.setup-panels'),views={};
   for(const key of Object.keys(pages)){const view=make('div','studio-view studio-'+key);view.id='workspace-'+key;view.hidden=true;host.append(view);views[key]=view;}
   views.install.append(document.querySelector('.steps-wrap'));
   const setupTop=make('div','setup-overview');views.install.append(setupTop);setupTop.append($('connection'),$('scan-panel'));views.install.append($('installation'));
   const generationLayout=make('div','generation-layout'),queueHost=make('div','current-host');views.generate.append(generationLayout);generationLayout.append($('generation'),queueHost);views.joiner.append($('joiner'));
+  views.settings.append($('memory-settings'));
   const jobPanel=$('current-queue');queueHost.append(jobPanel);
   const sidebarStatus=make('div','sidebar-connection');sidebarStatus.setAttribute('role','status');sidebarStatus.append(make('span','connection-light'),make('strong',null,'Not connected'),make('small',null,'Choose Local or SSH in Install.'));document.querySelector('.sidebar-note').replaceWith(sidebarStatus);
   const activity=document.querySelector('.activity'),activityDrawer=make('details','activity-drawer');activityDrawer.append(make('summary',null,'Session activity & diagnostics'),activity);document.querySelector('.work-grid').after(activityDrawer);
@@ -49,7 +50,8 @@
     for(const [name,view] of Object.entries(views))view.hidden=name!==key;
     if(key==='generate'||key==='history'){const parent=key==='generate'?queueHost:views.history;if(jobPanel.parentElement!==parent){parent.append(jobPanel);if(jobPanel.contains(active))active.focus({preventScroll:true});}const button=$('jobs-tab-'+(key==='generate'?'current':'history'));if(tab&&button.getAttribute('aria-selected')!=='true')button.click();}
     for(const link of document.querySelectorAll('[data-workspace]')){const active=link.dataset.workspace===key;link.classList.toggle('selected',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}
-    text($('page-title'),pages[key][0]);text($('page-description'),pages[key][1]);const label=key==='generate'?'Generate':key==='joiner'?'Video joiner':key==='history'?'History':'Install';text(document.querySelector('.topbar strong'),label);document.title='H3 Studio · '+label;document.body.dataset.studioView=key;text(jobPanel.querySelector('.queue-heading h3'),key==='history'?'Generation history':'Current generations');
+    text($('page-title'),pages[key][0]);text($('page-description'),pages[key][1]);const label=key==='generate'?'Generate':key==='joiner'?'Video joiner':key==='history'?'History':key==='settings'?'Settings':'Install';text(document.querySelector('.topbar strong'),label);document.title='H3 Studio · '+label;document.body.dataset.studioView=key;text(jobPanel.querySelector('.queue-heading h3'),key==='history'?'Generation history':'Current generations');
+    context.memorySettings?.visible(key==='settings');
     if(changed&&focus){$('page-title').tabIndex=-1;$('page-title').focus({preventScroll:true});window.scrollTo({top:0,behavior:'instant'});}
   }
   for(const link of document.querySelectorAll('[data-workspace]'))link.addEventListener('click',e=>{e.preventDefault();show(link.dataset.workspace,{focus:true});});
@@ -145,7 +147,7 @@
   reset.addEventListener('click',()=>{if(context.library?.components?.supported)hydrate(context.library.components);else{desired.clear();dirty=false;}paintComponents();});
   stop.addEventListener('click',()=>context.setup?.busy?$('cancel-setup').click():context.cancelComponents?.(context.library?.synchronization?.operation));
   function update(value={}){
-    context=value;const {connection={},setup={},runtimeReady=false}=value,key=JSON.stringify([connection.state,connection.mode,connection.host,connection.port,connection.username]);
+    context=value;value.memorySettings?.visible(currentPage==='settings');const {connection={},setup={},runtimeReady=false}=value,key=JSON.stringify([connection.state,connection.mode,connection.host,connection.port,connection.username]);
     if(target!==key){target=key;desired.clear();dirty=false;baseline=null;ownOperation=null;}
     paintComponents();const connected=connection.state==='authenticated';sidebarStatus.dataset.connected=String(connected);text(sidebarStatus.querySelector('strong'),connected?(connection.mode==='local'?'Connected · Local':'Connected · SSH'):'Not connected');text(sidebarStatus.querySelector('small'),connected?'Your machine. Your models.':'Choose Local or SSH in Install.');
     text(custom.querySelector('summary'),'Custom size & frame count · '+$('width').value+' × '+$('height').value+' · '+$('frames').value+' frames');const options=[];if($('use-sage').checked)options.push('Sage on');if($('use-turbo').checked)options.push('Turbo on');if($('sparse-preset').value!=='off')options.push('Sparse '+$('sparse-preset').value);text(advanced.querySelector('summary'),'Acceleration & advanced'+(options.length?' · '+options.join(' · '):' settings'));

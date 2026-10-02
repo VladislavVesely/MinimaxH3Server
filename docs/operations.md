@@ -78,6 +78,35 @@ Packaged deployment currently approves fixed root/8765 configuration: do not edi
 its immutable `daemon.json` in place. Alternate limits require an administrator's
 separately managed service/config, not an unadvertised browser setting.
 
+## GPU memory settings
+
+Open **Settings → GPU memory settings**. Policy belongs to the generation server,
+not the browser/project, and persists in owner-only `config/runtime-memory.json`.
+Edit a draft, then explicitly **Apply memory settings** while the queue and
+maintenance are idle. Changed policies release resident models; the next GPU worker
+starts fresh. Other clients must reload when a revision changes; polling preserves
+unsaved drafts and blocks stale Apply. **Restore defaults to draft** never saves
+without Apply. Normal deployment preserves this configuration.
+
+Controls for pruned H3/ComfyUI runtimes:
+
+- **Automatic GPU headroom** preserves the upstream reserve. Manual 0–64 GiB maps
+  to ComfyUI `reserve_vram`; the runtime adds its minimum inference allowance.
+  Increasing it can offload more weights and use more CPU RAM/time. It is not a
+  hard memory cap or an OOM guarantee; excessive reserves can hurt performance.
+- **Low VRAM** selects upstream `lowvram` offloading. It does not enable Turbo’s
+  separate low-VRAM merging option or change job dimensions/frames/quantization.
+- **Expandable CUDA allocations** sets
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` in the GPU child environment
+  before PyTorch imports. Disabled means allocator defaults in a fresh worker.
+  This may reduce fragmentation on supported CUDA systems, not increase VRAM.
+
+The policy isolates performance-estimate samples and discards cached hardware
+estimates after changed settings. Historical jobs and timing records remain intact.
+Corrupt/unsafe policy files fail closed; do not hand-edit them while jobs run.
+Back up this file with the server root. Changing it via the API is the supported
+path. No actual GPU generation benchmark is implied by CPU/browser tests.
+
 ## Updates, rollback, backups
 
 Use a new trusted controller or `deploy --wheel ... --sha256 TRUSTED_PIN`, connect
