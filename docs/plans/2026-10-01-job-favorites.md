@@ -41,3 +41,31 @@ Deploy matching verified controller/server only with idle/reject-busy activation
 Retain all six current components; rebind environment-scoped SageAttention/sparse
 if a code update creates a new environment. Do not launch a real GPU generation
 or cancel jobs. Native embedded-source/security/replacement smoke required.
+
+## Verified implementation and live deployment
+
+Implementation `9603605` merged. Full Python run: 1,275 passed, 13 platform/media
+skips, only the two existing CLI wording/concurrent maintenance-drain baselines
+excluded. Six favorite/memory/access browser tests and three generation
+queue/proxy/video reconciliation tests passed. Chrome/WebKit layout, job grouping,
+selection, input reuse and reference-input checks passed. Native embedded-source,
+assets/catalog/security and replacement/late-import smoke passed.
+
+Reviewed reject-busy deployment activated release
+`sha256-8c092d20f9413385fbd5821f5eef54bee09d2b73ae6ce07c16a5424ff1380ef8`, environment
+`658a094253b309ae7f51b34ab563d57176250befb253ae907405d67d4a0fbae6`.
+Installed server `store.py`, `domain.py` and GPU `pruned.py` equal verified source.
+Existing job IDs/requests/status/output were audited unchanged. Rebound pinned
+SageAttention/sparse in the new environment; all six original components remain
+installed. Preserved the user's enabled expandable allocations and automatic
+headroom/offloading policy. No model weights requested, drivers changed, generation
+jobs cancelled or real GPU generation launched.
+
+Native `dist/job-favorites/h3-controller` serves http://192.168.1.61:8795 (only
+controller listener; PID 10245 at verification). Live Chrome verified mark →
+server-read → browser reload → unmark on an existing completed generation, with
+the original favorite state restored afterward. Inputs/output/status, all six
+components, memory policy and the complete private access-store digest remained
+unchanged. Preview files: `/tmp/h3-job-favorites.png` (test-only),
+`/tmp/h3-live-job-favorite.png` (actual UI). No credentials or authored prompts are
+recorded here. `video_prompt.txt` remains untouched.
