@@ -198,7 +198,8 @@ test('one Install stages real files, activates, downloads and restores completio
   await expect(page.locator('#install-profile')).toHaveValue(status.setup.profile);
   expect(posts.filter(p => p.endsWith('/setup/start'))).toHaveLength(1);
   expect(posts.filter(p => /\/setup\/(plan|install|reboot|activate|download|restore)$/.test(p))).toHaveLength(0);
-  expect(await page.evaluate(() => [localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  // Remembered browser access is intentional; SSH passwords/setup requests are not stored.
+  expect(await page.evaluate(() => ({keys:Object.keys(localStorage),session:sessionStorage.length,secret:Object.values(localStorage).some(value=>value.includes('TEST-ONLY-secret'))}))).toEqual({keys:['h3-remembered-access'],session:0,secret:false});
   await expect(page.locator('body')).not.toContainText('TEST-ONLY-secret');
   expect(errors).toEqual([]);
 });

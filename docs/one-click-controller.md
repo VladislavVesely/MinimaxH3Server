@@ -77,8 +77,12 @@ resolving the problem; completed deletions are not rolled back.
 ## Installed software on the target
 
 Open **Install → Target system information** and use **Scan hardware**. The
-**Installed software** section loads separately from hardware discovery and shows
-observed versions without installing anything, importing Torch or loading models.
+software observation loads separately from hardware discovery without installing
+anything, importing Torch or loading models. **Observed system tools** and the
+unowned OS-package list stay in System scan, collapsed by default. Runtime and
+receipt observations appear in closed **Observed software & receipts** disclosures
+under the matching Install component cards; unmatched/archived components retain
+their own read-only, collapsed disclosures under Install.
 
 Each managed runtime has its own Python version, key package versions, Torch CUDA
 build target, expandable full Python dependency list and source revisions. Actual

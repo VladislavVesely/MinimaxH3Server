@@ -1361,7 +1361,7 @@
       button.setAttribute('aria-selected', String(tab === jobsTab));
       button.tabIndex = tab === jobsTab ? 0 : -1;
     }
-    $('jobs').setAttribute('aria-labelledby', 'jobs-tab-' + jobsTab);
+    $('jobs').setAttribute('aria-label', jobsTab === 'current' ? 'Current generation jobs' : 'Historical generation jobs');
     for (const [id, card] of jobCards) card.item.hidden = !jobMatchesTab({job_id: id, status: card.item.dataset.status}, jobsTab);
     const visible = currentJobs.filter(job => jobMatchesTab(job, jobsTab));
     if (typeof jobSelection !== 'undefined') jobSelection?.update(visible, ready && !busy && connection.state === 'authenticated');
