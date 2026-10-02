@@ -31,6 +31,7 @@ test('server-wide settings apply explicitly, persist, and protect drafts from an
  await expect(page.locator('#memory-reserve')).toHaveValue('4');await expect(page.locator('#memory-offload')).toHaveValue('low_vram');await expect(page.locator('#memory-expandable')).toBeChecked();
  await page.locator('#memory-reserve').fill('5');
  await page.evaluate(async()=>{const api='/api/v1/controller',s=await(await fetch(api+'/status')).json(),m=await(await fetch(api+'/remote/settings/memory')).json();const r=await fetch(api+'/remote/settings/memory',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':s.csrf_token},body:JSON.stringify({revision:m.revision,target_key:m.target_key,settings:{reserve_vram_gib:6,offload_mode:'automatic',expandable_segments:false}})});if(!r.ok)throw Error('TEST ONLY cross-client update failed')});
+ await page.locator('#memory-apply').click();
  await expect(page.locator('#memory-status')).toContainText('changed');await expect(page.locator('#memory-reserve')).toHaveValue('5');await expect(page.locator('#memory-apply')).toBeDisabled();
  await page.locator('#memory-refresh').click();await expect(page.locator('#memory-reserve')).toHaveValue('6');
  await page.screenshot({path:'/tmp/h3-memory-settings.png',fullPage:true});

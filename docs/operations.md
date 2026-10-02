@@ -84,8 +84,11 @@ Open **Settings → GPU memory settings**. Policy belongs to the generation serv
 not the browser/project, and persists in owner-only `config/runtime-memory.json`.
 Edit a draft, then explicitly **Apply memory settings** while the queue and
 maintenance are idle. Changed policies release resident models; the next GPU worker
-starts fresh. Other clients must reload when a revision changes; polling preserves
-unsaved drafts and blocks stale Apply. **Restore defaults to draft** never saves
+starts fresh. Other clients must reload when a revision changes; event-triggered refreshes preserve
+unsaved drafts and revision checks block stale Apply. There is no Settings refresh
+timer: reads happen on page entry, target changes, browser foregrounding, queue/
+maintenance becoming idle, and explicit reload. Background event refreshes do not
+disable fields or interrupt typing. **Restore defaults to draft** never saves
 without Apply. Normal deployment preserves this configuration.
 
 Controls for pruned H3/ComfyUI runtimes:

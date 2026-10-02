@@ -592,7 +592,7 @@
     }
     if (typeof jobSelection !== 'undefined') jobSelection?.update(currentJobs.filter(job => jobMatchesTab(job, jobsTab)), available && authenticated);
     $('lora-field').hidden = backendCapabilities.lora?.status !== 'supported' || $('generation-profile').value.includes('int8');
-    memorySettings?.context({connected:ready&&authenticated,target:{...lastTarget,mode:connection.mode||'ssh',fingerprint:connection.fingerprint},busy:busy||setup.busy||modelState.busy});
+    memorySettings?.context({connected:ready&&authenticated,target:{...lastTarget,mode:connection.mode||'ssh',fingerprint:connection.fingerprint},busy:busy||setup.busy||modelState.busy||modelState.maintenance,runtimeBusy:setup.busy||modelState.busy||modelState.maintenance});
     globalThis.H3Studio?.update({profiles:profileCatalog, library:modelLibrary, connection, setup, runtimeReady, busy, memorySettings,
       licenseReady:!!modelLicenseDigest, multiRuntimeSetup:capabilities.multi_runtime_setup===true, applyComponents, cancelComponents, bootstrapComponents});
   }
