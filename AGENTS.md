@@ -7,7 +7,7 @@ The operator has explicitly enabled development mode and given standing authoriz
 - Implement, test, build and deploy functional changes in the same task. Do not stop at an implementation/build checkpoint or ask “shall I deploy?”
 - Standing authorization includes matching application/daemon activation when required and replacement of the controller at **http://192.168.1.61:8795**. Controller-only changes do not require unnecessary daemon activation.
 - Instructions/documentation-only changes do not require rebuilding or restarting an unchanged application.
-- Use the latest deployed source as the starting point, not a stale root checkout. The currently deployed feature lineage is `feature/joiner-cache`; consult its deployment record and freshly observed release identity. Keep existing feature branches and archived executables intact; do not merge or overwrite them merely to deploy.
+- Use the latest deployed source as the starting point, not a stale root checkout. The currently deployed controller feature lineage is `feature/auto-readiness` (daemon remains on the `feature/joiner-cache` release); consult `docs/plans/2026-10-09-auto-readiness-deployment.md` in that worktree and freshly observed release identity. Keep existing feature branches and archived executables intact; do not merge or overwrite them merely to deploy.
 
 ## Keep deployments short and safe
 
