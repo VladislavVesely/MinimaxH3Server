@@ -47,7 +47,21 @@ def choose_key(palette):
     # are still a prompt/inspection constraint, never a mathematical guarantee.
     return max(CANDIDATES,key=lambda c:float(np.min(np.linalg.norm(colors-rgb(c),axis=1))))
 
-def key_frame(frame,key,soft=False,tolerance=.06,softness=.20):
+def nearby_foreground(colors,trusted,radius=6):
+    """Propagate trusted edge colours a bounded distance; never erode a mask."""
+    values=colors.copy();known=trusted.copy();h,w=known.shape
+    if not np.any(known):return values,known
+    for _ in range(radius):
+        total=np.zeros_like(values);count=np.zeros((h,w),dtype=np.float32)
+        for dy,dx in ((-1,0),(1,0),(0,-1),(0,1)):
+            target=(slice(max(0,dy),h+min(0,dy)),slice(max(0,dx),w+min(0,dx)))
+            source=(slice(max(0,-dy),h+min(0,-dy)),slice(max(0,-dx),w+min(0,-dx)))
+            valid=known[source];total[target]+=values[source]*valid[:,:,None];count[target]+=valid
+        new=(~known)&(count>0)
+        values[new]=total[new]/count[new,None];known|=new
+    return values,known
+
+def key_frame(frame,key,soft=False,tolerance=.06,softness=.20,despill=True):
     if not 0<=tolerance<.5 or not .001<=softness<=1:raise ValueError('Invalid matte thresholds')
     c=np.asarray(frame,dtype=np.float32)[:,:,:3]/255.;k=rgb(key)/255.
     if soft:
@@ -57,8 +71,26 @@ def key_frame(frame,key,soft=False,tolerance=.06,softness=.20):
         alpha=np.clip(np.linalg.norm(cc-kc,axis=2)/max(float(np.linalg.norm(kc)),.01),0,1)
         alpha=np.where(alpha<tolerance,0,alpha)
     else:
-        distance=np.linalg.norm(c-k,axis=2)
+        saturated=float(np.ptp(k))>.2
+        # A dimmed/compressed blue is still background blue. RGB distance alone
+        # incorrectly promoted it to an opaque blue outline.
+        if saturated:
+            normalized=c/np.maximum(c.max(axis=2,keepdims=True),1/255.)
+            distance=np.linalg.norm(normalized-k/max(float(k.max()),1/255.),axis=2)
+        else:distance=np.linalg.norm(c-k,axis=2)
         t=np.clip((distance-tolerance)/softness,0,1);alpha=t*t*(3-2*t)
+        if saturated and despill:
+            dominant=k>=(float(k.max())-float(np.ptp(k))*.25)
+            if np.any(~dominant):
+                excess=c[:,:,dominant].min(axis=2)-c[:,:,~dominant].max(axis=2)
+                trusted=(alpha>.98)&(excess<=.02)
+                foreground,near=nearby_foreground(c,trusted)
+                contaminated=near&(~trusted)&(alpha>.01)&(excess>.02)&(distance<1.1)
+                delta=foreground-k
+                estimate=np.clip(np.sum((c-k)*delta,axis=2)/np.maximum(np.sum(delta*delta,axis=2),1e-5),0,1)
+                alpha=np.where(contaminated,np.minimum(alpha,estimate),alpha)
+        # Tiny residual matte values amplify codec noise into coloured dots.
+        alpha=np.where(alpha<1/255.,0,alpha)
     unmix=(c-(1-alpha[:,:,None])*k)/np.maximum(alpha[:,:,None],1/255.)
     unmix=np.clip(unmix,0,1);unmix[alpha==0]=0
     return np.dstack((np.rint(unmix*255),np.rint(alpha*255))).astype(np.uint8)
@@ -121,6 +153,17 @@ def select_loop(frames,fps,min_cycle_seconds=.25):
     relative=score/max(motion,.0001)
     return {'start':start,'end':end,'score':score,'relative_seam_error':relative,'appearance_error':appearance,'continuation_error':continuation,'velocity_error':velocity,'accepted':relative<.8,'reason':'Recurring appearance and motion seam evaluated; inspect the GIF','pixel_perfect_guaranteed':False}
 
+def measure_loop_interval(frames,fps,start,end):
+    """Measure the requested slice itself, not metrics from a different search result."""
+    f=features(frames);length=end-start;look=min(length,max(2,round(fps*.25)),len(f)-end-1)
+    result={'start':start,'end':end,'accepted':False,'reason':'Explicit interval has insufficient continuation to measure the seam','pixel_perfect_guaranteed':False}
+    if length<2 or look<2:return result
+    appearance=float(np.mean(np.abs(f[start]-f[end])))
+    continuation=float(np.mean(np.abs(f[start:start+look]-f[end:end+look])))
+    velocity=float(np.mean(np.abs((f[start+1]-f[start])-(f[end+1]-f[end]))))
+    score=appearance+continuation+velocity*.5;motion=float(np.median(np.mean(np.abs(np.diff(f,axis=0)),axis=1)));relative=score/max(motion,.0001)
+    return {**result,'accepted':relative<.8,'score':score,'relative_seam_error':relative,'appearance_error':appearance,'continuation_error':continuation,'velocity_error':velocity,'reason':'Explicit interval; actual appearance and motion seam measured'}
+
 def checker(im):
     w,h=im.size;y,x=np.indices((h,w));v=np.where(((x//8+y//8)%2)==0,220,165).astype(np.uint8)
     bg=Image.fromarray(np.dstack((v,v,v,np.full_like(v,255))))
@@ -141,18 +184,25 @@ def process_video(video,output,options):
     info=json.loads(probe.stdout);duration=float(info['format']['duration']);stream=info['streams'][0]
     if not math.isfinite(duration) or not 0<duration<=120 or duration*fps>900 or duration*fps*width*height>80_000_000 or stream['width']*stream['height']>8_000_000:raise ValueError('Video exceeds bounded processing budget')
     out.mkdir(mode=0o700,parents=True);(out/'frames').mkdir(mode=0o700)
-    report={'warnings':[],'matte':'estimated_soft' if options.get('soft') else 'chroma_key','pixel_perfect_guaranteed':False}
+    if type(options.get('despill',True)) is not bool:raise ValueError('despill must be boolean')
+    report={'warnings':[],'matte':'estimated_soft' if options.get('soft') else 'normalized_chroma_key','pixel_perfect_guaranteed':False,'keying_resolution':{'width':stream['width'],'height':stream['height']},'resize_after_keying':True,'despill':'foreground_guided_edges' if options.get('despill',True) and not options.get('soft') else 'off','pixel_art_alpha':'binary' if options.get('pixelArt') and not options.get('soft') else 'continuous'}
     if options.get('soft'):report['warnings'].append('Soft alpha is estimated from one colour background; coloured smoke/glass and occlusion require visual review.')
     with tempfile.TemporaryDirectory(prefix='sprite-frames-') as temp:
-        scaling='neighbor' if options.get('pixelArt') else 'lanczos'
-        filt=f'fps={fps}:start_time=0:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags={scaling},pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{key[1:]}'
+        # Decode RGB at native resolution. Scaling subsampled YUV first spreads
+        # the coloured background into foreground pixels before it can be keyed.
+        filt=f'fps={fps}:start_time=0:round=near,format=rgb24'
         subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(Path(video).resolve()),'-an','-vf',filt,'-frames:v','901',str(Path(temp)/'%06d.png')],check=True,capture_output=True,timeout=180)
         frames=[];border_stats=[]
         for p in sorted(Path(temp).glob('*.png')):
             with Image.open(p) as im:a=np.asarray(im.convert('RGB'))
-            rgba=key_frame(a,key,soft=options.get('soft',False),tolerance=options.get('tolerance',.06),softness=options.get('softness',.20))
+            rgba=key_frame(a,key,soft=options.get('soft',False),tolerance=options.get('tolerance',.06),softness=options.get('softness',.20),despill=options.get('despill',True))
             border=np.concatenate((rgba[0,:,3],rgba[-1,:,3],rgba[:,0,3],rgba[:,-1,3]));border_stats.append(float(np.mean(border<16)))
-            frames.append(Image.fromarray(rgba))
+            im=Image.fromarray(rgba);scale=min(width/im.width,height/im.height)
+            im=im.resize((max(1,round(im.width*scale)),max(1,round(im.height*scale))),Image.Resampling.NEAREST if options.get('pixelArt') else Image.Resampling.LANCZOS)
+            canvas=Image.new('RGBA',(width,height));canvas.paste(im,((width-im.width)//2,(height-im.height)//2))
+            if options.get('pixelArt') and not options.get('soft'):
+                clean=np.asarray(canvas).copy();clean[:,:,3]=np.where(clean[:,:,3]>=128,255,0);clean[clean[:,:,3]==0,:3]=0;canvas=Image.fromarray(clean)
+            frames.append(canvas)
     if not frames:raise ValueError('Video contains no decodable frames')
     report['input_frames']=len(frames);report['background_border_fraction_min']=min(border_stats)
     if min(border_stats)<.8:report['warnings'].append('Some frames have foreground/key contamination at the canvas edge; inspect clipping/background drift.')
@@ -163,7 +213,7 @@ def process_video(video,output,options):
     start=options.get('startFrame',loop['start']);end=options.get('endFrame',loop['end'])
     if not all(type(x) is int for x in (start,end)) or not 0<=start<end<=len(frames):raise ValueError('Invalid extraction interval')
     if 'startFrame' in options or 'endFrame' in options:
-        loop={**loop,'start':start,'end':end,'accepted':False if looping else None,'reason':'Manual interval; seam not automatically certified'}
+        loop=measure_loop_interval(frames,fps,start,end) if looping else {'start':start,'end':end,'accepted':None,'reason':'Explicit one-shot interval','pixel_perfect_guaranteed':False}
     frames=frames[start:end]
     if looping and not loop['accepted']:report['warnings'].append('No low-error periodic seam found. Candidate loop exported for review, not labelled seamless.')
     final_duration=options.get('cycleSeconds',len(frames)/fps)

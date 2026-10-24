@@ -31,6 +31,32 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(int(rgba[10,10,3]), 255)
         np.testing.assert_array_equal(rgba[10,10,:3], a[10,10])
 
+    def test_darkened_reserved_key_hue_does_not_survive_as_an_outline(self):
+        a=np.zeros((24,24,3),dtype=np.uint8);a[:]=[4,3,145];a[6:18,6:18]=[180,90,30];a[10,10]=[25,25,25]
+        rgba=self.p.key_frame(a,'#0000ff')
+        self.assertEqual(int(rgba[0,0,3]),0)
+        np.testing.assert_array_equal(rgba[8,8],[180,90,30,255])
+        np.testing.assert_array_equal(rgba[10,10],[25,25,25,255])
+
+    def test_mixed_key_edge_is_unmixed_without_shrinking_the_solid_core(self):
+        a=np.zeros((32,32,3),dtype=np.uint8);a[:]=[0,0,255]
+        a[7:25,7:25]=[100,50,142];a[9:23,9:23]=[200,100,30]
+        rgba=self.p.key_frame(a,'#0000ff')
+        self.assertLessEqual(int(rgba[8,15,2]),int(rgba[8,15,1])+8)
+        self.assertTrue(80<int(rgba[8,15,3])<220)
+        np.testing.assert_array_equal(rgba[15,15],[200,100,30,255])
+
+    def test_neutral_background_still_preserves_dark_and_grey_foreground(self):
+        a=np.full((24,24,3),255,dtype=np.uint8);a[6:18,6:18]=[50,50,50]
+        rgba=self.p.key_frame(a,'#ffffff')
+        self.assertEqual(int(rgba[0,0,3]),0)
+        np.testing.assert_array_equal(rgba[12,12],[50,50,50,255])
+
+    def test_magenta_key_does_not_despill_unrelated_blue_or_green_content(self):
+        a=np.zeros((24,24,3),dtype=np.uint8);a[:]=[255,0,255];a[6:12,6:18]=[0,0,255];a[12:18,6:18]=[0,255,0]
+        rgba=self.p.key_frame(a,'#ff00ff')
+        np.testing.assert_array_equal(rgba[8,8],[0,0,255,255]);np.testing.assert_array_equal(rgba[14,8],[0,255,0,255])
+
     def test_soft_matte_unmixes_neutral_translucent_effect(self):
         a = np.array([[[64,192,64]]], dtype=np.uint8) # half grey over green
         rgba = self.p.key_frame(a, '#00ff00', soft=True)
@@ -77,6 +103,25 @@ class ProcessorTests(unittest.TestCase):
         self.assertTrue((output/'contact-sheet.png').exists());self.assertTrue((output/'quality-report.json').exists())
         self.assertTrue(video.exists());self.assertTrue(result['frames']>1)
         with self.assertRaises((FileExistsError,ValueError)):self.p.process_video(str(video),str(output),{'key':'#00ff00','loop':True})
+
+    def test_reprocessing_a_known_cycle_measures_that_interval_without_false_seam_warning(self):
+        video=self.video();out=self.root/'same-cycle'
+        result=self.p.process_video(str(video),str(out),{'key':'#00ff00','loop':True,'fps':12,'width':64,'height':64,'startFrame':12,'endFrame':24})
+        self.assertEqual(result['frames'],12)
+        self.assertTrue(result['quality']['loop']['accepted'])
+        self.assertEqual(result['quality']['loop']['start'],12);self.assertEqual(result['quality']['loop']['end'],24)
+        self.assertFalse(any('No low-error' in w for w in result['quality']['warnings']))
+
+    def test_pixel_art_keys_native_rgb_before_resize_and_has_binary_alpha(self):
+        video=self.video();out=self.root/'pixel'
+        result=self.p.process_video(str(video),str(out),{'key':'#00ff00','loop':False,'fps':12,'width':32,'height':32,'pixelArt':True})
+        self.assertEqual(result['quality']['keying_resolution'],{'width':64,'height':64})
+        self.assertTrue(result['quality']['resize_after_keying'])
+        with Image.open(out/'frames/0000.png') as im:
+            a=np.asarray(im).astype(int);self.assertEqual(im.size,(32,32))
+        self.assertEqual(set(np.unique(a[:,:,3])),{0,255})
+        spill=(a[:,:,3]>0)&(a[:,:,1]>a[:,:,0]+30)&(a[:,:,1]>a[:,:,2]+30)
+        self.assertLessEqual(int(spill.sum()),2)
 
     def test_one_shot_keeps_all_frames_and_gif_does_not_loop(self):
         video=self.video();out=self.root/'once'
