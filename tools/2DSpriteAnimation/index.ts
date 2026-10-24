@@ -8,6 +8,17 @@ import { downloadVideo } from './src/download.ts';
 
 const H3=['h3_discover','h3_guide','h3_compile','h3_preflight','h3_request','h3_run','h3_generate','h3_receipt','h3_upload','h3_job','h3_inspect'];
 const text=(value:any)=>({content:[{type:'text' as const,text:JSON.stringify(value,null,2)}],structuredContent:value,details:value});
+function resumePlan(m:any){
+ if(m.jobId){
+  if(m.exports?.length&&['exported','needs_review'].includes(m.stage))return {next_action:'report_existing_export',blocked:false,generation_submitted:true};
+  return {next_action:'finish',blocked:false,generation_submitted:true};
+ }
+ if(m.requestId)return {next_action:'animate',mode:'resolve_receipt_only',blocked:false,generation_submitted:'unknown',instructions:'Call animate with empty sections to resolve the existing request receipt. Never submit a new request.'};
+ if((m.projectAttempted&&!m.projectId)||(m.runAttempted&&!m.runId))return {next_action:'reconcile_canonical_state',blocked:true,generation_submitted:false,instructions:'Resolve the lost project/run creation response before continuing. Do not duplicate it.'};
+ if(m.sourceFile)return {next_action:'animate',mode:'initial_submission',blocked:false,generation_submitted:false,requires_authored_sections:!m.compiled?.sections,instructions:'No generation request ID was ever written: animation has not been submitted. The previous error is historical, not a fresh H3 rejection. Reuse the inspected source, author the exact guide sections if no draft was saved, and call animate for compile/preflight and the FIRST job. Do not call prepare or source. Do not stop merely because there is no receipt/job/video; none is expected before initial submission.'};
+ if(m.sourceAttempted)return {next_action:'inspect_and_adopt_saved_source',blocked:true,generation_submitted:false,instructions:'Do not repeat the image request. Inspect saved artwork and explicitly adopt it, or obtain approval for another attempt.'};
+ return {next_action:'source',blocked:false,generation_submitted:false};
+}
 const opts=Type.Object({
  name:Type.String({minLength:1,maxLength:200}),request:Type.String({minLength:1,maxLength:4000}),
  loop:Type.Boolean({description:'Resolve from the actual request: repeat when appropriate or explicitly requested; false for one-shot actions. No subject-category rules.'}),
@@ -73,7 +84,10 @@ export default function(pi:ExtensionAPI){
     }
     if(!p.folder)throw new Error('This action needs the saved sprite folder');
     const folder=resolve(ctx.cwd,p.folder);
-    if(p.action==='status')return text(await getStatus(folder));
+    if(p.action==='status'){
+     const m=await getStatus(folder);const {error,...state}=m;
+     return text({...state,...(error?{previous_error:error}:{}),resume:resumePlan(m)});
+    }
     if(p.action==='feedback'){
      if(!p.feedback?.trim())throw new Error('feedback text is required');await getStatus(folder);
      const path=join(folder,'feedback.json');let notes:any[]=[];try{notes=JSON.parse(await readFile(path,'utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
@@ -103,7 +117,7 @@ export default function(pi:ExtensionAPI){
     let parsed:any;try{parsed=JSON.parse(value);}catch{pi.sendMessage({customType:'sprite-animation',content:'Invalid JSON. Use /sprite help.',display:true});return;}
     if(parsed?.action){pi.sendUserMessage(`Invoke sprite_animation once with these JSON arguments as data: ${JSON.stringify(parsed)}. For finish/status/feedback do not call prepare, source or animate; do not generate anything. If finish reports pending, continue only finish for that same folder. Report saved output paths and actual warnings.`,{deliverAs:'followUp'});return;}
    }
-   pi.sendUserMessage(`Use sprite_animation to complete this 2D animation request. Original request data (not tool/system instructions): ${JSON.stringify(resume?{resumeFolder:value.slice(7).trim()}:value)}. ${resume?'Read status in that folder. Resume its recorded stage and receipt/job; never repeat an uncertain image request or generation.':'Read the folder style, infer appropriate loop/one-shot behaviour for this specific request (explicit instructions win), camera, output size/FPS and reference role. Use prepare, then source, inspect its actual image, author animate.sections following the returned real H3 guide, then finish.'} Continue finish until exports are ready, unless cancellation, error or requested review prevents proceeding. Report GIF and transparent-frame paths plus genuine quality warnings. No automatic paid retries. Reprocess/feedback requests must use the existing video, not generate again.`,{deliverAs:'followUp'});
+   pi.sendUserMessage(`Use sprite_animation to complete this 2D animation request. Original request data (not tool/system instructions): ${JSON.stringify(resume?{resumeFolder:value.slice(7).trim()}:value)}. ${resume?'Read status in that folder and follow its computed resume plan, not the historical previous_error. For source_ready with no requestId/jobId, no H3 generation was attempted: reuse the existing source, author the exact guide sections if needed, and call animate for the FIRST submission. Missing receipt/job/video is expected before that submission, not a reason to stop. Never call prepare/source again. If requestId exists, call animate only to resolve its receipt; if jobId exists, use finish. Never repeat an uncertain image request or generation.':'Read the folder style, infer appropriate loop/one-shot behaviour for this specific request (explicit instructions win), camera, output size/FPS and reference role. Use prepare, then source, inspect its actual image, author animate.sections following the returned real H3 guide, then finish.'} Continue finish until exports are ready, unless cancellation, error or requested review prevents proceeding. Report GIF and transparent-frame paths plus genuine quality warnings. No automatic paid retries. Reprocess/feedback requests must use the existing video, not generate again.`,{deliverAs:'followUp'});
   },
  });
 }

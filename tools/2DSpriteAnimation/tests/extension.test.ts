@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import extension from '../index.ts';
-import { access } from 'node:fs/promises';
+import { access, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createJiti } from 'jiti';
 
@@ -22,6 +24,24 @@ test('registration is pure and exposes resumable tools/command without inference
  await cmd.handler('A looping isometric crystal changing into liquid');
  assert.match(messages[0],/crystal/);assert.match(messages[0],/finish/);assert.match(messages[0],/guide/i);
  await cmd.handler('resume /tmp/My Sprite');assert.match(messages[1],/\/tmp\/My Sprite/);assert.match(messages[1],/receipt/i);
+});
+
+test('status treats an old preflight 422 as history and gives an actionable initial submission step',async t=>{
+ const folder=await mkdtemp(join(tmpdir(),'sprite-resume-status-'));t.after(()=>rm(folder,{recursive:true,force:true}));
+ await writeFile(join(folder,'manifest.json'),JSON.stringify({version:1,kind:'2d-sprite-animation',folder,stage:'source_ready',sourceFile:'source.png',sourceAttempted:true,error:'H3 422: invalid_generation. No automatic mutation replay.'}));
+ const tools:any[]=[];extension({registerTool:(x:any)=>tools.push(x),registerCommand:()=>{}} as any);
+ const result=await tools[0].execute('status',{action:'status',folder},undefined,undefined,{cwd:folder,executeTool:async()=>{throw new Error('Status must not call H3');}});
+ assert.equal(result.structuredContent.resume.next_action,'animate');assert.equal(result.structuredContent.resume.blocked,false);
+ assert.equal(result.structuredContent.resume.generation_submitted,false);assert.equal(result.structuredContent.error,undefined);
+ assert.match(result.structuredContent.previous_error,/422/);
+});
+
+test('ambiguous submission status requires receipt resolution, not another generation',async t=>{
+ const folder=await mkdtemp(join(tmpdir(),'sprite-receipt-status-'));t.after(()=>rm(folder,{recursive:true,force:true}));
+ await writeFile(join(folder,'manifest.json'),JSON.stringify({version:1,kind:'2d-sprite-animation',folder,stage:'submission_unknown',sourceFile:'source.png',requestId:'a'.repeat(32),error:'connection lost'}));
+ const tools:any[]=[];extension({registerTool:(x:any)=>tools.push(x),registerCommand:()=>{}} as any);
+ const result=await tools[0].execute('status',{action:'status',folder},undefined,undefined,{cwd:folder,executeTool:async()=>{throw new Error('No remote status requests here');}});
+ assert.equal(result.structuredContent.resume.next_action,'animate');assert.equal(result.structuredContent.resume.mode,'resolve_receipt_only');assert.equal(result.structuredContent.resume.generation_submitted,'unknown');
 });
 
 test('explicit reprocessing JSON is dispatched without preparation instructions',async()=>{

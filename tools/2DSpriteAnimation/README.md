@@ -93,6 +93,8 @@ The manifest records the exact style/source/video hashes, reference role, chosen
 /sprite {"action":"feedback","folder":"/absolute/path/Sprite_Name","feedback":"Expected ..., observed ...; frame/time ..."}
 ```
 
+Status separates `previous_error` (historical) from an explicit `resume` plan. `source_ready` with no request ID means no H3 generation was submitted: resume authors the guide sections if needed and starts the first animation using the existing source. Missing receipt/job/video at that stage is expected, not a blocker. If a request ID exists without a job ID, only receipt resolution is permitted.
+
 Each processing attempt gets a new `export_###`, including when an earlier export failed. If a source response was lost/failed, inspect the preserved generated image and explicitly adopt it through `source` with `adoptFile`; the tool will not automatically spend again. A failed or missing H3 receipt is not permission to submit another generation. Interrupted read-only downloads can resume; original inference is never repeated for download/processing problems.
 
 For the improvement loop, give the **folder path, exact request, expected versus observed behaviour and an example frame/time**. Keep the manifest, original video and latest quality report/GIF. We can add a regression fixture, adjust the processor/prompting, and reprocess that same video. Only genuinely new source/motion generation should spend another request, explicitly approved.
