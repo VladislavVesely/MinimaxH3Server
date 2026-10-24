@@ -43,8 +43,19 @@ class ProcessorTests(unittest.TestCase):
         a[7:25,7:25]=[100,50,142];a[9:23,9:23]=[200,100,30]
         rgba=self.p.key_frame(a,'#0000ff')
         self.assertLessEqual(int(rgba[8,15,2]),int(rgba[8,15,1])+8)
-        self.assertTrue(80<int(rgba[8,15,3])<220)
+        self.assertEqual(int(rgba[8,15,3]),255)
         np.testing.assert_array_equal(rgba[15,15],[200,100,30,255])
+
+    def test_despill_changes_colour_not_coverage_for_outline_and_outline_free_edges(self):
+        for foreground in ([30,20,10],[220,140,80],[180,180,180]):
+            a=np.zeros((32,32,3),dtype=np.uint8);a[:]=[0,0,255]
+            a[6:26,6:26]=np.rint(np.array(foreground)*.25+np.array([0,0,255])*.75)
+            a[9:23,9:23]=foreground
+            clean=self.p.key_frame(a,'#0000ff');raw=self.p.key_frame(a,'#0000ff',despill=False)
+            np.testing.assert_array_equal(clean[:,:,3],raw[:,:,3])
+            self.assertGreater(int(clean[7,15,3]),128)
+            self.assertLess(np.max(np.abs(clean[7,15,:3].astype(int)-foreground)),12)
+            self.assertEqual(int(clean[0,0,3]),0)
 
     def test_neutral_background_still_preserves_dark_and_grey_foreground(self):
         a=np.full((24,24,3),255,dtype=np.uint8);a[6:18,6:18]=[50,50,50]
@@ -62,6 +73,22 @@ class ProcessorTests(unittest.TestCase):
         rgba = self.p.key_frame(a, '#00ff00', soft=True)
         self.assertTrue(110 < int(rgba[0,0,3]) < 150)
         self.assertLess(abs(int(rgba[0,0,0])-int(rgba[0,0,1])), 8)
+
+    def test_colour_reconstruction_moves_with_subject_and_preserves_real_gaps(self):
+        a=np.zeros((48,48,3),dtype=np.uint8);a[:]=[0,0,255]
+        a[12:28,12:28]=[55,35,211];a[15:25,15:25]=[220,140,80]
+        a[19:21,12:28]=[0,0,255]
+        first=self.p.key_frame(a,'#0000ff')
+        shifted=self.p.key_frame(np.roll(a,5,axis=1),'#0000ff')
+        np.testing.assert_array_equal(np.roll(first,5,axis=1),shifted)
+        self.assertTrue(np.all(first[19:21,:,3]==0))
+        np.testing.assert_array_equal(first[:,:,3],self.p.key_frame(a,'#0000ff',despill=False)[:,:,3])
+
+    def test_soft_edges_are_not_hardened_by_colour_reconstruction(self):
+        a=np.array([[[32,224,32],[64,192,64],[96,160,96]]],dtype=np.uint8)
+        clean=self.p.key_frame(a,'#00ff00',soft=True)
+        np.testing.assert_array_equal(clean,self.p.key_frame(a,'#00ff00',soft=True,despill=False))
+        self.assertTrue(np.all((clean[:,:,3]>0)&(clean[:,:,3]<255)))
 
     def test_general_loop_finds_repetition_not_whole_minimum_length(self):
         # A changing abstract shape, no character/walking assumptions.

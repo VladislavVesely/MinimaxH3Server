@@ -71,27 +71,35 @@ def key_frame(frame,key,soft=False,tolerance=.06,softness=.20,despill=True):
         alpha=np.clip(np.linalg.norm(cc-kc,axis=2)/max(float(np.linalg.norm(kc)),.01),0,1)
         alpha=np.where(alpha<tolerance,0,alpha)
     else:
-        saturated=float(np.ptp(k))>.2
-        # A dimmed/compressed blue is still background blue. RGB distance alone
-        # incorrectly promoted it to an opaque blue outline.
-        if saturated:
-            normalized=c/np.maximum(c.max(axis=2,keepdims=True),1/255.)
-            distance=np.linalg.norm(normalized-k/max(float(k.max()),1/255.),axis=2)
-        else:distance=np.linalg.norm(c-k,axis=2)
+        # Coverage is independent of despill. Learn small codec/background shifts
+        # only from a predominantly uniform border matching the reserved hue.
+        border=np.concatenate((c[0],c[-1],c[:,0],c[:,-1]))
+        background=np.median(border,axis=0)
+        direction=lambda v:v/np.maximum(np.max(v,axis=-1,keepdims=True),1/255.)
+        if np.mean(np.linalg.norm(border-background,axis=1)<.04)>.8 and np.linalg.norm(direction(background)-direction(k))<.1:
+            k=background
+        distance=np.linalg.norm(c-k,axis=2)
         t=np.clip((distance-tolerance)/softness,0,1);alpha=t*t*(3-2*t)
-        if saturated and despill:
-            dominant=k>=(float(k.max())-float(np.ptp(k))*.25)
-            if np.any(~dominant):
-                excess=c[:,:,dominant].min(axis=2)-c[:,:,~dominant].max(axis=2)
-                trusted=(alpha>.98)&(excess<=.02)
-                foreground,near=nearby_foreground(c,trusted)
-                contaminated=near&(~trusted)&(alpha>.01)&(excess>.02)&(distance<1.1)
-                delta=foreground-k
-                estimate=np.clip(np.sum((c-k)*delta,axis=2)/np.maximum(np.sum(delta*delta,axis=2),1e-5),0,1)
-                alpha=np.where(contaminated,np.minimum(alpha,estimate),alpha)
-        # Tiny residual matte values amplify codec noise into coloured dots.
         alpha=np.where(alpha<1/255.,0,alpha)
     unmix=(c-(1-alpha[:,:,None])*k)/np.maximum(alpha[:,:,None],1/255.)
+    if not soft and despill and float(np.ptp(k))>.2:
+        dominant=k>=(float(k.max())-float(np.ptp(k))*.25)
+        if np.any(~dominant):
+            excess=c[:,:,dominant].min(axis=2)-c[:,:,~dominant].max(axis=2)
+            trusted=(alpha>.98)&(excess<=.02)
+            foreground,near=nearby_foreground(c,trusted)
+            contaminated=near&(~trusted)&(alpha>0)&(excess>.02)
+            # Fit the mixing amount for COLOR recovery only. It must never
+            # shrink coverage. No dark-outline or subject-palette assumption.
+            delta=foreground-k
+            amount=np.clip(np.sum((c-k)*delta,axis=2)/np.maximum(np.sum(delta*delta,axis=2),1e-5),0,1)
+            recovered=(c-(1-amount[:,:,None])*k)/np.maximum(amount[:,:,None],1/255.)
+            # Ill-conditioned mixtures amplify compression errors. Local clean
+            # colour is a conservative fallback, not a global outline colour.
+            residual=np.linalg.norm(c-(k+amount[:,:,None]*delta),axis=2)
+            reliable=(amount>.15)&(residual<.04)
+            replacement=np.where(reliable[:,:,None],recovered,foreground)
+            unmix=np.where(contaminated[:,:,None],replacement,unmix)
     unmix=np.clip(unmix,0,1);unmix[alpha==0]=0
     return np.dstack((np.rint(unmix*255),np.rint(alpha*255))).astype(np.uint8)
 
@@ -185,7 +193,8 @@ def process_video(video,output,options):
     if not math.isfinite(duration) or not 0<duration<=120 or duration*fps>900 or duration*fps*width*height>80_000_000 or stream['width']*stream['height']>8_000_000:raise ValueError('Video exceeds bounded processing budget')
     out.mkdir(mode=0o700,parents=True);(out/'frames').mkdir(mode=0o700)
     if type(options.get('despill',True)) is not bool:raise ValueError('despill must be boolean')
-    report={'warnings':[],'matte':'estimated_soft' if options.get('soft') else 'normalized_chroma_key','pixel_perfect_guaranteed':False,'keying_resolution':{'width':stream['width'],'height':stream['height']},'resize_after_keying':True,'despill':'foreground_guided_edges' if options.get('despill',True) and not options.get('soft') else 'off','pixel_art_alpha':'binary' if options.get('pixelArt') and not options.get('soft') else 'continuous'}
+    report={'warnings':[],'matte':'estimated_soft' if options.get('soft') else 'coverage_separate_from_colour','pixel_perfect_guaranteed':False,'keying_resolution':{'width':stream['width'],'height':stream['height']},'resize_after_keying':True,'despill':'local_colour_reconstruction' if options.get('despill',True) and not options.get('soft') else 'off','pixel_art_alpha':'binary' if options.get('pixelArt') and not options.get('soft') else 'continuous'}
+    if options.get('despill',True) and not options.get('soft'):report['warnings'].append('Edge colours are locally estimated, not recovered ground truth. No motion-compensated temporal stabilization; inspect moving edges for colour variation.')
     if options.get('soft'):report['warnings'].append('Soft alpha is estimated from one colour background; coloured smoke/glass and occlusion require visual review.')
     with tempfile.TemporaryDirectory(prefix='sprite-frames-') as temp:
         # Decode RGB at native resolution. Scaling subsampled YUV first spreads
