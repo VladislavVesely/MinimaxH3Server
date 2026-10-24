@@ -24,7 +24,10 @@ async function fixture(t:any){
   if(name==='h3_discover')return discovery;if(name==='h3_guide')return guide;
   if(name==='generate_image'){await writeFile(args.output_path,'original image');return {images:[{path:args.output_path}],warnings:['backend warning']};}
   if(name==='h3_upload')return {id:asset};if(name==='h3_compile')return {prompt:'dynamic_section: real\nsound: silent',contract_digest:digest,effective_frames:124,effective_seconds:124/24,warnings:[]};
-  if(name==='h3_preflight')return {valid:true,ready:true};
+  if(name==='h3_preflight'||name==='h3_generate'){
+   assert.notEqual(Object.hasOwn(args.generation,'duration'),Object.hasOwn(args.generation,'num_frames'),'Native H3 requires frames or duration, not both');
+   if(name==='h3_preflight')return {valid:true,ready:true};
+  }
   if(name==='h3_request')return {id:project};if(name==='h3_run')return {id:run,revision:1};
   if(name==='h3_generate'||name==='h3_receipt'||name==='h3_job')return {job_id:job,status:'completed'};
   if(name==='h3_inspect')return {};throw new Error(name);
@@ -66,7 +69,7 @@ test('dynamic sections compile/preflight and original source conditions bounded 
  await assert.rejects(animate(m.folder,{invented:'no'},f.call),/section/i);
  await animate(m.folder,{dynamic_section:'[Shot 1] The requested action',sound:'silence'},f.call);
  assert.equal(f.calls.filter(c=>c.name==='h3_generate').length,1);assert.ok(f.calls.findIndex(c=>c.name==='h3_preflight')<f.calls.findIndex(c=>c.name==='h3_generate'));
- const submission=f.calls.find(c=>c.name==='h3_generate')!.args;assert.equal(submission.generation.first_frame,asset);assert.equal(submission.generation.duration,124/24);assert.equal(submission.generation.profile,'installed-profile');assert.match(submission.request_id,/^[a-f0-9]{32}$/);
+ const submission=f.calls.find(c=>c.name==='h3_generate')!.args;assert.equal(submission.generation.first_frame,asset);assert.equal(Object.hasOwn(submission.generation,'duration'),false);assert.equal(submission.generation.num_frames,124);assert.equal(submission.generation.profile,'installed-profile');assert.match(submission.request_id,/^[a-f0-9]{32}$/);
 });
 test('ambiguous submission persists its ID and resumes via receipt, never submits again',async t=>{
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);let submits=0;
@@ -94,6 +97,8 @@ test('preflight failure cannot queue or create a run',async t=>{
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);
  const blocked=async(n:string,a:any)=>n==='h3_preflight'?{valid:true,ready:false,not_ready_reasons:['busy']}:f.call(n,a);
  await assert.rejects(animate(m.folder,{dynamic_section:'action',sound:'silence'},blocked),/not ready/);assert.equal(f.calls.filter(c=>c.name==='h3_generate'||c.name==='h3_run').length,0);
+ const persisted=JSON.parse(await readFile(join(m.folder,'h3-prompt.json'),'utf8'));assert.equal(persisted.generation.num_frames,124);assert.equal(persisted.sections.dynamic_section,'action');
+ await animate(m.folder,{},f.call);assert.equal(f.calls.filter(c=>c.name==='generate_image').length,1);assert.equal(f.calls.filter(c=>c.name==='h3_generate').length,1);
 });
 test('a rejected prepared source can be explicitly adopted again without paying',async t=>{
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);let fails=true;

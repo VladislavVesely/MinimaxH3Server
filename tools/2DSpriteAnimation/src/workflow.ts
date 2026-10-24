@@ -143,14 +143,20 @@ export async function animate(folder:string,sections:Record<string,string>,call:
    if(!m.sourceFile)throw new Error('Generate/inspect source before H3');
    const live=await call('h3_guide',{profile:m.profile,mode:m.mode});
    if(live.digest!==m.guide.digest)throw new Error('Model prompt contract changed; inspect new guide instead of silently adapting');
+   sections=Object.keys(sections).length?sections:(m.compiled?.sections??{});
    if(Object.keys(sections).sort().join('|')!==[...live.sections].sort().join('|')||Object.values(sections).some(s=>typeof s!=='string'||!s.trim()))throw new Error('Provide exactly the model guide sections, without invented or missing section names');
    if(!m.assetId){const up=await call('h3_upload',{file:join(m.folder,m.sourceFile),kind:'image'});m.assetId=up.id;await save(m);}
    const gen:any={input_mode:'frames',first_frame:m.assetId,...(m.options.loop?{last_frame:m.assetId}:{}),width:m.options.width,height:m.options.height,duration:m.options.duration??5,steps:m.steps,seed:42,sage_attention:false,sparse_preset:'off',turbo_lora:false,lightx_lora:false,live_preview:false};
    const compiled=await call('h3_compile',{profile:m.profile,generation:gen,sections});
-   const generation={...gen,duration:compiled.effective_seconds,num_frames:compiled.effective_frames,profile:m.profile,prompt:compiled.prompt};
+   // Native GenerationInput forbids BOTH timing fields, even if consistent.
+   // Compile accepts requested seconds; submit only its aligned frame count.
+   const {duration:_requestedDuration,...frameGeneration}=gen;
+   const generation={...frameGeneration,num_frames:compiled.effective_frames,profile:m.profile,prompt:compiled.prompt};
+   // Persist the draft before validation so preflight failures retain authored
+   // sections and can resume without regenerating source artwork.
+   m.compiled={...compiled,generation,sections};await atomic(join(m.folder,'h3-prompt.json'),m.compiled);await save(m);
    const preflight=await call('h3_preflight',{generation,contract_digest:compiled.contract_digest});
    if(!preflight.valid||!preflight.ready)throw new Error('H3 preflight is not ready; no generation submitted: '+JSON.stringify(preflight.not_ready_reasons??[]));
-   m.compiled={...compiled,generation,sections};await atomic(join(m.folder,'h3-prompt.json'),m.compiled);await save(m);
    if(!m.projectId){
     if(m.projectAttempted)throw new Error('Project creation response was lost; inspect canonical projects rather than create a duplicate');
     if(m.options.projectId)m.projectId=m.options.projectId;
