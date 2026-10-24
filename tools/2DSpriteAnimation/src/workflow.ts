@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename, unlink, open, stat, lstat, copyFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink, open, stat, lstat, copyFile, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve, dirname, extname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -73,7 +73,29 @@ function validateOptions(o:Options){
  if(o.anchor&&(!Array.isArray(o.anchor)||o.anchor.length!==2||o.anchor.some(x=>!Number.isFinite(x)||x<0||x>1)))throw new Error('Invalid normalized anchor');
  for(const flag of ['soft','pixelArt'] as const)if(o[flag]!==undefined&&typeof o[flag]!=='boolean')throw new Error('Style flags must be booleans');
 }
-export async function begin(options:Options,cwd:string,call:Call,worker:Worker){
+async function bridgeEndpoint(folder:string,selection:string|undefined,last:boolean){
+ folder=resolve(folder);const m=await getStatus(folder);
+ const output=selection?join(folder,selection):m.exports?.at(-1)?.output;
+ if(selection&&!/^export_\d{3,}$/.test(selection))throw new Error('Invalid export selection');
+ if(typeof output!=='string'||dirname(output)!==folder||!/^export_\d{3,}$/.test(output.slice(folder.length+1)))throw new Error('Folder has no valid completed sprite export');
+ const canonicalOutput=join(await realpath(folder),output.slice(folder.length+1));
+ if(await realpath(output)!==canonicalOutput)throw new Error('Export path must not contain symlinks');
+ const metaFile=join(output,'animation.json');await regular(metaFile);const bytes=await readFile(metaFile);if(bytes.length>2*1024*1024)throw new Error('Oversized animation metadata');
+ const meta=JSON.parse(bytes.toString());
+ if(meta.version!==1||!Array.isArray(meta.frames)||!meta.frames.length||meta.frames.length>900)throw new Error('Invalid exported frames');
+ if(![meta.canvas?.width,meta.canvas?.height].every(x=>Number.isInteger(x)&&x>=16&&x<=1024)||!Array.isArray(meta.anchor)||meta.anchor.length!==2||!meta.anchor.every((x:any)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=1)||!Number.isFinite(meta.fps)||meta.fps<1||meta.fps>60)throw new Error('Invalid export canvas, anchor or FPS');
+ const frameIndex=last?meta.frames.length-1:0;const frame=meta.frames[frameIndex].file;
+ if(typeof frame!=='string'||!/^frames\/[\w-]+\.png$/.test(frame))throw new Error('Invalid endpoint frame path');
+ const file=join(output,frame);await regular(file);if(await realpath(file)!==join(canonicalOutput,frame))throw new Error('Endpoint frame path must not contain symlinks');
+ return {folder,export:output,frame,frameIndex,file,sha256:hash(await readFile(file)),metadataSha256:hash(bytes),canvas:meta.canvas,anchor:meta.anchor,fps:meta.fps,options:m.options};
+}
+export async function beginBridge(fromFolder:string,toFolder:string,options:Options,cwd:string,call:Call,worker:Worker,fromExport?:string,toExport?:string){
+ const from=await bridgeEndpoint(resolve(cwd,fromFolder),fromExport,true),to=await bridgeEndpoint(resolve(cwd,toFolder),toExport,false);
+ const inherited={width:from.options?.width??512,height:from.options?.height??512,outputWidth:from.canvas.width,outputHeight:from.canvas.height,fps:from.fps,anchor:from.anchor,pixelArt:from.options?.pixelArt??false,soft:from.options?.soft??false};
+ const chosen={...inherited,...options,loop:false,loopReason:'One-shot motion bridge from A last frame to B first frame',reference:from.file,referenceRole:'exact' as const};
+ return begin(chosen,cwd,call,worker,{from,to,endpointPolicy:'A last frame to B first frame',transforms:{}});
+}
+export async function begin(options:Options,cwd:string,call:Call,worker:Worker,bridge?:any){
  validateOptions(options);cwd=resolve(cwd);
  let styleFile='',style='';
  for(const candidate of styleSearchPaths(cwd)){
@@ -95,23 +117,40 @@ export async function begin(options:Options,cwd:string,call:Call,worker:Worker){
  const profile=options.profile??(caps.profiles?.includes(caps.readiness_profile)?caps.readiness_profile:caps.profiles?.[0]);
  if(!profile||!caps.profiles?.includes(profile))throw new Error('Requested profile is not currently installed');
  if(!discovery.model_prompt_modes?.[profile]?.includes('frames')||!discovery.generation_schema?.properties?.first_frame)throw new Error('Installed model does not expose supported frame conditioning; no silent fallback');
+ if(bridge&&!discovery.generation_schema?.properties?.last_frame)throw new Error('Installed model does not expose last-frame conditioning');
  const guide=await call('h3_guide',{profile,mode:'frames'});
  if(!Array.isArray(guide.sections)||!guide.sections.length||typeof guide.digest!=='string')throw new Error('Missing model-owned prompt contract');
  const width=options.width??512,height=options.height??512;const limits=caps.service_limits;
  if(limits&&(width>limits.axis_max||height>limits.axis_max||width*height>limits.canvas_pixels||width%limits.spatial_multiple||height%limits.spatial_multiple))throw new Error('Canvas exceeds discovered model limits');
  const palette=[...(options.palette??[]),...(style.match(/#[a-fA-F0-9]{6}\b/g)??[])];
- const plan=await worker('plan',{palette,...(reference?{reference}:{})});
+ const plan=await worker('plan',{palette,...(reference?{reference}:{}),...(bridge?{references:[bridge.to.file]}:{})});
  const safe=options.name.normalize('NFKC').replace(/[^\p{L}\p{N}_-]+/gu,'_').replace(/^[_-]+|[_-]+$/g,'').slice(0,80)||'Animation';
  const base=dirname(styleFile);let folder='';
  for(let i=1;i<=10000;i++){folder=join(base,'Sprite_'+safe+(i===1?'':'_'+i));try{await mkdir(folder,{mode:0o700});break;}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;if(i===10000)throw e;}}
  const m:any={version:1,kind:'2d-sprite-animation',folder,createdAt:new Date().toISOString(),stage:'prepared',options:{...options,width,height},style,styleSha256:hash(style),profile,mode:'frames',guide,key:plan.key,steps:limits?.steps_default??20,warnings:[],exports:[],budget:{image_requests:options.referenceRole==='exact'?0:1,h3_jobs:1}};
  if(reference){m.referenceFile='reference'+(extname(reference).toLowerCase()||'.png');await copyFile(reference,join(folder,m.referenceFile));await (await import('node:fs/promises')).chmod(join(folder,m.referenceFile),0o600);m.referenceSha256=hash(await readFile(reference));}
+ if(bridge){
+  m.bridge=bridge;m.targetReferenceFile='target.reference.png';await copyFile(bridge.to.file,join(folder,m.targetReferenceFile));await (await import('node:fs/promises')).chmod(join(folder,m.targetReferenceFile),0o600);
+  if(m.referenceSha256!==bridge.from.sha256||hash(await readFile(join(folder,m.targetReferenceFile)))!==bridge.to.sha256)throw new Error('Endpoint changed during preparation; no generation submitted');
+  m.warnings.push('Bridge endpoint conditioning is not a pixel lock or velocity match. Inspect both joins. Sources are unchanged; canvas/anchor transforms are recorded.');
+ }
  await writeFile(join(folder,STYLE),style,{mode:0o600,flag:'wx'});await atomic(join(folder,'request.json'),options);await atomic(join(folder,'guide.json'),guide);await save(m);return m;
 }
 export async function createSource(folder:string,prompt:string,call:Call,worker:Worker,adoptFile?:string){
  return locked(folder,async m=>{
   if(m.sourceFile)return m;
   try{
+   if(m.bridge){
+    if(adoptFile)throw new Error('Bridge endpoints are pinned snapshots; cannot adopt a replacement source');
+    for(const [role,file,provenance] of [['from',m.referenceFile,m.bridge.from],['to',m.targetReferenceFile,m.bridge.to]] as const){
+     const input=join(m.folder,file);if(hash(await readFile(input))!==provenance.sha256)throw new Error('Bridge endpoint snapshot changed');
+     const output=join(m.folder,'endpoint-'+role+'-'+id()+'.png');
+     m.bridge.transforms[role]=await worker('endpoint',{source:input,output,width:m.options.width,height:m.options.height,key:m.key,source_anchor:provenance.anchor,target_anchor:m.options.anchor,pixel_art:m.options.pixelArt??false,expected_size:[provenance.canvas.width,provenance.canvas.height]});
+     await worker('validate',{file:output,key:m.key});
+     const name=role==='from'?'source.png':'target.png';await rename(output,join(m.folder,name));
+    }
+    m.sourceFile='source.png';m.targetFile='target.png';m.sourceSha256=hash(await readFile(join(m.folder,m.sourceFile)));m.targetSha256=hash(await readFile(join(m.folder,m.targetFile)));m.stage='source_ready';delete m.error;await save(m);return m;
+   }
    let source:string;
    if(adoptFile){source=resolve(adoptFile);await regular(source);m.warnings.push('Explicitly adopted a local source; no GPT Image request made.');}
    else if(m.options.referenceRole==='exact'){source=join(m.folder,m.referenceFile);}
@@ -149,8 +188,12 @@ export async function animate(folder:string,sections:Record<string,string>,call:
    if(live.digest!==m.guide.digest)throw new Error('Model prompt contract changed; inspect new guide instead of silently adapting');
    sections=Object.keys(sections).length?sections:(m.compiled?.sections??{});
    if(Object.keys(sections).sort().join('|')!==[...live.sections].sort().join('|')||Object.values(sections).some(s=>typeof s!=='string'||!s.trim()))throw new Error('Provide exactly the model guide sections, without invented or missing section names');
+   if(m.bridge){
+    if(!m.targetFile||hash(await readFile(join(m.folder,m.targetFile)))!==m.targetSha256||hash(await readFile(join(m.folder,m.sourceFile)))!==m.sourceSha256)throw new Error('Prepared bridge endpoint changed or missing');
+    if(!m.targetAssetId){const up=await call('h3_upload',{file:join(m.folder,m.targetFile),kind:'image'});if(typeof up.id!=='string'||!up.id)throw new Error('Missing target asset ID');m.targetAssetId=up.id;await save(m);}
+   }
    if(!m.assetId){const up=await call('h3_upload',{file:join(m.folder,m.sourceFile),kind:'image'});m.assetId=up.id;await save(m);}
-   const gen:any={input_mode:'frames',first_frame:m.assetId,...(m.options.loop?{last_frame:m.assetId}:{}),width:m.options.width,height:m.options.height,duration:m.options.duration??5,steps:m.steps,seed:42,sage_attention:false,sparse_preset:'off',turbo_lora:false,lightx_lora:false,live_preview:false};
+   const gen:any={input_mode:'frames',first_frame:m.assetId,...(m.bridge?{last_frame:m.targetAssetId}:m.options.loop?{last_frame:m.assetId}:{}),width:m.options.width,height:m.options.height,duration:m.options.duration??5,steps:m.steps,seed:42,sage_attention:false,sparse_preset:'off',turbo_lora:false,lightx_lora:false,live_preview:false};
    const compiled=await call('h3_compile',{profile:m.profile,generation:gen,sections});
    // Native GenerationInput forbids BOTH timing fields, even if consistent.
    // Compile accepts requested seconds; submit only its aligned frame count.
@@ -206,7 +249,9 @@ export async function finish(folder:string,call:Call,worker:Worker,download:(job
    const options={key:m.key,loop:m.options.loop,fps:m.options.fps??12,width:m.options.outputWidth??256,height:m.options.outputHeight??256,soft:m.options.soft??false,pixelArt:m.options.pixelArt??false,anchor:m.options.anchor??[.5,.5],...(m.options.cycleSeconds?{cycleSeconds:m.options.cycleSeconds}:{}),...overrides};
    let index=1;for(;;index++){try{await stat(join(m.folder,'export_'+String(index).padStart(3,'0')));}catch{break;}}
    const output=join(m.folder,'export_'+String(index).padStart(3,'0'));m.processing={output,options};await save(m);
-   const result=await worker('process',{video,output,options});m.exports.push({createdAt:new Date().toISOString(),...result,options});m.stage=result.quality?.warnings?.length?'needs_review':'exported';delete m.error;await save(m);
+   const result=await worker('process',{video,output,options});
+   if(m.bridge){await atomic(join(output,'bridge.json'),m.bridge);const metaFile=join(output,'animation.json');const meta=JSON.parse(await readFile(metaFile,'utf8'));meta.bridge=m.bridge;await atomic(metaFile,meta);}
+   m.exports.push({createdAt:new Date().toISOString(),...result,options});m.stage=result.quality?.warnings?.length?'needs_review':'exported';delete m.error;await save(m);
    if(m.runId&&!m.runCompleted){
     try{const run=await call('h3_run',{action:'get',id:m.runId});if(run.state!=='completed')await call('h3_run',{action:'update',id:m.runId,body:{revision:run.revision,patch:{state:'completed'}}});m.runCompleted=true;await save(m);}
     catch{m.warnings.push('Local export succeeded, but canonical run completion was not acknowledged. No conflicting update replayed.');await save(m);}

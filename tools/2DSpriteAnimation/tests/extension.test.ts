@@ -44,6 +44,15 @@ test('ambiguous submission status requires receipt resolution, not another gener
  assert.equal(result.structuredContent.resume.next_action,'animate');assert.equal(result.structuredContent.resume.mode,'resolve_receipt_only');assert.equal(result.structuredContent.resume.generation_submitted,'unknown');
 });
 
+test('natural-language two-folder request routes through bridge without requiring JSON',async()=>{
+ const commands:any[]=[];const messages:string[]=[];const tools:any[]=[];
+ extension({registerTool:(x:any)=>tools.push(x),registerCommand:(_name:string,c:any)=>commands.push(c),sendUserMessage:(s:string)=>messages.push(s),sendMessage:()=>{}} as any);
+ await commands[0].handler('Create a bridge from /tmp/Sprite_Walking to /tmp/Sprite_Jumping');
+ assert.match(messages[0],/call bridge with fromFolder\/toFolder/);assert.match(messages[0],/without GPT/);assert.match(messages[0],/inspect both/);
+ assert.ok(tools[0].parameters.properties.action.anyOf.some((x:any)=>x.const==='bridge'));
+ assert.match(tools[0].promptGuidelines.join(' '),/Antialiasing is off by default/);
+});
+
 test('explicit reprocessing JSON is dispatched without preparation instructions',async()=>{
  const commands:any[]=[];const messages:string[]=[];
  extension({registerTool:()=>{},registerCommand:(name:string,c:any)=>commands.push({name,...c}),sendUserMessage:(s:string)=>messages.push(s),sendMessage:()=>{}} as any);

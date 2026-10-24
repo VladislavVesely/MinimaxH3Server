@@ -121,6 +121,26 @@ def prepare_source(source,output,width,height,key,exact=False,input_key=None,pix
     canvas.save(output)
     return {'original_preserved':True,'input_size':list(original),'output_size':[width,height],'offset':list(offset),'fit':'contain','exact_artwork_not_regenerated':exact,'key':key}
 
+def prepare_endpoint(source,output,width,height,key,source_anchor,target_anchor,pixel_art=False,expected_size=None):
+    regular(source,64*1024*1024)
+    if Path(output).exists():raise FileExistsError(output)
+    if not all(type(v) is int and 32<=v<=1920 for v in (width,height)):raise ValueError('Invalid endpoint canvas')
+    for anchor in (source_anchor,target_anchor):
+        if not isinstance(anchor,list) or len(anchor)!=2 or not all(type(v) in (int,float) and math.isfinite(v) and 0<=v<=1 for v in anchor):raise ValueError('Invalid endpoint anchor')
+    with Image.open(source) as raw:
+        if raw.format!='PNG' or 'A' not in raw.getbands():raise ValueError('Bridge endpoint must be an RGBA PNG')
+        im=raw.convert('RGBA')
+    if expected_size is not None and list(im.size)!=expected_size:raise ValueError('Endpoint PNG dimensions disagree with animation metadata')
+    original=im.size;scale=min(width/im.width,height/im.height)
+    size=(max(1,round(im.width*scale)),max(1,round(im.height*scale)))
+    im=im.resize(size,Image.Resampling.NEAREST if pixel_art else Image.Resampling.LANCZOS)
+    offset=[round(target_anchor[0]*width-source_anchor[0]*size[0]),round(target_anchor[1]*height-source_anchor[1]*size[1])]
+    bounds=im.getchannel('A').getbbox()
+    if not bounds:raise ValueError('Empty bridge endpoint')
+    if bounds[0]+offset[0]<0 or bounds[1]+offset[1]<0 or bounds[2]+offset[0]>width or bounds[3]+offset[1]>height:raise ValueError('Anchor alignment would clip endpoint artwork; choose a compatible canvas/anchor')
+    canvas=Image.new('RGB',(width,height),tuple(int(v) for v in rgb(key)));canvas.paste(im,tuple(offset),im);canvas.save(output)
+    return {'input_size':list(original),'output_size':[width,height],'scale':scale,'offset':offset,'source_anchor':source_anchor,'target_anchor':target_anchor,'fit':'contain-anchor','original_preserved':True}
+
 def validate_source(file,key):
     with Image.open(regular(file,64*1024*1024)) as im:a=np.asarray(im.convert('RGB'))
     distance=np.linalg.norm((a.astype(np.float32)-rgb(key))/255.,axis=2)
@@ -272,15 +292,17 @@ def process_video(video,output,options):
     return {'output':str(out),'frames':len(frames),'duration_ms':final_duration*1000,'quality':report}
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['check','plan','prepare','validate','process']);args=parser.parse_args();data=json.load(sys.stdin)
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['check','plan','prepare','endpoint','validate','process']);args=parser.parse_args();data=json.load(sys.stdin)
     if args.action=='check':
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):raise ValueError('Install FFmpeg/ffprobe before starting; no generation attempted')
         result={'ready':True,'pillow':Image.__version__,'numpy':np.__version__}
     elif args.action=='plan':
         palette=data.get('palette',[])
         if data.get('reference'):palette+=image_palette(data['reference'])
+        for reference in data.get('references',[]):palette+=image_palette(reference)
         result={'key':choose_key(palette),'palette':palette,'guaranteed_absent':False}
     elif args.action=='prepare':result=prepare_source(**data)
+    elif args.action=='endpoint':result=prepare_endpoint(**data)
     elif args.action=='validate':result=validate_source(**data)
     else:result=process_video(**data)
     print(json.dumps(result))

@@ -43,6 +43,22 @@ The supplied default is clean softly shaded illustration. Replace it for another
 
 Use Pillow-readable still images (PNG/JPEG/WebP recommended). Unsupported formats, missing files and undecodable references fail before generation. For HEIC, convert to PNG/JPEG first with your existing image tools. References are copied privately into the result folder. Non-exact references are sent to GPT Image and may include their original background/metadata; crop or redact private content beforehand.
 
+### Generated motion bridges between sprite folders
+
+Use normal language—no JSON needed:
+
+```text
+/sprite Create a motion bridge from "/path/Sprite_Walking" to "/path/Sprite_Jumping"
+```
+
+Pi uses the new `bridge` tool action, then prepares and inspects **both** endpoint images, authors the live H3 frame-mode prompt, generates once and finishes the export. The default is A's **last frame → B's first frame**, from each manifest's latest completed export. Ask for a particular `export_###` to pin an older revision. Ask for a final duration in plain language; H3's source duration remains independent of that retimed export duration.
+
+The bridge is a new `Sprite_*` folder, not a modification or concatenation of the input folders. Both RGBA endpoints are snapshotted and hashed. Their canvases are contain-scaled and anchors aligned on one key-colour background selected against both images and the workspace style/palette. Visible clipping or inconsistent metadata stops preparation rather than silently cropping. Default output canvas, FPS, anchor and pixel-art/soft flags come from A; explicit requests override them. These geometric transforms do not infer semantic body size or repair mismatched identities/cameras—Pi must inspect both endpoints before submission.
+
+No GPT Image request is made. One H3 job is permitted, with the existing preflight/stable-receipt recovery and no automatic paid retry. `finish` exports a one-shot PNG sequence, atlas, GIF and `bridge.json`; `animation.json` also records the exact source folders, export revisions, frame indices, hashes and transforms. Antialiasing remains off unless requested. Original video and all previous exports are retained for quota-free reprocessing.
+
+Conditioning is **not** a pixel lock, velocity match or guaranteed seamless join. The initial automated tests use synthetic video and injected inference; real bridge motion quality needs visual review. This feature exports the transition itself; it does not silently assemble or rewrite A and B.
+
 ### Optional edge antialiasing
 
 Pass `processing.antialias:true` when finishing/reprocessing (default `false`). This averages cleaned, premultiplied RGBA coverage when downsampling, replacing only partially covered silhouette pixels; opaque interior detail keeps its existing sampling. It retains continuous edge alpha even for pixel art. It does not blur the whole image or add an outline. It works best when the source is larger than the export; equal-size binary edges gain no extra geometric detail. Reprocessing writes a separate export without generation.

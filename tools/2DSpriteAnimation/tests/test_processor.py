@@ -32,6 +32,15 @@ class ProcessorTests(unittest.TestCase):
         np.testing.assert_array_equal(b[3:5,3:5],np.asarray(crisp)[3:5,3:5])
         self.assertEqual(int(b[0,0,3]),0)
 
+    def test_bridge_preparation_aligns_anchors_without_clipping(self):
+        a=Image.new('RGBA',(64,64));ImageDraw.Draw(a).rectangle((20,20,40,50),fill='red')
+        source=self.root/'endpoint.png';a.save(source);out=self.root/'keyed.png'
+        r=self.p.prepare_endpoint(str(source),str(out),128,128,'#00ff00',[.5,.8],[.5,.8],True)
+        self.assertEqual(r['offset'],[0,0]);self.assertEqual(r['scale'],2)
+        with Image.open(out) as im:self.assertEqual(im.getpixel((60,60)),(255,0,0))
+        with self.assertRaisesRegex(ValueError,'clip'):
+            self.p.prepare_endpoint(str(source),str(self.root/'bad.png'),128,128,'#00ff00',[.5,.8],[.5,0],True)
+
     def test_key_selection_avoids_the_actual_palette(self):
         selected = self.p.choose_key(['#00ff00', '#00ffff', '#ffff00'])
         self.assertNotEqual(selected, '#00ff00')
