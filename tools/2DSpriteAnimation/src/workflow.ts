@@ -25,6 +25,10 @@ export function styleSearchPaths(cwd:string){
  return candidates;
 }
 const id=()=>randomUUID().replaceAll('-','');
+function canonicalId(value:unknown,field:string){
+ if(typeof value!=='string'||!/^[a-f0-9]{32}$/.test(value))throw new Error('H3 response missing valid '+field+'; recorded response retained, no downstream operation submitted');
+ return value;
+}
 const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 async function atomic(file:string,value:any){const temp=file+'.'+id()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});await rename(temp,file);}
 async function regular(file:string){const s=await lstat(file);if(!s.isFile()||s.isSymbolicLink()||!s.size||s.size>64*1024*1024)throw new Error('Reference must be a regular image file under 64 MiB');}
@@ -159,13 +163,20 @@ export async function animate(folder:string,sections:Record<string,string>,call:
    if(!preflight.valid||!preflight.ready)throw new Error('H3 preflight is not ready; no generation submitted: '+JSON.stringify(preflight.not_ready_reasons??[]));
    if(!m.projectId){
     if(m.projectAttempted)throw new Error('Project creation response was lost; inspect canonical projects rather than create a duplicate');
-    if(m.options.projectId)m.projectId=m.options.projectId;
-    else{m.projectAttempted=true;await save(m);m.projectId=(await call('h3_request',{method:'POST',path:'/native/projects',body:{name:'Sprite: '+m.options.name}})).id;}
+    if(m.options.projectId)m.projectId=canonicalId(m.options.projectId,'project_id');
+    else{
+     m.projectAttempted=true;await save(m);
+     m.projectResult=await call('h3_request',{method:'POST',path:'/native/projects',body:{name:'Sprite: '+m.options.name}});await save(m);
+     m.projectId=canonicalId(m.projectResult.project_id,'project_id');
+    }
     await save(m);
    }
    if(!m.runId){
     if(m.runAttempted)throw new Error('Run creation response was lost; inspect canonical runs rather than create a duplicate');
-    m.runAttempted=true;await save(m);const run=await call('h3_run',{action:'create',body:{project_id:m.projectId,goal:m.options.request,max_jobs:1,max_revisions_per_shot:0}});m.runId=run.id;await save(m);
+    canonicalId(m.projectId,'project_id');
+    m.runAttempted=true;await save(m);
+    const run=await call('h3_run',{action:'create',body:{project_id:m.projectId,goal:m.options.request,max_jobs:1,max_revisions_per_shot:0}});
+    m.runResult=run;await save(m);m.runId=canonicalId(run.id,'run id');await save(m);
     await call('h3_run',{action:'update',id:m.runId,body:{revision:run.revision,patch:{storyboard:[{id:'animation',intent:m.options.request}],continuity:`Style ${m.styleSha256}. Source ${m.sourceSha256}. Key ${m.key}. ${m.options.loop?'Cyclic':'One-shot'} animation.`,state:'active'}}});
    }
    m.requestId=id();m.stage='submission_unknown';await save(m);

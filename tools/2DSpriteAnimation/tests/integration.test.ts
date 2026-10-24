@@ -19,8 +19,8 @@ test('real worker through complete orchestration produces a keyed loop and GIF w
    case 'h3_upload':return {id:'b'.repeat(64)};
    case 'h3_compile':return {prompt:'action: abstract cycle\nsound: silence',effective_frames:124,effective_seconds:124/24,contract_digest:digest};
    case 'h3_preflight':return {valid:true,ready:true};
-   case 'h3_request':return {id:'c'.repeat(32)};
-   case 'h3_run':return {id:'d'.repeat(32),revision:1,state:'active'};
+   case 'h3_request':return {project_id:'c'.repeat(32),name:args.body.name,revision:1};
+   case 'h3_run':if(args.action==='create')assert.match(args.body.project_id,/^[a-f0-9]{32}$/);return {id:'d'.repeat(32),revision:1,state:'active'};
    case 'h3_generate':submitted++;return {job_id:'e'.repeat(32),status:'queued'};
    case 'h3_job':return {job_id:'e'.repeat(32),status:'completed'};
    case 'h3_inspect':return {};

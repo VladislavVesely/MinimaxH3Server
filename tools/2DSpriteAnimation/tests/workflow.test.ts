@@ -28,7 +28,11 @@ async function fixture(t:any){
    assert.notEqual(Object.hasOwn(args.generation,'duration'),Object.hasOwn(args.generation,'num_frames'),'Native H3 requires frames or duration, not both');
    if(name==='h3_preflight')return {valid:true,ready:true};
   }
-  if(name==='h3_request')return {id:project};if(name==='h3_run')return {id:run,revision:1};
+  if(name==='h3_request')return {project_id:project,name:args.body?.name,revision:1};
+  if(name==='h3_run'){
+   if(args.action==='create')assert.match(args.body.project_id,/^[a-f0-9]{32}$/,'Native RunCreate requires project_id');
+   return {id:run,revision:1};
+  }
   if(name==='h3_generate'||name==='h3_receipt'||name==='h3_job')return {job_id:job,status:'completed'};
   if(name==='h3_inspect')return {};throw new Error(name);
  };
@@ -71,6 +75,22 @@ test('dynamic sections compile/preflight and original source conditions bounded 
  assert.equal(f.calls.filter(c=>c.name==='h3_generate').length,1);assert.ok(f.calls.findIndex(c=>c.name==='h3_preflight')<f.calls.findIndex(c=>c.name==='h3_generate'));
  const submission=f.calls.find(c=>c.name==='h3_generate')!.args;assert.equal(submission.generation.first_frame,asset);assert.equal(Object.hasOwn(submission.generation,'duration'),false);assert.equal(submission.generation.num_frames,124);assert.equal(submission.generation.profile,'installed-profile');assert.match(submission.request_id,/^[a-f0-9]{32}$/);
 });
+test('a malformed project response is retained and cannot reach run creation',async t=>{
+ const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);
+ const wrong=async(n:string,a:any)=>n==='h3_request'?{id:project}:f.call(n,a);
+ await assert.rejects(animate(m.folder,{dynamic_section:'action',sound:'silence'},wrong),/project_id/);
+ assert.equal(f.calls.filter(c=>c.name==='h3_run').length,0);
+ assert.equal((await getStatus(m.folder)).projectResult.id,project);
+});
+
+test('a malformed run acknowledgement is retained without submitting a generation',async t=>{
+ const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);
+ const wrong=async(n:string,a:any)=>n==='h3_run'&&a.action==='create'?{revision:1}:f.call(n,a);
+ await assert.rejects(animate(m.folder,{dynamic_section:'action',sound:'silence'},wrong),/run id/);
+ const saved=await getStatus(m.folder);assert.equal(saved.projectId,project);assert.equal(saved.runResult.revision,1);assert.equal(saved.requestId,undefined);
+ assert.equal(f.calls.filter(c=>c.name==='h3_generate').length,0);
+});
+
 test('ambiguous submission persists its ID and resumes via receipt, never submits again',async t=>{
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);let submits=0;
  const ambiguous=async(n:string,a:any)=>{if(n==='h3_generate'){submits++;throw new Error('connection lost');}return f.call(n,a);};
