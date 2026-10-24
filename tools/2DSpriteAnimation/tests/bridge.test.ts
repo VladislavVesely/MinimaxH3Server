@@ -37,6 +37,9 @@ for n in range(2):
 test('bridge snapshots last-to-first endpoints and submits distinct conditioning without GPT',async t=>{
  const f=await fixture(t);const before=await readFile(join(f.folders[0],'manifest.json'));
  const m=await beginBridge(f.folders[0],f.folders[1],f.options,f.root,f.call,runWorker);
+ assert.deepEqual(m.bridge.from.motionContext.map((x:any)=>x.frameIndex),[0,1]);
+ assert.deepEqual(m.bridge.to.motionContext.map((x:any)=>x.frameIndex),[0,1]);
+ assert.match(m.bridge.motionGuidance,/velocity/);assert.match(m.bridge.from.motionContext[0].sha256,/^[a-f0-9]{64}$/);
  assert.equal(m.budget.image_requests,0);assert.equal(m.options.loop,false);assert.equal(m.bridge.from.frameIndex,1);assert.equal(m.bridge.to.frameIndex,0);
  await createSource(m.folder,'',f.call,runWorker);await animate(m.folder,{action:'Move from first pose into the second'},f.call);
  const g=f.calls.find(x=>x.name==='h3_generate').args.generation;

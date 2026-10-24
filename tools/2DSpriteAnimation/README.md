@@ -57,6 +57,8 @@ The bridge is a new `Sprite_*` folder, not a modification or concatenation of th
 
 No GPT Image request is made. One H3 job is permitted, with the existing preflight/stable-receipt recovery and no automatic paid retry. `finish` exports a one-shot PNG sequence, atlas, GIF and `bridge.json`; `animation.json` also records the exact source folders, export revisions, frame indices, hashes and transforms. Antialiasing remains off unless requested. Original video and all previous exports are retained for quota-free reprocessing.
 
+Bridge prompt authoring now requires inspecting the outgoing last four and incoming first four frames (`motionContext`, playback-ordered with durations and hashes). These are local authoring context, not extra H3 conditioning. The gameplay base guidance asks for action already in progress at entry and exit, causal overlapping movement, maintained contact/structure, preserved in-place/root-motion behavior, and no manufactured stop, idle hold, settle-to-pose or morph. Genuine stops/rests remain allowed when required by the source actions or explicit request. Final gameplay timing is chosen separately from H3's minimum source duration; retiming cannot fix poor movement. The new guidance does not rewrite or regenerate existing exports.
+
 Conditioning is **not** a pixel lock, velocity match or guaranteed seamless join. The initial automated tests use synthetic video and injected inference; real bridge motion quality needs visual review. This feature exports the transition itself; it does not silently assemble or rewrite A and B.
 
 ### Optional edge antialiasing

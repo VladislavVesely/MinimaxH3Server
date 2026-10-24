@@ -4,6 +4,8 @@ import { join, resolve, dirname, extname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { BRIDGE_MOTION_GUIDANCE } from './bridge-prompt.ts';
+
 export type Call = (name:string,args:any)=>Promise<any>;
 export type Worker = (action:string,args:any)=>Promise<any>;
 export interface Options {
@@ -87,13 +89,20 @@ async function bridgeEndpoint(folder:string,selection:string|undefined,last:bool
  const frameIndex=last?meta.frames.length-1:0;const frame=meta.frames[frameIndex].file;
  if(typeof frame!=='string'||!/^frames\/[\w-]+\.png$/.test(frame))throw new Error('Invalid endpoint frame path');
  const file=join(output,frame);await regular(file);if(await realpath(file)!==join(canonicalOutput,frame))throw new Error('Endpoint frame path must not contain symlinks');
- return {folder,export:output,frame,frameIndex,file,sha256:hash(await readFile(file)),metadataSha256:hash(bytes),canvas:meta.canvas,anchor:meta.anchor,fps:meta.fps,options:m.options};
+ const motionContext=[];
+ const start=last?Math.max(0,meta.frames.length-4):0,end=last?meta.frames.length:Math.min(4,meta.frames.length);
+ for(let index=start;index<end;index++){
+  const item=meta.frames[index];if(typeof item.file!=='string'||!/^frames\/[\w-]+\.png$/.test(item.file))throw new Error('Invalid motion context frame path');
+  const path=join(output,item.file);await regular(path);if(await realpath(path)!==join(canonicalOutput,item.file))throw new Error('Motion context frame path must not contain symlinks');
+  motionContext.push({frameIndex:index,file:path,sha256:hash(await readFile(path)),duration_ms:item.duration_ms??1000/meta.fps});
+ }
+ return {folder,export:output,frame,frameIndex,file,sha256:hash(await readFile(file)),metadataSha256:hash(bytes),canvas:meta.canvas,anchor:meta.anchor,fps:meta.fps,motionContext,options:m.options};
 }
 export async function beginBridge(fromFolder:string,toFolder:string,options:Options,cwd:string,call:Call,worker:Worker,fromExport?:string,toExport?:string){
  const from=await bridgeEndpoint(resolve(cwd,fromFolder),fromExport,true),to=await bridgeEndpoint(resolve(cwd,toFolder),toExport,false);
  const inherited={width:from.options?.width??512,height:from.options?.height??512,outputWidth:from.canvas.width,outputHeight:from.canvas.height,fps:from.fps,anchor:from.anchor,pixelArt:from.options?.pixelArt??false,soft:from.options?.soft??false};
  const chosen={...inherited,...options,loop:false,loopReason:'One-shot motion bridge from A last frame to B first frame',reference:from.file,referenceRole:'exact' as const};
- return begin(chosen,cwd,call,worker,{from,to,endpointPolicy:'A last frame to B first frame',transforms:{}});
+ return begin(chosen,cwd,call,worker,{from,to,endpointPolicy:'A last frame to B first frame',motionGuidance:BRIDGE_MOTION_GUIDANCE,transforms:{}});
 }
 export async function begin(options:Options,cwd:string,call:Call,worker:Worker,bridge?:any){
  validateOptions(options);cwd=resolve(cwd);
