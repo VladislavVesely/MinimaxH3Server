@@ -43,6 +43,10 @@ The supplied default is clean softly shaded illustration. Replace it for another
 
 Use Pillow-readable still images (PNG/JPEG/WebP recommended). Unsupported formats, missing files and undecodable references fail before generation. For HEIC, convert to PNG/JPEG first with your existing image tools. References are copied privately into the result folder. Non-exact references are sent to GPT Image and may include their original background/metadata; crop or redact private content beforehand.
 
+### Optional edge antialiasing
+
+Pass `processing.antialias:true` when finishing/reprocessing (default `false`). This averages cleaned, premultiplied RGBA coverage when downsampling, replacing only partially covered silhouette pixels; opaque interior detail keeps its existing sampling. It retains continuous edge alpha even for pixel art. It does not blur the whole image or add an outline. It works best when the source is larger than the export; equal-size binary edges gain no extra geometric detail. Reprocessing writes a separate export without generation.
+
 ## What it actually does
 
 1. Validate local dependencies and inputs, discover live H3 profiles/modes and read the actual selected frame-mode prompt contract. No invented sections or model downloads.

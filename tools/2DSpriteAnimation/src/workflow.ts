@@ -188,7 +188,7 @@ export async function animate(folder:string,sections:Record<string,string>,call:
 export async function finish(folder:string,call:Call,worker:Worker,download:(job:string,file:string)=>Promise<void>,overrides:Record<string,any>={}){
  return locked(folder,async m=>{
   if(!m.jobId)throw new Error('Resolve submission with animate before finishing');
-  const allowed=['key','fps','width','height','loop','soft','pixelArt','anchor','cycleSeconds','tolerance','softness','despill','startFrame','endFrame'];
+  const allowed=['key','fps','width','height','loop','soft','pixelArt','anchor','cycleSeconds','tolerance','softness','despill','antialias','startFrame','endFrame'];
   if(Object.keys(overrides).some(k=>!allowed.includes(k)))throw new Error('Unknown processing override');
   try{
    if(!m.videoFile){

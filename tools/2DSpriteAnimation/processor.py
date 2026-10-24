@@ -177,6 +177,19 @@ def checker(im):
     bg=Image.fromarray(np.dstack((v,v,v,np.full_like(v,255))))
     return Image.alpha_composite(bg,im).convert('RGB')
 
+def resize_sprite(im,size,pixel_art,antialias=False):
+    crisp=im.resize(size,Image.Resampling.NEAREST if pixel_art else Image.Resampling.LANCZOS)
+    if not antialias:return crisp
+    # Supersample only the silhouette. Premultiplied filtering excludes hidden
+    # RGB in transparent pixels; BOX avoids ringing or expanding the outline.
+    sample=im if im.width>size[0] or im.height>size[1] else im.resize((size[0]*2,size[1]*2),Image.Resampling.NEAREST)
+    smooth=np.asarray(sample.convert('RGBa').resize(size,Image.Resampling.BOX).convert('RGBA'))
+    result=np.asarray(crisp).copy()
+    edge=(smooth[:,:,3]>0)&(smooth[:,:,3]<255)
+    result[edge]=smooth[edge]
+    result[smooth[:,:,3]==0]=0
+    return Image.fromarray(result)
+
 def process_video(video,output,options):
     regular(video);out=Path(output)
     if out.exists():raise FileExistsError(output)
@@ -191,9 +204,13 @@ def process_video(video,output,options):
     probe=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','stream=width,height:format=duration','-of','json',str(Path(video).resolve())],check=True,capture_output=True,text=True,timeout=30)
     info=json.loads(probe.stdout);duration=float(info['format']['duration']);stream=info['streams'][0]
     if not math.isfinite(duration) or not 0<duration<=120 or duration*fps>900 or duration*fps*width*height>80_000_000 or stream['width']*stream['height']>8_000_000:raise ValueError('Video exceeds bounded processing budget')
+    antialias=options.get('antialias',False)
+    if type(antialias) is not bool:raise ValueError('antialias must be boolean')
     out.mkdir(mode=0o700,parents=True);(out/'frames').mkdir(mode=0o700)
     if type(options.get('despill',True)) is not bool:raise ValueError('despill must be boolean')
     report={'warnings':[],'matte':'estimated_soft' if options.get('soft') else 'coverage_separate_from_colour','pixel_perfect_guaranteed':False,'keying_resolution':{'width':stream['width'],'height':stream['height']},'resize_after_keying':True,'despill':'local_colour_reconstruction' if options.get('despill',True) and not options.get('soft') else 'off','pixel_art_alpha':'binary' if options.get('pixelArt') and not options.get('soft') else 'continuous'}
+    report['antialias']='premultiplied_area_edges' if antialias else 'off'
+    if antialias:report['pixel_art_alpha']='continuous'
     if options.get('despill',True) and not options.get('soft'):report['warnings'].append('Edge colours are locally estimated, not recovered ground truth. No motion-compensated temporal stabilization; inspect moving edges for colour variation.')
     if options.get('soft'):report['warnings'].append('Soft alpha is estimated from one colour background; coloured smoke/glass and occlusion require visual review.')
     with tempfile.TemporaryDirectory(prefix='sprite-frames-') as temp:
@@ -207,9 +224,9 @@ def process_video(video,output,options):
             rgba=key_frame(a,key,soft=options.get('soft',False),tolerance=options.get('tolerance',.06),softness=options.get('softness',.20),despill=options.get('despill',True))
             border=np.concatenate((rgba[0,:,3],rgba[-1,:,3],rgba[:,0,3],rgba[:,-1,3]));border_stats.append(float(np.mean(border<16)))
             im=Image.fromarray(rgba);scale=min(width/im.width,height/im.height)
-            im=im.resize((max(1,round(im.width*scale)),max(1,round(im.height*scale))),Image.Resampling.NEAREST if options.get('pixelArt') else Image.Resampling.LANCZOS)
+            im=resize_sprite(im,(max(1,round(im.width*scale)),max(1,round(im.height*scale))),options.get('pixelArt',False),antialias)
             canvas=Image.new('RGBA',(width,height));canvas.paste(im,((width-im.width)//2,(height-im.height)//2))
-            if options.get('pixelArt') and not options.get('soft'):
+            if options.get('pixelArt') and not options.get('soft') and not antialias:
                 clean=np.asarray(canvas).copy();clean[:,:,3]=np.where(clean[:,:,3]>=128,255,0);clean[clean[:,:,3]==0,:3]=0;canvas=Image.fromarray(clean)
             frames.append(canvas)
     if not frames:raise ValueError('Video contains no decodable frames')

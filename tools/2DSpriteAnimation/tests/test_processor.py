@@ -18,6 +18,20 @@ class ProcessorTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_optional_antialiasing_preserves_interior_and_avoids_transparent_colour_bleed(self):
+        a=np.zeros((16,16,4),dtype=np.uint8);a[:]=[0,0,255,0]
+        a[3:13,3:13]=[200,80,30,255];a[6:10,6:10]=[20,30,40,255]
+        source=Image.fromarray(a)
+        crisp=self.p.resize_sprite(source,(8,8),True,False)
+        smooth=self.p.resize_sprite(source,(8,8),True,True)
+        np.testing.assert_array_equal(np.asarray(crisp),np.asarray(source.resize((8,8),Image.Resampling.NEAREST)))
+        b=np.asarray(smooth);partial=(b[:,:,3]>0)&(b[:,:,3]<255)
+        self.assertTrue(np.any(partial))
+        # Eight-bit premultiplication may round a channel by a few levels.
+        self.assertLessEqual(int(np.max(np.abs(b[partial,:3].astype(int)-[200,80,30]))),3)
+        np.testing.assert_array_equal(b[3:5,3:5],np.asarray(crisp)[3:5,3:5])
+        self.assertEqual(int(b[0,0,3]),0)
+
     def test_key_selection_avoids_the_actual_palette(self):
         selected = self.p.choose_key(['#00ff00', '#00ffff', '#ffff00'])
         self.assertNotEqual(selected, '#00ff00')
