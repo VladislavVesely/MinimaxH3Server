@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import extension from '../index.ts';
+import { access } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { createJiti } from 'jiti';
+
+test('starting Pi in the implementation folder discovers its local loader',async()=>{
+ const loader=new URL('../.pi/extensions/2DSpriteAnimation.ts',import.meta.url);
+ await access(loader);
+ const module=await createJiti(import.meta.url).import(fileURLToPath(loader)) as {default:typeof extension};
+ const commands:string[]=[];
+ module.default({registerTool:()=>{},registerCommand:(name:string)=>commands.push(name)} as any);
+ assert.deepEqual(commands,['sprite']);
+});
 
 test('registration is pure and exposes resumable tools/command without inference',async()=>{
  const tools:any[]=[];const commands:any[]=[];const messages:string[]=[];

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { begin, createSource, animate, finish, getStatus } from '../src/workflow.ts';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { begin, createSource, animate, finish, getStatus, styleSearchPaths } from '../src/workflow.ts';
 
 const project='a'.repeat(32),run='b'.repeat(32),job='c'.repeat(32),asset='d'.repeat(64),digest='e'.repeat(64);
 const discovery={capabilities:{profiles:['installed-profile'],runtime_ready:true,readiness_profile:'installed-profile',service_limits:{steps_default:20,spatial_multiple:32,axis_min:32,axis_max:1920,canvas_pixels:2088960}},model_prompt_modes:{'installed-profile':['frames']},generation_schema:{properties:{first_frame:{},duration:{anyOf:[{ge:5,le:15}]}}}};
@@ -30,6 +31,12 @@ async function fixture(t:any){
  };
  return {cwd,call,calls,worker,options:{name:'Abstract morph',request:'An isometric geometric lattice transforming into a spiral, repeating.',loop:true,loopReason:'User explicitly requested repetition',camera:'fixed dimetric',motion:'A continuous geometric transformation'}};
 }
+
+test('implementation-folder startup finds the shared workspace style without falling back for unrelated projects',()=>{
+ const pkg=fileURLToPath(new URL('../',import.meta.url));
+ assert.equal(styleSearchPaths(pkg).at(-1),resolve(pkg,'../../2D Animations/2DSpriteAnimation.style.md'));
+ assert.deepEqual(styleSearchPaths('/tmp/unrelated-project'),['/tmp/unrelated-project/2DSpriteAnimation.style.md','/tmp/unrelated-project/2D Animations/2DSpriteAnimation.style.md']);
+});
 
 test('prepare supports arbitrary intent, style, adaptive key and actual model guide without spending',async t=>{
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);

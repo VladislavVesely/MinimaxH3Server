@@ -4,10 +4,13 @@ An **open-ended** style-driven animation workflow, not a catalogue of supported 
 
 ## Start here
 
-This checkout is already wired for sessions started in either:
+This checkout is wired for sessions started in any of these folders:
 
 - `MinimaxH3Server/2D Animations` (recommended)
 - `MinimaxH3Server` (uses `2D Animations/2DSpriteAnimation.style.md`)
+- `MinimaxH3Server/tools/2DSpriteAnimation` (also uses the shared `MinimaxH3Server/2D Animations` style/output workspace)
+
+Pi discovers project loaders only in the startup working directory, not its parents. A loader is included in all three locations. An explicit style in the current directory still takes priority.
 
 Start Pi there, grant project trust when appropriate and run `/reload` in an existing session. The existing `generate_image` and `h3_*` tools must be loaded/callable. Requires Pi 1.3.0+ with nested tool execution; tested against the installed 1.3.0 SDK. No server restart or generation-daemon change is involved.
 

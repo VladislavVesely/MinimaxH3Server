@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename, unlink, open, stat, lstat, copyFile
 import { constants } from 'node:fs';
 import { join, resolve, dirname, extname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 export type Call = (name:string,args:any)=>Promise<any>;
 export type Worker = (action:string,args:any)=>Promise<any>;
@@ -14,6 +15,15 @@ export interface Options {
  pixelArt?:boolean; anchor?:number[]; cycleSeconds?:number; duration?:number;
 }
 export const STYLE='2DSpriteAnimation.style.md';
+export function styleSearchPaths(cwd:string){
+ cwd=resolve(cwd);
+ const candidates=[join(cwd,STYLE),join(cwd,'2D Animations',STYLE)];
+ const packageRoot=resolve(fileURLToPath(new URL('../',import.meta.url)));
+ // Only this implementation directory gets the repository workspace fallback.
+ // Other projects must supply their own style, not silently inherit ours.
+ if(cwd===packageRoot)candidates.push(resolve(packageRoot,'../../2D Animations',STYLE));
+ return candidates;
+}
 const id=()=>randomUUID().replaceAll('-','');
 const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 async function atomic(file:string,value:any){const temp=file+'.'+id()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});await rename(temp,file);}
@@ -61,8 +71,12 @@ function validateOptions(o:Options){
 }
 export async function begin(options:Options,cwd:string,call:Call,worker:Worker){
  validateOptions(options);cwd=resolve(cwd);
- let styleFile=join(cwd,STYLE),style:string;
- try{style=await readFile(styleFile,'utf8');}catch{styleFile=join(cwd,'2D Animations',STYLE);try{style=await readFile(styleFile,'utf8');}catch{throw new Error('Create '+STYLE+' in the working folder (or project 2D Animations folder) before generating');}}
+ let styleFile='',style='';
+ for(const candidate of styleSearchPaths(cwd)){
+  try{style=await readFile(candidate,'utf8');styleFile=candidate;break;}
+  catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+ }
+ if(!styleFile)throw new Error('Create '+STYLE+' in the working folder (or project 2D Animations folder) before generating');
  if(!style.trim()||style.length>50000)throw new Error('Style file must be nonempty and under 50,000 characters');
  const settings=style.match(/```sprite-settings\s*\n([\s\S]*?)\n```/);
  if(settings){
