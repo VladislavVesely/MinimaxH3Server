@@ -4,6 +4,8 @@ Soft alpha from one chroma background is an estimate, not recovered ground truth
 All exports use a shared canvas; no per-frame recentering, mirroring or forced seam.
 """
 import argparse
+import base64
+import io
 import hashlib
 import json
 import math
@@ -120,6 +122,19 @@ def prepare_source(source,output,width,height,key,exact=False,input_key=None,pix
     offset=((width-im.width)//2,(height-im.height)//2);canvas.paste(im,offset,im)
     canvas.save(output)
     return {'original_preserved':True,'input_size':list(original),'output_size':[width,height],'offset':list(offset),'fit':'contain','exact_artwork_not_regenerated':exact,'key':key}
+
+def reference_preview(frames):
+    if not isinstance(frames,list) or not 1<=len(frames)<=12:raise ValueError('Inspect 1–12 reference frames at a time')
+    sheet=Image.new('RGB',(min(4,len(frames))*192,math.ceil(len(frames)/4)*216),'#252525');draw=ImageDraw.Draw(sheet)
+    for i,item in enumerate(frames):
+        regular(item['file'],64*1024*1024)
+        with Image.open(item['file']) as raw:
+            if raw.format!='PNG' or 'A' not in raw.getbands():raise ValueError('Reference frame must be an RGBA PNG')
+            im=raw.convert('RGBA');im.thumbnail((192,192),Image.Resampling.NEAREST)
+        x=(i%4)*192;y=(i//4)*216
+        sheet.paste(checker(im),(x+(192-im.width)//2,y+(192-im.height)//2));draw.text((x+4,y+196),'Frame '+str(item['frameIndex']),fill='white')
+    buffer=io.BytesIO();sheet.save(buffer,format='PNG')
+    return {'mimeType':'image/png','data':base64.b64encode(buffer.getvalue()).decode('ascii')}
 
 def prepare_endpoint(source,output,width,height,key,source_anchor,target_anchor,pixel_art=False,expected_size=None):
     regular(source,64*1024*1024)
@@ -292,7 +307,7 @@ def process_video(video,output,options):
     return {'output':str(out),'frames':len(frames),'duration_ms':final_duration*1000,'quality':report}
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['check','plan','prepare','endpoint','validate','process']);args=parser.parse_args();data=json.load(sys.stdin)
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['check','plan','prepare','endpoint','reference_preview','validate','process']);args=parser.parse_args();data=json.load(sys.stdin)
     if args.action=='check':
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):raise ValueError('Install FFmpeg/ffprobe before starting; no generation attempted')
         result={'ready':True,'pillow':Image.__version__,'numpy':np.__version__}
@@ -302,6 +317,7 @@ def main():
         for reference in data.get('references',[]):palette+=image_palette(reference)
         result={'key':choose_key(palette),'palette':palette,'guaranteed_absent':False}
     elif args.action=='prepare':result=prepare_source(**data)
+    elif args.action=='reference_preview':result=reference_preview(**data)
     elif args.action=='endpoint':result=prepare_endpoint(**data)
     elif args.action=='validate':result=validate_source(**data)
     else:result=process_video(**data)

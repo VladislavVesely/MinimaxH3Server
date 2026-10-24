@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,mkdir,rm,cp,symlink} from 'node:fs/promises';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {execFileSync} from 'node:child_process';
-import {beginBridge,createSource,animate,getStatus,finish} from '../src/workflow.ts';
+import {beginBridge,createSource,animate,getStatus,finish,inspectReference,beginExtension} from '../src/workflow.ts';
 import {runWorker} from '../src/worker.ts';
 async function fixture(t:any){
  const root=await mkdtemp(join(tmpdir(),'sprite-bridge-'));t.after(()=>rm(root,{recursive:true,force:true}));await writeFile(join(root,'2DSpriteAnimation.style.md'),'Generic artwork.');
@@ -80,6 +80,27 @@ test('bridge fails on inconsistent PNG dimensions rather than trusting metadata'
  const f=await fixture(t);const p=join(f.folders[1],'export_001/animation.json');const meta=JSON.parse(await readFile(p,'utf8'));meta.canvas.width=32;await writeFile(p,JSON.stringify(meta));
  const m=await beginBridge(f.folders[0],f.folders[1],f.options,f.root,f.call,runWorker);await assert.rejects(createSource(m.folder,'',f.call,runWorker),/dimensions/);
  assert.ok(!f.calls.some(x=>x.name==='h3_generate'));
+});
+test('single-folder extension requires contextual frame choice and preserves provenance without GPT',async t=>{
+ const f=await fixture(t);const before=await readFile(join(f.folders[0],'manifest.json'));
+ const info=await inspectReference(f.folders[0],runWorker);
+ assert.equal(info.frameCount,2);assert.equal(info.selectionRequired,true);assert.equal(info.preview.mimeType,'image/png');assert.equal(f.calls.length,0);
+ const selected=info.sampledFrames[1];
+ const choice={export:info.exportName,frameIndex:selected.frameIndex,metadataSha256:info.metadataSha256,frameSha256:selected.sha256,reason:'This is the stable holding pose, not recoil',scope:'Preserve identity and prop grip; change action to upright locomotion'};
+ const m=await beginExtension(f.folders[0],{...f.options,loop:true,loopReason:'Repeated new action'},choice,f.root,f.call,runWorker);
+ assert.equal(m.extension.reference.frameIndex,1);assert.equal(m.budget.image_requests,0);assert.equal(m.options.loop,true);
+ await createSource(m.folder,'',f.call,runWorker);await animate(m.folder,{action:'Perform the requested new action with preserved appearance'},f.call);
+ const gen=f.calls.find(x=>x.name==='h3_generate').args.generation;assert.equal(gen.first_frame,gen.last_frame);
+ assert.deepEqual(await readFile(join(f.folders[0],'manifest.json')),before);
+ assert.ok(!f.calls.some(x=>x.name==='generate_image'));
+ const r=await finish(m.folder,f.call,runWorker,async(_job,file)=>execFileSync('ffmpeg',['-v','error','-loop','1','-i',join(m.folder,'source.png'),'-t','1','-r','12','-c:v','libx264','-pix_fmt','yuv420p','-f','mp4',file]) as any);
+ const meta=JSON.parse(await readFile(join(r.export.output,'animation.json'),'utf8'));assert.equal(meta.reference.selection.scope,choice.scope);
+});
+test('single-folder extension refuses implicit first-frame selection and stale inspected metadata',async t=>{
+ const f=await fixture(t);await assert.rejects(beginExtension(f.folders[0],f.options,{} as any,f.root,f.call,runWorker),/selection|choice/i);
+ const info=await inspectReference(f.folders[0],runWorker);const s=info.sampledFrames[0];
+ const choice={export:info.exportName,frameIndex:0,metadataSha256:'0'.repeat(64),frameSha256:s.sha256,reason:'selected after inspection',scope:'new motion'};
+ await assert.rejects(beginExtension(f.folders[0],f.options,choice,f.root,f.call,runWorker),/changed|inspect/i);assert.equal(f.calls.length,0);
 });
 test('ambiguous bridge submit resumes via original receipt only',async t=>{
  const f=await fixture(t);const m=await beginBridge(f.folders[0],f.folders[1],f.options,f.root,f.call,runWorker);await createSource(m.folder,'',f.call,runWorker);

@@ -43,6 +43,18 @@ The supplied default is clean softly shaded illustration. Replace it for another
 
 Use Pillow-readable still images (PNG/JPEG/WebP recommended). Unsupported formats, missing files and undecodable references fail before generation. For HEIC, convert to PNG/JPEG first with your existing image tools. References are copied privately into the result folder. Non-exact references are sent to GPT Image and may include their original background/metadata; crop or redact private content beforehand.
 
+### New actions from one existing sprite folder
+
+```text
+/sprite Use "/path/Sprite_Existing" as reference. Make a new animation where the character walks upright while holding the same prop. Keep the appearance and grip, and make it loop.
+```
+
+Pi first calls `inspect_reference`, a local read-only inspection. It receives the original request/style/settings and a labeled overview sampled across the latest completed export. It can request additional `frameIndices` (up to 12 per call) to examine action phases, props, effects and neighboring poses. Export revisions can be specified explicitly. Overview samples are not a claim to have inspected every frame.
+
+Pi interprets the NEW request, separates what should remain from what should change, and selects an appropriate frame with a reason and scope. **There is no default first-frame selection.** `extend` requires the inspected revision, frame index and image/metadata hashes; stale selections fail closed. A stable holding pose may suit a new locomotion action better than a transient recoil/effect frame, but this is contextual agent reasoning, not a hard-coded subject/action catalogue. Genuine ambiguity or absence of a suitable pose should prompt clarification.
+
+The selected RGBA artwork is snapshotted, aligned and keyed without GPT repainting. Pi inspects it, authors the current model guide for the new action, runs one H3 generation and exports to a separate folder. Loop/one-shot comes from the new request—not the reference animation. A's output geometry/FPS/anchor and appearance flags are inherited unless explicitly overridden. New exports record source selection/scope/hashes/transform in `reference.json` and `animation.json`. Source media is unchanged; antialiasing is off by default, and no automatic paid retry is allowed. H3 conditioning does not guarantee exact identity, prop geometry or motion preservation.
+
 ### Generated motion bridges between sprite folders
 
 Use normal language—no JSON needed:
