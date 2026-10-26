@@ -50,6 +50,13 @@ test('prepare supports arbitrary intent, style, adaptive key and actual model gu
  assert.equal(m.options.loop,true);assert.equal(m.key,'#ff00ff');assert.equal(m.guide.instructions,'Real model contract');assert.match(m.style,/shared style/);
  assert.deepEqual(f.calls.map(c=>c.name),['h3_discover','h3_guide']);assert.equal((await getStatus(m.folder)).stage,'prepared');
 });
+test('experimental finish is opt-in and persists pending state before any export',async t=>{
+ const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'art',f.call,f.worker);await animate(m.folder,{dynamic_section:'move',sound:'silent'},f.call);
+ const pending=await finish(m.folder,f.call,f.worker,async(_job,file)=>{await writeFile(file,'video')},{transparency:'experimental-server'},async(_video,_sha,_key,_fps,_prior,save)=>{await save({requestId:'f'.repeat(32)});return {pending:true,requestId:'f'.repeat(32)};});
+ assert.equal(pending.pending,true);const state=await getStatus(m.folder);assert.equal(state.transparency.requestId,'f'.repeat(32));assert.equal(state.exports.length,0);assert.equal(state.pendingTransparencyProcessing.transparency,'experimental-server');
+ await assert.rejects(finish(m.folder,f.call,f.worker,async()=>{},{transparency:'experimental-server',despill:false}),/fixed preset/);
+ await assert.rejects(finish(m.folder,f.call,f.worker,async()=>{},{transparency:'unknown'}),/transparency/);
+});
 test('missing style stops before any inference',async t=>{
  const f=await fixture(t);await rm(join(f.cwd,'2DSpriteAnimation.style.md'));
  await assert.rejects(begin(f.options,f.cwd,f.call,f.worker),/style/i);assert.equal(f.calls.length,0);

@@ -225,7 +225,28 @@ def resize_sprite(im,size,pixel_art,antialias=False):
     result[smooth[:,:,3]==0]=0
     return Image.fromarray(result)
 
-def process_video(video,output,options):
+def unpack_server_rgba(archive,digest,source,fps,key,destination):
+    import zipfile
+    regular(archive)
+    data=Path(archive).read_bytes()
+    if len(data)>128*1024**2 or hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Server RGBA archive checksum mismatch')
+    with zipfile.ZipFile(archive) as z:
+        infos=z.infolist()
+        if len(infos)>901 or sum(i.file_size for i in infos)>256*1024**2 or any(i.file_size>16*1024**2 for i in infos):raise ValueError('Server RGBA archive exceeds budget')
+        if z.getinfo('manifest.json').file_size>65536:raise ValueError('Invalid server RGBA manifest')
+        meta=json.loads(z.read('manifest.json'));n=meta.get('frames');w=meta.get('width');h=meta.get('height')
+        if meta.get('version')!=1 or meta.get('processor')!='satodive-cpu-v1' or meta.get('source_sha256')!=source or meta.get('fps')!=fps or meta.get('key')!=key.lower() or meta.get('alpha')!='straight RGBA':raise ValueError('Server RGBA provenance mismatch')
+        if not all(type(x) is int and x>0 for x in (n,w,h)) or n>900 or max(w,h)>1920 or n*w*h>40_000_000:raise ValueError('Server RGBA geometry budget')
+        names=['manifest.json']+[f'frames/{i:04d}.png' for i in range(n)]
+        if len(infos)!=len(names) or sorted(z.namelist())!=sorted(names):raise ValueError('Unexpected server RGBA archive members')
+        for i in range(n):
+            with z.open(f'frames/{i:04d}.png') as f,Image.open(f) as im:
+                if im.size!=(w,h) or im.mode!='RGBA' or getattr(im,'n_frames',1)!=1:raise ValueError('Invalid server RGBA frame')
+                im.load();im.save(Path(destination)/f'{i:06d}.png')
+    return meta
+
+
+def process_video(video,output,options,rgba_archive=None,rgba_sha256=None):
     regular(video);out=Path(output)
     if out.exists():raise FileExistsError(output)
     fps=options.get('fps',12);width=options.get('width',256);height=options.get('height',256);key=options.get('key')
@@ -252,11 +273,17 @@ def process_video(video,output,options):
         # Decode RGB at native resolution. Scaling subsampled YUV first spreads
         # the coloured background into foreground pixels before it can be keyed.
         filt=f'fps={fps}:start_time=0:round=near,format=rgb24'
-        subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(Path(video).resolve()),'-an','-vf',filt,'-frames:v','901',str(Path(temp)/'%06d.png')],check=True,capture_output=True,timeout=180)
+        if rgba_archive:
+            meta=unpack_server_rgba(rgba_archive,rgba_sha256,hashlib.sha256(Path(video).read_bytes()).hexdigest(),fps,key,Path(temp))
+            if (meta['width'],meta['height'])!=(stream['width'],stream['height']):raise ValueError('Server RGBA dimensions differ from original')
+            report.update(matte='experimental_server_estimate',despill='satodive_cpu_v1',server_transparency=meta)
+            report['warnings']=meta.get('warnings',[])+['Experimental server keying; compare coverage and moving edges against the default export.']
+        else:
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(Path(video).resolve()),'-an','-vf',filt,'-frames:v','901',str(Path(temp)/'%06d.png')],check=True,capture_output=True,timeout=180)
         frames=[];border_stats=[]
         for p in sorted(Path(temp).glob('*.png')):
-            with Image.open(p) as im:a=np.asarray(im.convert('RGB'))
-            rgba=key_frame(a,key,soft=options.get('soft',False),tolerance=options.get('tolerance',.06),softness=options.get('softness',.20),despill=options.get('despill',True))
+            with Image.open(p) as im:a=np.asarray(im.convert('RGBA' if rgba_archive else 'RGB'))
+            rgba=a if rgba_archive else key_frame(a,key,soft=options.get('soft',False),tolerance=options.get('tolerance',.06),softness=options.get('softness',.20),despill=options.get('despill',True))
             border=np.concatenate((rgba[0,:,3],rgba[-1,:,3],rgba[:,0,3],rgba[:,-1,3]));border_stats.append(float(np.mean(border<16)))
             im=Image.fromarray(rgba);scale=min(width/im.width,height/im.height)
             im=resize_sprite(im,(max(1,round(im.width*scale)),max(1,round(im.height*scale))),options.get('pixelArt',False),antialias)

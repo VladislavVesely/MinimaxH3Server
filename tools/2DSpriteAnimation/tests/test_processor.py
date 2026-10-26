@@ -18,6 +18,23 @@ class ProcessorTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_server_archive_validates_provenance_and_paths(self):
+        import io,zipfile,hashlib
+        metadata={'version':1,'processor':'satodive-cpu-v1','source_sha256':'a'*64,'fps':12,'key':'#0000ff','frames':1,'width':32,'height':32,'alpha':'straight RGBA','warnings':[]}
+        image=io.BytesIO();Image.new('RGBA',(32,32),(20,30,40,100)).save(image,format='PNG')
+        archive=self.root/'rgba.zip'
+        def pack(name='frames/0000.png'):
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('manifest.json',json.dumps(metadata));z.writestr(name,image.getvalue())
+            return hashlib.sha256(archive.read_bytes()).hexdigest()
+        digest=pack();out=self.root/'decode';out.mkdir()
+        result=self.p.unpack_server_rgba(str(archive),digest,'a'*64,12,'#0000ff',out)
+        self.assertEqual(result['frames'],1)
+        with Image.open(out/'000000.png') as im:self.assertEqual(im.getpixel((0,0)),(20,30,40,100))
+        with self.assertRaises(ValueError):self.p.unpack_server_rgba(str(archive),digest,'b'*64,12,'#0000ff',out)
+        digest=pack('../escaped.png')
+        with self.assertRaises(ValueError):self.p.unpack_server_rgba(str(archive),digest,'a'*64,12,'#0000ff',out)
+        self.assertFalse((self.root/'escaped.png').exists())
+
     def test_optional_antialiasing_preserves_interior_and_avoids_transparent_colour_bleed(self):
         a=np.zeros((16,16,4),dtype=np.uint8);a[:]=[0,0,255,0]
         a[3:13,3:13]=[200,80,30,255];a[6:10,6:10]=[20,30,40,255]

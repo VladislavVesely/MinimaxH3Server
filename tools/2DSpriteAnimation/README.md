@@ -12,7 +12,7 @@ This checkout is wired for sessions started in any of these folders:
 
 Pi discovers project loaders only in the startup working directory, not its parents. A loader is included in all three locations. An explicit style in the current directory still takes priority.
 
-Start Pi there, grant project trust when appropriate and run `/reload` in an existing session. The existing `generate_image` and `h3_*` tools must be loaded/callable. Requires Pi 1.3.0+ with nested tool execution; tested against the installed 1.3.0 SDK. No server restart or generation-daemon change is involved.
+Start Pi there, grant project trust when appropriate and run `/reload` in an existing session. The existing `generate_image` and `h3_*` tools must be loaded/callable. Requires Pi 1.3.0+ with nested tool execution; tested against the installed 1.3.0 SDK. Reloading the extension itself needs no server restart. The optional server transparency feature requires its matching daemon capability (already deployed on this installation).
 
 ```text
 /sprite <describe any animation, view, timing and whether it should loop>
@@ -72,6 +72,16 @@ No GPT Image request is made. One H3 job is permitted, with the existing preflig
 Bridge prompt authoring now requires inspecting the outgoing last four and incoming first four frames (`motionContext`, playback-ordered with durations and hashes). These are local authoring context, not extra H3 conditioning. The gameplay base guidance asks for action already in progress at entry and exit, causal overlapping movement, maintained contact/structure, preserved in-place/root-motion behavior, and no manufactured stop, idle hold, settle-to-pose or morph. Genuine stops/rests remain allowed when required by the source actions or explicit request. Final gameplay timing is chosen separately from H3's minimum source duration; retiming cannot fix poor movement. The new guidance does not rewrite or regenerate existing exports.
 
 Conditioning is **not** a pixel lock, velocity match or guaranteed seamless join. The initial automated tests use synthetic video and injected inference; real bridge motion quality needs visual review. This feature exports the transition itself; it does not silently assemble or rewrite A and B.
+
+### Optional experimental server transparency
+
+After `/reload`, ask naturally: `/sprite Reprocess "Sprite_Walking_Dachshund" with experimental server transparency; compare with export_004 using the same frames and timing.` Pi maps this to `finish` with `processing.transparency:"experimental-server"`. Omit it (or use `"default"`) for the unchanged local keyer. This is not native H3 alpha and does not regenerate anything.
+
+The saved original is uploaded as a content-addressed video asset through the existing pinned-TLS connection. Our authenticated daemon runs only the pinned MIT SatoDive tensor keyer in a bounded CPU subprocess—no ComfyUI node/plugin/import, GPU inference, new model or dependency installation. It estimates a spatial/temporal backdrop and alpha, reconstructs edge colour and uses motion-gated (not motion-compensated) temporal filtering. The initial preset disables hole filling, choke, despeckle, guided-edge smoothing and final blur. Local antialiasing remains off unless explicitly requested. Local tolerance/softness or disabling despill is rejected for this fixed experimental preset rather than silently ignored. Keys with tied dominant chroma channels, such as magenta, are currently unsupported; originals are never recoloured automatically.
+
+A stable request checkpoint survives pending calls/disconnection. Resume with the same processing options; ambiguous submissions are resolved by GET, never automatically resubmitted. Failed/interrupted operations stop without new generation or silent fallback. Completed RGBA archives are hash-checked, then checked for source identity, FPS, key, dimensions, bounded members and safe filenames before the existing local resize/loop/atlas exporter runs. Archives and separate exports are retained. Server limits: 64 MiB input, 40 million sampled native-resolution pixels, 128 MiB output archive, 180-second CPU-child wall timeout, one idle-only task at a time, 128 retained tasks / 2 GiB processing storage budget. Task work blocks maintenance/new inference admission rather than competing with generation. No server cleanup of old successful results is automatic in this first version.
+
+The first saved-video A/B is `2D Animations/Sprite_Walking_Dachshund/export_006`, compared against accepted `export_004`: identical original, frames 23–52, 30 frames at 12 FPS / 2.5 seconds, 256×256, anchor `[0.5,0.8]`, no antialiasing. `transparency-comparison.png` and `.gif` sit beside the exports. The experimental matte removes the two remaining blue-dominant pixels in frame zero but reduces opaque coverage from 11,863 to 11,323 pixels (~4.6%); across the clip it removes ~532 pixels/frame and adds none. Visually the outline/paws are thinner. This is not a universally better replacement, and the accepted default remains available. No paid inference was used.
 
 ### Optional edge antialiasing
 

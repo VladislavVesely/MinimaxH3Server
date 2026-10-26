@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { BRIDGE_MOTION_GUIDANCE } from './bridge-prompt.ts';
+import { serverTransparency } from './transparency.ts';
 
 export type Call = (name:string,args:any)=>Promise<any>;
 export type Worker = (action:string,args:any)=>Promise<any>;
@@ -275,11 +276,13 @@ export async function animate(folder:string,sections:Record<string,string>,call:
   }catch(e){m.error=message(e);await save(m);throw new Error(m.error+'\nResume folder: '+m.folder+' (no automatic generation replay)');}
  });
 }
-export async function finish(folder:string,call:Call,worker:Worker,download:(job:string,file:string)=>Promise<void>,overrides:Record<string,any>={}){
+export async function finish(folder:string,call:Call,worker:Worker,download:(job:string,file:string)=>Promise<void>,overrides:Record<string,any>={},transparency:typeof serverTransparency=serverTransparency){
  return locked(folder,async m=>{
   if(!m.jobId)throw new Error('Resolve submission with animate before finishing');
-  const allowed=['key','fps','width','height','loop','soft','pixelArt','anchor','cycleSeconds','tolerance','softness','despill','antialias','startFrame','endFrame'];
+  const allowed=['key','fps','width','height','loop','soft','pixelArt','anchor','cycleSeconds','tolerance','softness','despill','antialias','startFrame','endFrame','transparency'];
   if(Object.keys(overrides).some(k=>!allowed.includes(k)))throw new Error('Unknown processing override');
+  if(overrides.transparency!==undefined&&!['default','experimental-server'].includes(overrides.transparency))throw new Error('Unknown transparency processor');
+  if(overrides.transparency==='experimental-server'&&('tolerance' in overrides||'softness' in overrides||overrides.despill===false))throw new Error('Experimental server keying uses a fixed preset; local tolerance/softness/despill overrides are not silently applied or ignored');
   try{
    if(!m.videoFile){
     const job=await call('h3_job',{action:'wait',id:m.jobId,seconds:300});
@@ -294,12 +297,19 @@ export async function finish(folder:string,call:Call,worker:Worker,download:(job
    }
    const video=join(m.folder,m.videoFile);if(hash(await readFile(video))!==m.videoSha256)throw new Error('Original video changed; preserve provenance rather than overwrite');
    const options={key:m.key,loop:m.options.loop,fps:m.options.fps??12,width:m.options.outputWidth??256,height:m.options.outputHeight??256,soft:m.options.soft??false,pixelArt:m.options.pixelArt??false,anchor:m.options.anchor??[.5,.5],...(m.options.cycleSeconds?{cycleSeconds:m.options.cycleSeconds}:{}),...overrides};
+   let rgba:any={};
+   if(overrides.transparency==='experimental-server'){
+    m.pendingTransparencyProcessing=overrides;await save(m);
+    const result=await transparency(video,m.videoSha256,options.key,options.fps,m.transparency,async state=>{m.transparency=state;await save(m);});
+    if(result.pending)return {pending:true,folder:m.folder,requestId:result.requestId,next_action:'finish',processing:overrides,note:'Server CPU transparency is running. Continue finish with the same processing options; no generation or automatic retry.'};
+    rgba={rgba_archive:result.archive,rgba_sha256:result.sha256};
+   }
    let index=1;for(;;index++){try{await stat(join(m.folder,'export_'+String(index).padStart(3,'0')));}catch{break;}}
    const output=join(m.folder,'export_'+String(index).padStart(3,'0'));m.processing={output,options};await save(m);
-   const result=await worker('process',{video,output,options});
+   const result=await worker('process',{video,output,options,...rgba});
    if(m.extension){await atomic(join(output,'reference.json'),m.extension);const metaFile=join(output,'animation.json');const meta=JSON.parse(await readFile(metaFile,'utf8'));meta.reference=m.extension;await atomic(metaFile,meta);}
    if(m.bridge){await atomic(join(output,'bridge.json'),m.bridge);const metaFile=join(output,'animation.json');const meta=JSON.parse(await readFile(metaFile,'utf8'));meta.bridge=m.bridge;await atomic(metaFile,meta);}
-   m.exports.push({createdAt:new Date().toISOString(),...result,options});m.stage=result.quality?.warnings?.length?'needs_review':'exported';delete m.error;await save(m);
+   m.exports.push({createdAt:new Date().toISOString(),...result,options});m.stage=result.quality?.warnings?.length?'needs_review':'exported';delete m.error;delete m.pendingTransparencyProcessing;await save(m);
    if(m.runId&&!m.runCompleted){
     try{const run=await call('h3_run',{action:'get',id:m.runId});if(run.state!=='completed')await call('h3_run',{action:'update',id:m.runId,body:{revision:run.revision,patch:{state:'completed'}}});m.runCompleted=true;await save(m);}
     catch{m.warnings.push('Local export succeeded, but canonical run completion was not acknowledged. No conflicting update replayed.');await save(m);}
