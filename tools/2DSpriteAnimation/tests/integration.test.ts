@@ -27,7 +27,7 @@ test('real worker through complete orchestration produces a keyed loop and GIF w
    default:throw new Error(name);
   }
  };
- const m=await begin({name:'AbstractCycle',request:'A rotating abstract shape; loop',loop:true,loopReason:'Explicit loop'},root,call,runWorker);
+ const m=await begin({transparency:'local',name:'AbstractCycle',request:'A rotating abstract shape; loop',loop:true,loopReason:'Explicit loop'},root,call,runWorker);
  execFileSync(process.env.SPRITE_PYTHON||'python3',['-c',`import sys,json,math,subprocess
 from pathlib import Path
 from PIL import Image,ImageDraw

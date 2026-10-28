@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "defaults": {"quality":"standard","seed":42,"steps":20,"sageAttention":true,"turboLora":false,"transparency":"direct-vae","duration":5,"fps":24,"backgroundRetries":1},
+  "presets": [
+    {"id":"draft","resolution":512,"aliases":["draft","low","nizka","nizke","nahled","rychly nahled"]},
+    {"id":"standard","resolution":640,"aliases":["standard","standardni","medium","normal","normalni","bezna","bezne","stredni"]},
+    {"id":"fine","resolution":768,"aliases":["fine","better","vyssi","vylepsena"]},
+    {"id":"high","resolution":800,"aliases":["high","vysoka","vysoke","vysokou"]},
+    {"id":"ultra","resolution":896,"aliases":["ultra","very high","ultra high","velmi vysoka","velmi vysoke","velmi vysokou"]},
+    {"id":"extra","resolution":1024,"aliases":["extra","extra high","highest","maximum","maximalni","nejvyssi","nejlepsi","extra vysoka","extra vysoke"]}
+  ],
+  "limits": {"resolutionMin":512,"resolutionMax":1024,"spatialMultiple":32,"stepsMin":2,"stepsMax":1000,"maxBackgroundRetries":2,"nativeImportPixels":160000000,"archiveBytes":268435456},
+  "background": {"wordingVersion":2,"colourNames":{"#0000ff":{"name":"BLUE","description":"pure saturated royal blue"},"#00ff00":{"name":"GREEN","description":"pure saturated green"},"#ff0000":{"name":"RED","description":"pure saturated red"}},"maxChannelError":0.2,"maxChromaError":0.18,"maxEdgeDisagreement":0.08,"minimumAgreeingEdges":3,"retrySeedIncrement":1,"wording":"A uniform solid {colour} chroma-key image plane fills every area outside the supplied foreground content. Its colour is {colourDescription}, RGB({rgb}), {key}. Hold exactly this same {colour} hue, saturation and brightness in EVERY frame: at the opening, throughout all intermediate movement, and at the closing image. This is a flat unlit image plane with fixed colour, not a lit environment. Foreground lighting acts only on the foreground content; the entire background remains uniformly {colour}. The stationary solid-colour image plane holds this same {key} through the final instant."}
+}

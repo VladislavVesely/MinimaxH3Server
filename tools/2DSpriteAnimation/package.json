@@ -4,7 +4,7 @@
   "description": "Style-driven GPT Image/H3 animation to transparent sprites, general loop extraction and GIF previews",
   "type": "module",
   "keywords": ["pi-package"],
-  "files": ["index.ts", "src", "processor.py", "requirements.txt", "README.md"],
+  "files": ["index.ts", "src", "processor.py", "sprite-defaults.json", "requirements.txt", "README.md", "NATIVE_VAE.md"],
   "pi": {"extensions": ["./index.ts"]},
   "engines": {"node": ">=22.19.0"},
   "scripts": {

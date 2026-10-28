@@ -20,24 +20,20 @@ For isometric/old-strategy-game assets, define one explicit orthographic/dimetri
 
 Choose a loop when the request explicitly asks for it or repetition makes sense for that action; do not force one-shot events to repeat. Infer this from the complete request, not a fixed subject/action keyword list. H3 source videos are at least five seconds and may be aligned slightly longer by the service. A final animation may be much shorter. Cyclic requests should generate stable repeated action across the available clip, then extract the best cycle. Never pad the final animation to five seconds merely because H3 generated five seconds.
 
-Reserve a contrasting flat background colour **per asset**, outside the known subject, text, shadow and anticipated effect palette. No universal green/magenta rule. No checkerboard in generated artwork. H3 has no alpha: its background must remain flat and unchanging. Remove the key throughout the clip after download; avoid colouring the subject with that key. Soft translucent materials need an estimated soft matte and explicit visual review; one background cannot uniquely recover arbitrary transparency.
+Reserve a contrasting flat background colour **per asset**, outside the known subject, text, shadow and anticipated effect palette. No universal green/magenta rule. No checkerboard in generated artwork. H3 has no alpha: its background must remain flat and unchanging. By default the server estimates RGBA directly from decoded VAE float frames before video encoding; avoid colouring the subject with the key. The shared tool controls native background checks and bounded repair attempts. Soft translucent materials need an estimated soft matte and explicit visual review; one background cannot uniquely recover arbitrary transparency.
 
 Frames share one canvas, scale and anchor. Do not independently crop/recentre frames or eliminate intentionally moving content. Do not promise pixel-perfect identity, camera or infinite-loop motion from generative video. Check actual output and the looping GIF.
 
 ## Machine-readable export defaults
 
-Only the supported output/planning settings belong in this block. Per-request values take priority. Loop choice deliberately is **not** a style-wide switch.
+Generation recipe, quality presets, FPS and source duration live in `tools/2DSpriteAnimation/sprite-defaults.json`, not duplicated here. Only project visual/output settings belong in this block. Per-request values take priority. Loop choice deliberately is **not** a style-wide switch.
 
 ```sprite-settings
 {
-  "width": 512,
-  "height": 512,
   "outputWidth": 256,
   "outputHeight": 256,
-  "fps": 12,
   "pixelArt": false,
-  "anchor": [0.5, 0.5],
-  "duration": 5
+  "anchor": [0.5, 0.5]
 }
 ```
 

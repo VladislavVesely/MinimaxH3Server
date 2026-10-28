@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "processor": "satodive-direct-vae-v1",
+  "frame_source": "vae-decoded-float32",
+  "job_id": "0a757abea4394213a763eecda0407237",
+  "source_sha256": "007a0398c79cccd5d54e17b144910f515ce8a3862258ca624fcb6c8620ba88c9",
+  "preview_video_sha256": "36daf2d6a27620a949f44c395deb82923d6c6854ced8a6919bb388e1ad7e93be",
+  "raw_frames_sha256": "007a0398c79cccd5d54e17b144910f515ce8a3862258ca624fcb6c8620ba88c9",
+  "generation_settings_sha256": "16047f6fec706be3ebdd417b7b7a77df92f8b03d62b318feaa02bdfe86eff0d4",
+  "fps": 24,
+  "source_fps": 24,
+  "frame_selection": "all",
+  "duration": 5.166666666666667,
+  "key": "#0000ff",
+  "frames": 124,
+  "width": 800,
+  "height": 800,
+  "alpha": "straight RGBA",
+  "upstream_commit": "097a536d3b937d2d5eb157f58d4c2e3350f4e3ed",
+  "keyer_settings": {
+    "backdrop": "custom",
+    "custom_color": "#0000ff",
+    "screen_gain": 1,
+    "screen_balance": 0,
+    "shadows": "keep",
+    "plate_fix": 1,
+    "clip_black": 0.03,
+    "clip_white": 0.95,
+    "edge_solve": true,
+    "edge_detail": 2,
+    "choke": 0,
+    "softness": 0,
+    "despill": 1,
+    "edge_extend": true,
+    "despeckle": 8,
+    "fill_holes": 0,
+    "temporal": 0.5,
+    "plate_temporal": null
+  },
+  "analysis": {
+    "backdrop": {
+      "kind": "chroma",
+      "color": [
+        0.006882858462631702,
+        0.9238976240158081,
+        0.9355069994926453
+      ],
+      "channel": 2,
+      "confidence": 0.6666513085365295,
+      "source": "custom",
+      "warnings": [],
+      "hex": "#02ECEF"
+    },
+    "stats": {
+      "solid": 0.19352690202574577,
+      "soft": 0.03447488094529805,
+      "clear": 0.7719982170289562,
+      "haze": 0.00011748299197455297,
+      "holes": 0.00003477822607024909,
+      "flicker": 0.0006978762075442223,
+      "mismatch": null,
+      "backdrop_coverage": 0.17177631705999374,
+      "plate_unevenness": 0.17960724234580994,
+      "chroma_detail": 1.0948700904846191
+    },
+    "frames": 124,
+    "width": 800,
+    "height": 800,
+    "two_pass": false,
+    "warnings": []
+  },
+  "warnings": [
+    "Estimated single-background alpha/colour, keyed directly from decoded VAE float images before video encoding. Inspect appearance, coverage, holes and motion; no pixel-lock guarantee."
+  ],
+  "archive_sha256": "6f289912aa2c89f5b7f259e4e863256f6560830117834297fa73fbdff4c12605",
+  "archive_bytes": 142957004
+}

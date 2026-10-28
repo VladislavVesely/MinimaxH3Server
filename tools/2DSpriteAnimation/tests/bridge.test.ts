@@ -32,7 +32,7 @@ for n in range(2):
    default:throw Error('Unexpected tool '+name);
   }
  };
- return {root,folders,call,calls,options:{name:'A to B',request:'Transition naturally between these poses',loop:false,loopReason:'one-shot bridge'}};
+ return {root,folders,call,calls,options:{bridgePattern:'legacy-full' as const,transparency:'local' as const,name:'A to B',request:'Transition naturally between these poses',loop:false,loopReason:'one-shot bridge'}};
 }
 test('bridge snapshots last-to-first endpoints and submits distinct conditioning without GPT',async t=>{
  const f=await fixture(t);const before=await readFile(join(f.folders[0],'manifest.json'));

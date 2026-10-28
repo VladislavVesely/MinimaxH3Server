@@ -36,8 +36,34 @@ async function fixture(t:any){
   if(name==='h3_generate'||name==='h3_receipt'||name==='h3_job')return {job_id:job,status:'completed'};
   if(name==='h3_inspect')return {};throw new Error(name);
  };
- return {cwd,call,calls,worker,options:{name:'Abstract morph',request:'An isometric geometric lattice transforming into a spiral, repeating.',loop:true,loopReason:'User explicitly requested repetition',camera:'fixed dimetric',motion:'A continuous geometric transformation'}};
+ return {cwd,call,calls,worker,options:{transparency:'local' as const,name:'Abstract morph',request:'An isometric geometric lattice transforming into a spiral, repeating.',loop:true,loopReason:'User explicitly requested repetition',camera:'fixed dimetric',motion:'A continuous geometric transformation'}};
 }
+
+test('finish preserves a selected export through shared native despill without paid calls',async t=>{
+ const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);await animate(m.folder,{dynamic_section:'action',sound:'silence'},f.call);
+ const download=async(_job:string,path:string)=>{await writeFile(path,'original video')};await finish(m.folder,f.call,f.worker,download);
+ const before=f.calls.length;let repaired=false;
+ const worker=async(action:string,args:any)=>{assert.equal(action,'reprocess');assert.equal(args.base,join(m.folder,'export_001'));assert.equal(args.options.backgroundMode,'reviewed-border');assert.equal(args.output,join(m.folder,'export_002'));repaired=true;await mkdir(args.output);return {output:args.output,frames:12,quality:{warnings:['inspect colour repair']}}};
+ await finish(m.folder,f.call,worker,download,{preserveExport:'export_001',backgroundMode:'reviewed-border'});assert.ok(repaired);assert.equal(f.calls.length,before,'Reprocessing must not call a paid provider or inference API');
+ await assert.rejects(finish(m.folder,f.call,worker,download,{preserveExport:'../../escape'}),/preserveExport/);
+ await assert.rejects(finish(m.folder,f.call,worker,download,{preserveExport:'export_001',cycleSeconds:.1}),/preserve.*timing/i);
+});
+
+test('experimental server transparency is opt-in, checkpoints pending and exports RGBA without regeneration',async t=>{
+ const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'source',f.call,f.worker);await animate(m.folder,{dynamic_section:'action',sound:'silence'},f.call);
+ const download=async(_job:string,path:string)=>{await writeFile(path,'original video')};await finish(m.folder,f.call,f.worker,download);
+ const before=f.calls.length;const server=async(_v:string,_sha:string,_k:string,_fps:number,_prior:any,save:any)=>{await save({requestId:'f'.repeat(32)});return {pending:true,requestId:'f'.repeat(32)}};
+ const processing={transparency:'experimental-server',key:'#0000ff'};
+ const pending=await finish(m.folder,f.call,f.worker,download,processing,server);assert.equal(pending.pending,true);
+ assert.equal((await getStatus(m.folder)).pendingTransparencyProcessing.transparency,'experimental-server');
+ await assert.rejects(finish(m.folder,f.call,f.worker,download,{...processing,preserveExport:'export_001'},server),/preserve|Preserve/);
+ await assert.rejects(finish(m.folder,f.call,f.worker,download,{...processing,tolerance:.1},server),/fixed preset/);
+ await assert.rejects(finish(m.folder,f.call,f.worker,download,processing,async()=>({pending:false,requestId:'f'.repeat(32)})),/archive.*fallback/i);
+ let used=false;const worker=async(action:string,args:any)=>{assert.equal(action,'process');assert.equal(args.rgba_archive,'archive.zip');used=true;await mkdir(args.output);return {output:args.output,frames:12,quality:{warnings:['review server matte']}}};
+ await assert.rejects(finish(m.folder,f.call,f.worker,download,{transparency:'default'},server),/SAME/);
+ await finish(m.folder,f.call,worker,download,processing,async()=>({pending:false,requestId:'f'.repeat(32),archive:'archive.zip',sha256:'e'.repeat(64)}));
+ assert.ok(used);assert.equal(f.calls.length,before);assert.equal((await getStatus(m.folder)).pendingTransparencyProcessing,undefined);
+});
 
 test('implementation-folder startup finds the shared workspace style without falling back for unrelated projects',()=>{
  const pkg=fileURLToPath(new URL('../',import.meta.url));
@@ -49,13 +75,6 @@ test('prepare supports arbitrary intent, style, adaptive key and actual model gu
  const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);
  assert.equal(m.options.loop,true);assert.equal(m.key,'#ff00ff');assert.equal(m.guide.instructions,'Real model contract');assert.match(m.style,/shared style/);
  assert.deepEqual(f.calls.map(c=>c.name),['h3_discover','h3_guide']);assert.equal((await getStatus(m.folder)).stage,'prepared');
-});
-test('experimental finish is opt-in and persists pending state before any export',async t=>{
- const f=await fixture(t);const m=await begin(f.options,f.cwd,f.call,f.worker);await createSource(m.folder,'art',f.call,f.worker);await animate(m.folder,{dynamic_section:'move',sound:'silent'},f.call);
- const pending=await finish(m.folder,f.call,f.worker,async(_job,file)=>{await writeFile(file,'video')},{transparency:'experimental-server'},async(_video,_sha,_key,_fps,_prior,save)=>{await save({requestId:'f'.repeat(32)});return {pending:true,requestId:'f'.repeat(32)};});
- assert.equal(pending.pending,true);const state=await getStatus(m.folder);assert.equal(state.transparency.requestId,'f'.repeat(32));assert.equal(state.exports.length,0);assert.equal(state.pendingTransparencyProcessing.transparency,'experimental-server');
- await assert.rejects(finish(m.folder,f.call,f.worker,async()=>{},{transparency:'experimental-server',despill:false}),/fixed preset/);
- await assert.rejects(finish(m.folder,f.call,f.worker,async()=>{},{transparency:'unknown'}),/transparency/);
 });
 test('missing style stops before any inference',async t=>{
  const f=await fixture(t);await rm(join(f.cwd,'2DSpriteAnimation.style.md'));
@@ -149,4 +168,16 @@ test('pending video waits without downloading or generating and can finish later
 });
 test('unknown profile or unsupported conditioning fails closed',async t=>{
  const f=await fixture(t);await assert.rejects(begin({...f.options,profile:'not-installed'},f.cwd,f.call,f.worker),/profile/i);
+});
+test('direct VAE validates before image spending, requests native frames and finishes without CPU rekeying',async t=>{
+ const f=await fixture(t);const d={...discovery,generation_schema:{properties:{...discovery.generation_schema.properties,rgba_key:{}}},capabilities:{...discovery.capabilities,frames:{min:124,max:345,stride:17,offset:5},direct_vae_transparency:{version:1,processor:'satodive-direct-vae-v1',frame_source:'vae-decoded-float32',fps:24,frame_selection:'all',profiles:['installed-profile'],max_native_pixels:80000000}}};
+ const call=async(n:string,a:any)=>n==='h3_discover'?d:f.call(n,a);
+ await assert.rejects(begin({...f.options,transparency:'direct-vae'} as any,f.cwd,call,f.worker),/tied dominant/);
+ const m=await begin({...f.options,transparency:'direct-vae',key:'#0000ff',sageAttention:true} as any,f.cwd,call,f.worker);assert.equal(m.key,'#0000ff');
+ await createSource(m.folder,'source',call,f.worker);await animate(m.folder,{dynamic_section:'action',sound:'silence'},call);
+ const g=f.calls.find(c=>c.name==='h3_generate')!.args.generation;assert.equal(g.rgba_key,'#0000ff');assert.equal(g.num_frames,124);assert.equal(g.sage_attention,true);
+ let used=false;const native=async(id:string,sha:string,key:string)=>{assert.equal(id,job);assert.equal(key,'#0000ff');return {archive:'native.zip',sha256:'e'.repeat(64),jobId:id,metadata:{frame_source:'vae-decoded-float32'}}};
+ const worker=async(a:string,b:any)=>{assert.equal(a,'process');assert.equal(b.rgba_job_id,job);assert.equal(b.rgba_archive,'native.zip');assert.equal(b.options.fps,24);used=true;await mkdir(b.output);return {output:b.output,frames:124,quality:{warnings:[]}}};
+ await finish(m.folder,call,worker,async(id:string,p:string)=>{await writeFile(p,'preview')},{},async()=>{throw Error('Forbidden saved-video keyer')},native as any);assert.ok(used);
+ await assert.rejects(finish(m.folder,call,worker,async()=>{}, {transparency:'default'}),/direct VAE|Direct VAE/);
 });

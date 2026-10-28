@@ -3,8 +3,14 @@ import {dirname,join} from 'node:path';import {createHash,randomUUID} from 'node
 // @ts-expect-error Existing private owner-only pinned-TLS transport.
 import {Client,readConfig} from './h3-client.mjs';
 const hash=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
+export function validateTransparencyKey(key:string){
+ if(typeof key!=='string'||!/^#[a-f0-9]{6}$/i.test(key))throw new Error('Invalid experimental transparency key');
+ const c=[1,3,5].map(i=>parseInt(key.slice(i,i+2),16)).sort((a,b)=>a-b);
+ if(c[2]-c[0]>=31&&c[2]-c[1]<31)throw new Error('transparency_key_unsupported: tied dominant channels; originals are not recoloured automatically');
+ return key.toLowerCase();
+}
 export async function serverTransparency(video:string,source:string,key:string,fps:number,prior:any,save:(state:any)=>Promise<void>,transport?:any):Promise<{pending:boolean;archive?:string;sha256?:string;requestId:string}>{
- const client=transport??new Client(readConfig());key=key.toLowerCase();
+ key=validateTransparencyKey(key);const client=transport??new Client(readConfig());
  let state=prior;
  if(!state||state.source!==source||state.key!==key||state.fps!==fps){state={requestId:randomUUID().replaceAll('-',''),source,key,fps,attempted:false};await save(state);}
  if(!/^[a-f0-9]{32}$/.test(state.requestId)||!/^#[a-f0-9]{6}$/.test(key)||!Number.isFinite(fps)||fps<1||fps>60)throw new Error('Invalid experimental transparency checkpoint');

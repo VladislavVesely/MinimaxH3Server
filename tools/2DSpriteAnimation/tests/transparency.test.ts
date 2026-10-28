@@ -8,6 +8,11 @@ test('server keying persists receipt before mutation, waits, verifies archive; n
  let r=await serverTransparency(video,source,'#0000ff',12,undefined,save,client);assert.equal(r.pending,true);
  r=await serverTransparency(video,source,'#0000ff',12,checkpoint,save,client);assert.equal(r.pending,false);assert.deepEqual(await readFile(r.archive!),archive);assert.equal(calls.filter(x=>x==='/native/transparency').length,1);assert.ok(!calls.some(x=>x.includes('generate')));
 });
+test('unsupported magenta key stops before upload or receipt mutation',async()=>{
+ const folder=await mkdtemp(join(tmpdir(),'sprite-server-')),video=join(folder,'original.mp4');await writeFile(video,'v');let calls=0,saves=0;
+ await assert.rejects(serverTransparency(video,sha('v'),'#ff00ff',12,undefined,async()=>{saves++},{request:async(path:string)=>{calls++;return {data:path.includes('assets')?{id:sha('v')}:{state:'queued'}}}}),/transparency_key_unsupported/);
+ assert.equal(calls,0);assert.equal(saves,0);
+});
 test('ambiguous submission is resolved with GET only',async()=>{
  const folder=await mkdtemp(join(tmpdir(),'sprite-server-'));const video=join(folder,'original.mp4');await writeFile(video,'v');const source=sha('v');let saved:any;const calls:string[]=[];
  const client={request:async(path:string)=>{calls.push(path);if(path==='/native/assets/video')return {data:{id:source}};throw new Error('network interrupted');}};

@@ -1,0 +1,22 @@
+subject_definitions:
+<Subject 1> is the animal character in the first-frame reference image.
+<Picture 1> is the first frame of the target video, showing the animal character.
+<Audio 1> is the voice-timbre reference for <Subject 1> (S1), a warm, soft, gentle female voice ideal for a children's toy.
+
+summary:
+[keyframe completion + reference generation + audio reference] The target video features the animal character from the first-frame reference image speaking directly to the camera in Czech.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - the animal's identity, appearance, and features from the reference image are retained.
+<Picture 1> ([Shot 1] first frame): fully_preserved - the first frame matches the reference image exactly.
+<Audio 1>: reference - the voice timbre follows a warm, soft, gentle children's toy voice quality without copying an original signal.
+
+detailed_description:
+The target video uses a realistic style with soft, warm lighting and gentle color grading, suitable for children's content.
+[Shot 1] The shot begins from <Picture 1>, the first-frame reference image. The animal character sits centered in the frame, looking directly at the camera with a friendly expression. The animal's eyes blink naturally, its mouth opens and closes as it speaks with a warm, soft, gentle voice reminiscent of a children's toy. The animal says in Czech: <d>[Czech] Ahoj děti. Jak se máte?</d>. The expression remains warm and welcoming throughout, with natural head movements and blinking. The camera remains static throughout the shot.
+
+overall_soundscape:
+Soft, neutral room tone.
+
+non_diegetic_music:
+N/A

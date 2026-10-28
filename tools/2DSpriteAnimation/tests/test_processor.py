@@ -18,22 +18,109 @@ class ProcessorTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def test_server_archive_validates_provenance_and_paths(self):
-        import io,zipfile,hashlib
-        metadata={'version':1,'processor':'satodive-cpu-v1','source_sha256':'a'*64,'fps':12,'key':'#0000ff','frames':1,'width':32,'height':32,'alpha':'straight RGBA','warnings':[]}
-        image=io.BytesIO();Image.new('RGBA',(32,32),(20,30,40,100)).save(image,format='PNG')
-        archive=self.root/'rgba.zip'
-        def pack(name='frames/0000.png'):
-            with zipfile.ZipFile(archive,'w') as z:z.writestr('manifest.json',json.dumps(metadata));z.writestr(name,image.getvalue())
-            return hashlib.sha256(archive.read_bytes()).hexdigest()
-        digest=pack();out=self.root/'decode';out.mkdir()
-        result=self.p.unpack_server_rgba(str(archive),digest,'a'*64,12,'#0000ff',out)
-        self.assertEqual(result['frames'],1)
-        with Image.open(out/'000000.png') as im:self.assertEqual(im.getpixel((0,0)),(20,30,40,100))
-        with self.assertRaises(ValueError):self.p.unpack_server_rgba(str(archive),digest,'b'*64,12,'#0000ff',out)
-        digest=pack('../escaped.png')
-        with self.assertRaises(ValueError):self.p.unpack_server_rgba(str(archive),digest,'a'*64,12,'#0000ff',out)
-        self.assertFalse((self.root/'escaped.png').exists())
+    def test_recorded_mid_stride_green_cyan_border_is_clean_not_just_first_loop_pose(self):
+        fixture=Path(__file__).parent/'fixtures/crouch-bleed'
+        palette=['#241B29','#713C26','#BB753F','#EDBC78','#AD3045','#344E79','#BCC5D2','#238F9B','#FFE39B']
+        for name,key_expected,count in [('walk-mid',[23,251,125],205),('walk-cyan',[32,249,201],114),('walk-last',[40,248,245],22)]:
+            with self.subTest(phase=name):
+                a=np.asarray(Image.open(fixture/f'{name}-native.png').convert('RGB'))
+                base=Image.open(fixture/f'{name}-matte.png').convert('RGBA');old=np.asarray(base)
+                alpha=np.asarray(base.getchannel('A').resize((a.shape[1],a.shape[0]),Image.Resampling.NEAREST))
+                key=self.p.border_key(a);np.testing.assert_array_equal(key,key_expected)
+                clean=np.asarray(Image.fromarray(self.p.despill_matte(a,key,alpha,palette)).resize(base.size,Image.Resampling.NEAREST))
+                before=old[:,:,1].astype(int)-np.maximum(old[:,:,0],old[:,:,2]).astype(int)
+                after=clean[:,:,1].astype(int)-np.maximum(clean[:,:,0],clean[:,:,2]).astype(int)
+                witnesses=(old[:,:,3]>0)&(before>10);self.assertEqual(int(witnesses.sum()),count)
+                self.assertLessEqual(int(after[witnesses].max()),8,'Every cycle phase must lose its unrequested green border')
+                np.testing.assert_array_equal(clean[:,:,3],old[:,:,3])
+
+    def test_nearest_paint_mode_does_not_invent_green_by_averaging_yellow_and_cyan(self):
+        c=np.zeros((3,3,3),dtype=np.float32);known=np.zeros((3,3),dtype=bool)
+        c[1,0]=[1,.8,0];c[1,2]=[0,.8,1];known[1,0]=known[1,2]=True
+        propagated,found=self.p.nearby_foreground(c,known,1,blend=False)
+        self.assertTrue(found[1,1]);self.assertTrue(any(np.array_equal(propagated[1,1],c[1,i]) for i in (0,2)))
+
+    def test_unrelated_teal_palette_cannot_disable_cleanup_on_brown_subject_edges(self):
+        a=np.full((128,128,3),[23,251,125],np.uint8);alpha=np.zeros((128,128),np.uint8)
+        a[32:96,32:96]=[67,148,105];a[36:92,36:92]=[160,70,25];alpha[32:96,32:96]=255
+        result=self.p.despill_matte(a,[23,251,125],alpha,['#a04619','#238f9b'])
+        self.assertLessEqual(int(result[80,33,1])-max(int(result[80,33,0]),int(result[80,33,2])),8)
+        np.testing.assert_array_equal(result[80,60],[160,70,25,255])
+        np.testing.assert_array_equal(result[:,:,3],alpha)
+
+    def test_preserved_export_reprocess_keeps_every_alpha_timing_and_local_repair(self):
+        video=self.video();base=self.root/'base';self.p.process_video(str(video),str(base),{'key':'#00ff00','loop':False,'fps':12,'width':64,'height':64,'startFrame':4,'endFrame':20,'cycleSeconds':.4})
+        meta=json.loads((base/'animation.json').read_text());f=base/meta['frames'][0]['file']
+        old=np.array(Image.open(f));old[20:24,20:24,3]=0;Image.fromarray(old).save(f)
+        meta['manual_repair']={'region':[20,20,24,24]};(base/'animation.json').write_text(json.dumps(meta))
+        output=self.root/'clean';r=self.p.reprocess_export(str(video),str(base),str(output),{})
+        new=json.loads((output/'animation.json').read_text())
+        for field in ('frames','loop','canvas','anchor','fps','duration_ms','manual_repair'):self.assertEqual(new[field],meta[field])
+        for record in meta['frames']:
+            np.testing.assert_array_equal(np.asarray(Image.open(base/record['file']))[:,:,3],np.asarray(Image.open(output/record['file']))[:,:,3])
+        self.assertTrue(new['color_repair']['alpha_unchanged']);self.assertTrue((output/'preview.gif').is_file());self.assertTrue((output/'contact-sheet.png').is_file())
+        with self.assertRaises(FileExistsError):self.p.reprocess_export(str(video),str(base),str(output),{})
+        meta['source_sha256']='0'*64;(base/'animation.json').write_text(json.dumps(meta))
+        with self.assertRaisesRegex(ValueError,'source'):self.p.reprocess_export(str(video),str(base),str(self.root/'bad-source'),{})
+
+    def test_recorded_crouch_recovery_cannot_bypass_despill_or_damage_warm_anatomy(self):
+        fixture=Path(__file__).parent/'fixtures/crouch-bleed'
+        for name in ('green','warm'):
+            a=np.asarray(Image.open(fixture/f'{name}-native.png').convert('RGB'))
+            base=Image.open(fixture/f'{name}-matte.png').convert('RGBA');old=np.asarray(base)
+            alpha=np.asarray(base.getchannel('A').resize((a.shape[1],a.shape[0]),Image.Resampling.NEAREST))
+            clean=np.asarray(Image.fromarray(self.p.despill_matte(a,self.p.border_key(a),alpha,['#241B29','#713C26','#BB753F','#EDBC78','#AD3045','#344E79','#BCC5D2','#238F9B','#FFE39B'])).resize(base.size,Image.Resampling.NEAREST))
+            np.testing.assert_array_equal(clean[:,:,3],old[:,:,3])
+            if name=='green':
+                for x,y in [(80,18),(85,44),(104,46),(57,92),(51,111)]:
+                    self.assertGreater(int(old[y,x,1])-max(int(old[y,x,0]),int(old[y,x,2])),60)
+                    self.assertLessEqual(int(clean[y,x,1])-max(int(clean[y,x,0]),int(clean[y,x,2])),12)
+                for x,y in [(88,28),(94,35),(73,46),(66,63),(74,84)]:np.testing.assert_array_equal(clean[y,x],old[y,x])
+            else:
+                for x,y in [(101,57),(78,78)]:np.testing.assert_array_equal(clean[y,x],old[y,x])
+
+    def test_reviewed_matte_despill_removes_multihue_edges_without_eroding_coverage(self):
+        for background in ([255,0,255],[0,255,0],[0,0,255],[255,150,0],[0,200,255]):
+            with self.subTest(background=background):
+                a=np.full((128,128,3),background,dtype=np.uint8);alpha=np.zeros((128,128),np.uint8)
+                foreground=np.array([160,70,25]);a[32:96,32:96]=np.rint(foreground*.35+np.array(background)*.65)
+                a[36:92,36:92]=foreground;alpha[32:96,32:96]=255
+                a[48:58,32:48]=[225,155,90] # real tan anatomy, not a key mixture
+                a[64:74,32:48]=[210,30,45] # real red cloth touching the edge
+                result=self.p.despill_matte(a,background,alpha)
+                np.testing.assert_array_equal(result[:,:,3],alpha)
+                self.assertLess(np.max(np.abs(result[80,33,:3].astype(int)-foreground)),12)
+                np.testing.assert_array_equal(result[52,33,:3],[225,155,90])
+                np.testing.assert_array_equal(result[68,33,:3],[210,30,45])
+                np.testing.assert_array_equal(result[80,60,:3],foreground)
+
+    def test_retained_neon_key_pocket_cannot_become_a_trusted_interior_colour(self):
+        a=np.full((128,128,3),[0,255,0],dtype=np.uint8);alpha=np.zeros((128,128),np.uint8)
+        a[32:96,32:96]=[160,70,25];alpha[32:96,32:96]=255;a[50:58,50:58]=[30,150,30]
+        result=self.p.despill_matte(a,[0,255,0],alpha,['#a04619','#344e79','#ad3045'])
+        self.assertLessEqual(int(result[54,54,1])-max(int(result[54,54,0]),int(result[54,54,2])),12)
+        np.testing.assert_array_equal(result[:,:,3],alpha)
+        np.testing.assert_array_equal(result[64,64],[160,70,25,255])
+
+    def test_supplied_foreground_palette_protects_legitimate_key_like_edge_paint(self):
+        a=np.full((128,128,3),[0,255,255],dtype=np.uint8);alpha=np.zeros((128,128),np.uint8)
+        a[32:96,32:96]=[14,167,167];a[36:92,36:92]=[35,35,35];alpha[32:96,32:96]=255
+        result=self.p.despill_matte(a,[0,255,255],alpha,['#0ea7a7'])
+        np.testing.assert_array_equal(result[80,33],[14,167,167,255])
+
+    def test_reviewed_border_uses_colour_reconstruction_and_refuses_nonuniform_border(self):
+        a=np.full((128,128,3),[0,255,0],dtype=np.uint8);a[32:96,32:96]=[56,190,9];a[36:92,36:92]=[160,70,25]
+        result=self.p.recovered_key_frame(a,threshold=40)
+        self.assertLess(int(result[80,33,1]),100)
+        self.assertEqual(int(result[80,33,3]),255)
+        self.assertEqual(int(result[0,0,3]),0)
+        a[0,:64]=[255,0,255]
+        with self.assertRaisesRegex(ValueError,'Nonuniform border'):self.p.recovered_key_frame(a)
+
+    def test_fixed_key_rejects_hue_drift_instead_of_exporting_rainbow_background(self):
+        source=self.video();out=self.root/'bad-key'
+        with self.assertRaisesRegex(ValueError,'backgroundMode'):
+            self.p.process_video(str(source),str(out),{'key':'#ff00ff','loop':False,'pixelArt':True,'width':64,'height':64})
 
     def test_optional_antialiasing_preserves_interior_and_avoids_transparent_colour_bleed(self):
         a=np.zeros((16,16,4),dtype=np.uint8);a[:]=[0,0,255,0]
@@ -107,6 +194,34 @@ class ProcessorTests(unittest.TestCase):
         a=np.zeros((24,24,3),dtype=np.uint8);a[:]=[255,0,255];a[6:12,6:18]=[0,0,255];a[12:18,6:18]=[0,255,0]
         rgba=self.p.key_frame(a,'#ff00ff')
         np.testing.assert_array_equal(rgba[8,8],[0,0,255,255]);np.testing.assert_array_equal(rgba[14,8],[0,255,0,255])
+
+    def test_despill_support_scales_with_native_resolution(self):
+        for key,background,foreground in [('#ff00ff',[255,0,255],[180,30,10]),('#00ff00',[0,255,0],[180,30,10]),('#0000ff',[0,0,255],[180,90,30])]:
+            base=np.full((128,128,3),background,dtype=np.uint8)
+            base[40:88,40:88]=np.rint(np.array(foreground)*.4+np.array(background)*.6)
+            base[44:84,44:84]=foreground
+            for scale in (1,2,4):
+                with self.subTest(key=key,scale=scale):
+                    a=np.repeat(np.repeat(base,scale,axis=0),scale,axis=1)
+                    clean=self.p.key_frame(a,key);raw=self.p.key_frame(a,key,despill=False)
+                    np.testing.assert_array_equal(clean[:,:,3],raw[:,:,3])
+                    pixel=clean[64*scale,40*scale,:3].astype(int)
+                    self.assertLess(int(np.max(np.abs(pixel-foreground))),12)
+                    np.testing.assert_array_equal(clean[64*scale,64*scale],[*foreground,255])
+                    self.assertEqual(int(clean[0,0,3]),0)
+
+    def test_recorded_scarf_spill_is_removed_without_changing_alpha(self):
+        source=Path(__file__).parent/'fixtures/magenta-scarf-source.png'
+        a=np.asarray(Image.open(source).convert('RGB'))
+        clean=self.p.key_frame(a,'#ff00ff');raw=self.p.key_frame(a,'#ff00ff',despill=False)
+        np.testing.assert_array_equal(clean[:,:,3],raw[:,:,3])
+        im=np.asarray(self.p.resize_sprite(Image.fromarray(clean),(128,128),True)).astype(int)
+        for x,y in [(43,44),(37,46),(38,46),(38,47)]:
+            self.assertGreaterEqual(im[y,x,3],128)
+            self.assertLessEqual(min(im[y,x,0],im[y,x,2])-im[y,x,1],10)
+        # Equipment/trouser colours unrelated to the key hue must stay untouched.
+        c=a.astype(int);safe=(np.minimum(c[:,:,0],c[:,:,2])<=c[:,:,1])&(raw[:,:,3]==255)
+        np.testing.assert_array_equal(clean[safe],raw[safe])
 
     def test_soft_matte_unmixes_neutral_translucent_effect(self):
         a = np.array([[[64,192,64]]], dtype=np.uint8) # half grey over green
@@ -190,6 +305,24 @@ class ProcessorTests(unittest.TestCase):
         spill=(a[:,:,3]>0)&(a[:,:,1]>a[:,:,0]+30)&(a[:,:,1]>a[:,:,2]+30)
         self.assertLessEqual(int(spill.sum()),2)
 
+    def test_short_retime_resamples_whole_interval_and_preserves_endpoints(self):
+        video=self.video();out=self.root/'short'
+        self.p.process_video(str(video),str(out),{'key':'#00ff00','loop':False,'fps':24,'width':32,'height':32,'cycleSeconds':.18})
+        meta=json.loads((out/'animation.json').read_text())
+        self.assertLessEqual(meta['fps'],24)
+        self.assertGreaterEqual(len(meta['frames']),2)
+        self.assertEqual(meta['frames'][0]['source_time_seconds'],0)
+        self.assertAlmostEqual(meta['frames'][-1]['source_time_seconds'],119/24)
+        self.assertAlmostEqual(sum(f['duration_ms'] for f in meta['frames']),180)
+        self.assertTrue((out/'preview.gif').exists())
+
+    def test_retime_cannot_emit_fps_rejected_by_reference_importer(self):
+        video=self.video();out=self.root/'fast'
+        self.p.process_video(str(video),str(out),{'key':'#00ff00','loop':False,'fps':24,'width':32,'height':32,'cycleSeconds':1.5})
+        meta=json.loads((out/'animation.json').read_text())
+        self.assertLessEqual(meta['fps'],24)
+        self.assertEqual(len(meta['frames']),36)
+
     def test_one_shot_keeps_all_frames_and_gif_does_not_loop(self):
         video=self.video();out=self.root/'once'
         self.p.process_video(str(video),str(out),{'key':'#00ff00','loop':False,'fps':12,'width':64,'height':64})
@@ -210,6 +343,17 @@ class ProcessorTests(unittest.TestCase):
         self.assertTrue(r['original_preserved'])
         with Image.open(source) as im:self.assertEqual(im.size,(20,10))
         with Image.open(dest) as im:self.assertEqual(im.size,(64,64))
+
+    def test_exact_opaque_source_preserves_solid_ink_and_highlight_rgb(self):
+        im=Image.new('RGB',(32,32),'#ff00ff');a=np.array(im)
+        a[6:26,6:26]=[180,90,30]
+        a[12:15,12:15]=[16,5,28]  # intentional purple-black ink, not key spill
+        a[17:20,17:20]=[237,231,255]  # intentional pale painted highlight
+        source=self.root/'paint.png';Image.fromarray(a).save(source);dest=self.root/'prepared.png'
+        self.p.prepare_source(str(source),str(dest),32,32,'#00ff00',exact=True,input_key='#ff00ff',pixel_art=True)
+        b=np.asarray(Image.open(dest))
+        np.testing.assert_array_equal(b[6:26,6:26],a[6:26,6:26],err_msg='Exact artwork preparation must not despill/repaint opaque artwork before H3')
+        np.testing.assert_array_equal(b[0,0],[0,255,0])
 
     def test_exact_opaque_source_requires_known_background(self):
         source=self.root/'photo.png';Image.new('RGB',(32,32),'red').save(source)
